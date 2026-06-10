@@ -1,22 +1,46 @@
 <script setup>
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head } from "@inertiajs/vue3";
+import AppLayout from "@/Layouts/AppLayout.vue";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 </script>
 
 <template>
     <Head title="Dashboard" />
 
-    <AuthenticatedLayout>
-        <template #header>
-            <h2 class="font-semibold text-xl text-gray-800 leading-tight">Dashboard</h2>
-        </template>
+    <AppLayout>
+        <div class="space-y-6">
+            <div>
+                <h1 class="text-3xl font-bold">Dashboard</h1>
 
-        <div class="py-12">
-            <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
-                <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg">
-                    <div class="p-6 text-gray-900">You're logged in!</div>
-                </div>
+                <p class="text-muted-foreground">Welcome back.</p>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-3">
+                <Card>
+                    <CardHeader>
+                        <CardTitle> Documents </CardTitle>
+                    </CardHeader>
+
+                    <CardContent> 0 </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle> Templates </CardTitle>
+                    </CardHeader>
+
+                    <CardContent> 0 </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle> Team Members </CardTitle>
+                    </CardHeader>
+
+                    <CardContent> 1 </CardContent>
+                </Card>
             </div>
         </div>
-    </AuthenticatedLayout>
+    </AppLayout>
 </template>

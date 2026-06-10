@@ -1,24 +1,38 @@
 <script setup>
 import { Link } from "@inertiajs/vue3";
+
+import { Button } from "@/components/ui/button";
+import {
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+    CardDescription,
+} from "@/components/ui/card";
 </script>
 
 <template>
-    <div class="min-h-screen flex flex-col items-center justify-center">
-        <h1 class="text-5xl font-bold">ESign SaaS</h1>
+    <div
+        class="min-h-screen bg-background flex items-center justify-center px-6"
+    >
+        <Card class="max-w-xl w-full text-center">
+            <CardHeader>
+                <CardTitle class="text-5xl"> ESign SaaS </CardTitle>
 
-        <p class="mt-4 text-gray-500">Secure Digital Signing Platform</p>
+                <CardDescription>
+                    Secure Digital Signing Platform
+                </CardDescription>
+            </CardHeader>
 
-        <div class="mt-8 flex gap-4">
-            <Link
-                href="/login"
-                class="px-4 py-2 bg-blue-600 text-white rounded"
-            >
-                Login
-            </Link>
+            <CardContent class="flex justify-center gap-4">
+                <Link href="/login">
+                    <Button> Login </Button>
+                </Link>
 
-            <Link href="/register" class="px-4 py-2 border rounded">
-                Register
-            </Link>
-        </div>
+                <Link href="/register">
+                    <Button variant="outline"> Register </Button>
+                </Link>
+            </CardContent>
+        </Card>
     </div>
 </template>
