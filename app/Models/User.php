@@ -21,6 +21,7 @@ class User extends Authenticatable implements MustVerifyEmail
     protected $fillable = [
         'id',
         'organization_id',
+        'role',
         'name',
         'email',
         'password',
@@ -52,5 +53,31 @@ class User extends Authenticatable implements MustVerifyEmail
     public function organization()
     {
         return $this->belongsTo(Organization::class);
+    }
+
+    public function isOwner(): bool
+    {
+        return $this->role === 'owner';
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
+    }
+
+    public function canManageMembers(): bool
+    {
+        return in_array(
+            $this->role,
+            ['owner', 'admin']
+        );
+    }
+
+    public function uploadedDocuments()
+    {
+        return $this->hasMany(
+            Document::class,
+            'uploaded_by'
+        );
     }
 }

@@ -25,17 +25,17 @@ const menus = [
     },
     {
         name: "Documents",
-        href: "#",
+        href: "/documents",
         icon: FileText,
     },
     {
         name: "Members",
-        href: "#",
+        href: "/members",
         icon: Users,
     },
     {
         name: "Settings",
-        href: "#",
+        href: "/settings/organization",
         icon: Settings,
     },
 ];
