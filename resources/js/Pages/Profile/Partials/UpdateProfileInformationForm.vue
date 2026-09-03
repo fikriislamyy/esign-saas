@@ -19,94 +19,84 @@ const form = useForm({
 </script>
 
 <template>
-    <section class="space-y-6">
-        <div>
-            <h2 class="text-xl font-semibold">Profile Information</h2>
+    <form
+        @submit.prevent="form.patch(route('profile.update'))"
+        class="space-y-6"
+    >
+        <div class="space-y-2">
+            <Label for="name"> Name </Label>
 
-            <p class="text-sm text-muted-foreground">
-                Update your account's profile information and email address.
+            <Input
+                id="name"
+                v-model="form.name"
+                type="text"
+                autocomplete="name"
+                autofocus
+            />
+
+            <p v-if="form.errors.name" class="text-sm text-destructive">
+                {{ form.errors.name }}
             </p>
         </div>
 
-        <form
-            @submit.prevent="form.patch(route('profile.update'))"
-            class="space-y-6"
+        <div class="space-y-2">
+            <Label for="email"> Email </Label>
+
+            <Input
+                id="email"
+                v-model="form.email"
+                type="email"
+                autocomplete="username"
+            />
+
+            <p v-if="form.errors.email" class="text-sm text-destructive">
+                {{ form.errors.email }}
+            </p>
+        </div>
+
+        <div
+            v-if="mustVerifyEmail && !user.email_verified_at"
+            class="space-y-2"
         >
-            <div class="space-y-2">
-                <Label for="name"> Name </Label>
+            <p class="text-sm text-muted-foreground">
+                Your email address is unverified.
 
-                <Input
-                    id="name"
-                    v-model="form.name"
-                    type="text"
-                    autocomplete="name"
-                    autofocus
-                />
+                <Link
+                    :href="route('verification.send')"
+                    method="post"
+                    as="button"
+                    class="underline ml-1"
+                >
+                    Click here to re-send the verification email.
+                </Link>
+            </p>
 
-                <p v-if="form.errors.name" class="text-sm text-destructive">
-                    {{ form.errors.name }}
-                </p>
-            </div>
-
-            <div class="space-y-2">
-                <Label for="email"> Email </Label>
-
-                <Input
-                    id="email"
-                    v-model="form.email"
-                    type="email"
-                    autocomplete="username"
-                />
-
-                <p v-if="form.errors.email" class="text-sm text-destructive">
-                    {{ form.errors.email }}
-                </p>
-            </div>
-
-            <div
-                v-if="mustVerifyEmail && !user.email_verified_at"
-                class="space-y-2"
+            <p
+                v-if="status === 'verification-link-sent'"
+                class="text-sm text-green-600"
             >
-                <p class="text-sm text-muted-foreground">
-                    Your email address is unverified.
+                A new verification link has been sent to your email address.
+            </p>
+        </div>
 
-                    <Link
-                        :href="route('verification.send')"
-                        method="post"
-                        as="button"
-                        class="underline ml-1"
-                    >
-                        Click here to re-send the verification email.
-                    </Link>
-                </p>
+        <div class="flex items-center gap-3">
+            <Button type="submit" :disabled="form.processing">
+                Save Changes
+            </Button>
 
+            <Transition
+                enter-active-class="transition ease-in-out duration-300"
+                enter-from-class="opacity-0"
+                leave-active-class="transition ease-in-out duration-300"
+                leave-to-class="opacity-0"
+            >
                 <p
-                    v-if="status === 'verification-link-sent'"
-                    class="text-sm text-green-600"
+                    v-if="form.recentlySuccessful"
+                    class="text-sm text-muted-foreground"
                 >
-                    A new verification link has been sent to your email address.
+                    Saved.
                 </p>
-            </div>
-
-            <div class="flex items-center gap-3">
-                <Button type="submit" :disabled="form.processing">
-                    Save Changes
-                </Button>
-
-                <Transition
-                    enter-active-class="transition ease-in-out duration-300"
-                    enter-from-class="opacity-0"
-                    leave-active-class="transition ease-in-out duration-300"
-                    leave-to-class="opacity-0"
-                >
-                    <p
-                        v-if="form.recentlySuccessful"
-                        class="text-sm text-muted-foreground"
-                    >
-                        Saved.
-                    </p>
-                </Transition>
-            </div>
-        </form>
-    </section>
+            </Transition>
+        </div>
+    </form>
 </template>

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Organization extends Model
 {
@@ -58,5 +59,17 @@ class Organization extends Model
         return $this->hasMany(
             Document::class
         );
+    }
+
+    public function wallet(): HasOne
+    {
+        return $this->hasOne(
+            Wallet::class
+        );
+    }
+
+    public function getWalletBalanceUsdCentsAttribute(): int
+    {
+        return (int) ($this->wallet?->balance_usd_cents ?? 0);
     }
 }

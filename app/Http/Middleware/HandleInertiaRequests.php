@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\ExchangeRateService;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -29,15 +30,37 @@ class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
-        return [
-            ...parent::share($request),
+        $organization = $request->user()?->organization;
+
+        $wallet = $organization?->wallet;
+
+        $usdToIdrRate = null;
+        $balanceIdr = null;
+
+        if ($wallet) {
+            $usdToIdrRate = app(ExchangeRateService::class)
+                ->usdToIdr();
+
+            if ($usdToIdrRate !== null) {
+                $balanceIdr = round(
+                    ($wallet->balance_usd_cents / 100)
+                    * $usdToIdrRate
+                );
+            }
+        }
+
+        return array_merge(parent::share($request), [
             'auth' => [
-                'user' => $request->user() ? $request->user()->load('organization') : null,
+                'user' => $request->user(),
             ],
 
-            'flash' => [
-                'success' => fn () => session('success'),
-            ],
-        ];
+            'wallet' => $wallet
+                ? [
+                    'balanceUsdCents' => (int) $wallet->balance_usd_cents,
+                    'balanceIdr' => $balanceIdr,
+                    'usdToIdrRate' => $usdToIdrRate,
+                ]
+                : null,
+        ]);
     }
 }

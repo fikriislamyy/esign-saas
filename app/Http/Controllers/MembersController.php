@@ -6,6 +6,8 @@ use App\Models\Invitation;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Models\User;
+use Illuminate\Validation\Rule;
 
 class MembersController extends Controller
 {
@@ -45,6 +47,91 @@ class MembersController extends Controller
                 $request->user()
                     ->canManageMembers(),
             ]
+        );
+    }
+
+    public function updateRole(
+        Request $request,
+        User $user
+    ) {
+        $actor = $request->user();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Permission
+        |--------------------------------------------------------------------------
+        */
+
+        abort_unless(
+            $actor?->canManageMembers(),
+            403
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Organization isolation
+        |--------------------------------------------------------------------------
+        */
+
+        abort_unless(
+            $user->organization_id ===
+            $actor->organization_id,
+            403
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Prevent self role changes
+        |--------------------------------------------------------------------------
+        */
+
+        if ($user->id === $actor->id) {
+            return back()->withErrors([
+                'role' => 'You cannot change your own role.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Owner protection
+        |--------------------------------------------------------------------------
+        */
+
+        if ($user->role === 'owner') {
+            return back()->withErrors([
+                'role' => 'The organization owner cannot be changed.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate role
+        |--------------------------------------------------------------------------
+        */
+
+        $validated = $request->validate([
+            'role' => [
+                'required',
+                Rule::in([
+                    'member',
+                    'admin',
+                ]),
+            ],
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update
+        |--------------------------------------------------------------------------
+        */
+
+        $user->update([
+            'role' => $validated['role'],
+        ]);
+
+        return back()->with(
+            'success',
+            'Member role updated successfully.'
         );
     }
 }

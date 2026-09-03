@@ -51,7 +51,7 @@ class InvitationAcceptController extends Controller
             404
         );
 
-        $request->validate([
+        $validated = $request->validate([
             'name' => [
                 'required',
                 'string',
@@ -65,6 +65,12 @@ class InvitationAcceptController extends Controller
             ],
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Create User
+        |--------------------------------------------------------------------------
+        */
+
         $user = User::create([
             'organization_id' =>
                 $invitation->organization_id,
@@ -73,25 +79,51 @@ class InvitationAcceptController extends Controller
                 $invitation->role,
 
             'name' =>
-                $request->name,
+                $validated['name'],
 
             'email' =>
                 $invitation->email,
 
             'password' =>
                 Hash::make(
-                    $request->password
+                    $validated['password']
                 ),
         ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Mark invitation as accepted
+        |--------------------------------------------------------------------------
+        */
 
         $invitation->update([
             'accepted_at' => now(),
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Send email verification
+        |--------------------------------------------------------------------------
+        */
+
+        $user->sendEmailVerificationNotification();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Login
+        |--------------------------------------------------------------------------
+        */
+
         Auth::login($user);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Redirect to verification notice
+        |--------------------------------------------------------------------------
+        */
+
         return redirect()->route(
-            'dashboard'
+            'verification.notice'
         );
     }
 }

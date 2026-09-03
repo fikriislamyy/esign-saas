@@ -73,6 +73,11 @@ class User extends Authenticatable implements MustVerifyEmail
         );
     }
 
+    public function documents()
+    {
+        return $this->hasMany(Document::class, 'owner_id');
+    }
+
     public function uploadedDocuments()
     {
         return $this->hasMany(

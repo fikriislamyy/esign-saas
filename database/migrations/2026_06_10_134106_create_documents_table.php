@@ -15,20 +15,24 @@ return new class extends Migration
                 ->constrained()
                 ->cascadeOnDelete();
 
-            $table->foreignUuid('uploaded_by')
+            $table->foreignUuid('owner_id')
                 ->constrained('users')
                 ->cascadeOnDelete();
 
             $table->string('name');
 
-            $table->string('original_name');
-
             $table->string('file_path');
 
             $table->unsignedBigInteger('file_size');
 
-            $table->string('status')
-                ->default('draft');
+            $table->string('mime_type');
+
+            $table->enum('status', [
+                'draft',
+                'sent',
+                'completed',
+                'cancelled',
+            ])->default('draft');
 
             $table->timestamps();
         });

@@ -99,22 +99,47 @@ class InvitationController extends Controller
         );
     }
 
-    public function destroy(Invitation $invitation)
-    {
+    public function destroy(
+        Request $request,
+        Invitation $invitation
+    ) {
+
+     \Log::info('INVITATION DESTROY START', [
+        'invitation_id' => $invitation->id,
+        'invitation_email' => $invitation->email,
+        'organization_id' => $invitation->organization_id,
+        'user_id' => $request->user()?->id,
+        'user_organization_id' => $request->user()?->organization_id,
+    ]);
+        $user = $request->user();
 
         abort_unless(
-            auth()->user()->canManageMembers(),
+            $user?->isOwner(),
             403
         );
 
         abort_unless(
-            auth()->user()->organization_id ===
-            $invitation->organization_id,
+            $invitation->organization_id ===
+            $user->organization_id,
             403
+        );
+
+        abort_if(
+            $invitation->accepted_at !== null,
+            422,
+            'This invitation has already been accepted.'
         );
 
         $invitation->delete();
 
-        return back();
+        \Log::info('INVITATION DESTROY DELETED', [
+            'invitation_id' => $invitation->id,
+            'exists_after_delete' => Invitation::whereKey($invitation->id)->exists(),
+        ]);
+
+        return back()->with(
+            'success',
+            'Invitation revoked successfully.'
+        );
     }
 }

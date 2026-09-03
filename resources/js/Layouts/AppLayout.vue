@@ -1,13 +1,25 @@
 <script setup>
-import { ref, nextTick } from "vue";
-import { Menu } from "lucide-vue-next";
+import { nextTick, ref } from "vue";
 
-import AppSidebar from "@/Components/AppSidebar.vue";
-import MobileSidebar from "@/Components/MobileSidebar.vue";
-import ThemeToggle from "@/Components/ThemeToggle.vue";
-import UserDropdown from "@/Components/UserDropdown.vue";
+import AppHeader from "@/Components/Layout/AppHeader.vue";
+import AppSidebar from "@/Components/Layout/AppSidebar.vue";
 
-import { Button } from "@/components/ui/button";
+const props = defineProps({
+    title: {
+        type: String,
+        default: "",
+    },
+
+    subtitle: {
+        type: String,
+        default: "",
+    },
+
+    breadcrumbs: {
+        type: Array,
+        default: () => [],
+    },
+});
 
 const collapsed = ref(false);
 const hideSidebarText = ref(false);
@@ -34,36 +46,19 @@ function toggleSidebar() {
         <div class="flex">
             <AppSidebar :collapsed="collapsed" :hide-text="hideSidebarText" />
 
-            <div class="flex-1">
-                <header
-                    class="h-16 border-b flex items-center justify-between px-4"
-                >
-                    <div class="flex items-center gap-2">
-                        <!-- Mobile -->
-                        <div class="md:hidden">
-                            <MobileSidebar />
-                        </div>
+            <div class="flex min-w-0 flex-1 flex-col">
+                <AppHeader
+                    :title="title"
+                    :subtitle="subtitle"
+                    :breadcrumbs="breadcrumbs"
+                    :collapsed="collapsed"
+                    @toggle-sidebar="toggleSidebar"
+                />
 
-                        <!-- Desktop -->
-                        <div class="hidden md:block">
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                @click="toggleSidebar"
-                            >
-                                <Menu class="h-5 w-5" />
-                            </Button>
-                        </div>
+                <main class="flex-1 overflow-y-auto bg-muted/20">
+                    <div class="mx-auto w-full max-w-7xl p-6 lg:p-8">
+                        <slot />
                     </div>
-
-                    <div class="flex items-center gap-2">
-                        <ThemeToggle />
-                        <UserDropdown />
-                    </div>
-                </header>
-
-                <main class="p-6">
-                    <slot />
                 </main>
             </div>
         </div>
