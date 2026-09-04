@@ -50,15 +50,15 @@ function formatSize(bytes) {
             leave-to-class="opacity-0"
         >
             <div v-if="form.file" class="rounded-xl border bg-muted/40 p-4">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex min-w-0 flex-1 items-center gap-3">
                         <div
-                            class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10"
+                            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10"
                         >
                             <FileText class="h-5 w-5 text-primary" />
                         </div>
 
-                        <div class="min-w-0">
+                        <div class="min-w-0 flex-1">
                             <p class="truncate font-medium">
                                 {{ form.file.name }}
                             </p>
@@ -69,7 +69,12 @@ function formatSize(bytes) {
                         </div>
                     </div>
 
-                    <Button variant="ghost" size="icon" @click="removeFile">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        class="shrink-0"
+                        @click="removeFile"
+                    >
                         <X class="h-4 w-4" />
                     </Button>
                 </div>
