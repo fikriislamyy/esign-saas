@@ -15,6 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 
+import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
+import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
+
+import { useFeedback } from "@/Composables/useFeedback";
+
 const props = defineProps({
     document: {
         type: Object,
@@ -26,6 +31,8 @@ const props = defineProps({
         required: true,
     },
 });
+
+const { showLoading, hideLoading } = useFeedback();
 
 const open = ref(false);
 
@@ -79,6 +86,7 @@ const selectedMember = computed(() => {
 });
 
 function submit() {
+    showLoading("Adding signer...");
     form.signing_order = workflowIsSequential.value ? nextOrder.value : 0;
 
     form.post(route("documents.signers.store", props.document.id), {
@@ -94,6 +102,8 @@ function submit() {
             isSequential.value = false;
         },
     });
+
+    hideLoading();
 }
 </script>
 

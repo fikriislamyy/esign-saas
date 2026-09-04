@@ -125,7 +125,7 @@ const isReady = computed(() => {
 
                 <Badge v-else variant="warning">
                     <AlertCircle class="mr-1 h-3.5 w-3.5" />
-                    Missing fields
+                    Incomplete
                 </Badge>
             </div>
         </div>

@@ -1,5 +1,6 @@
 import { h } from "vue";
 import MemberRoleBadge from "./MemberRoleBadge.vue";
+import DataTableColumnHeader from "@/Components/data-table/DataTableColumnHeader.vue";
 
 export function createColumns({
     canManageMembers = false,
@@ -39,7 +40,14 @@ export function createColumns({
 
         {
             accessorKey: "role",
-            header: "Role",
+            meta: {
+                label: "Role",
+            },
+            header: ({ column }) =>
+                h(DataTableColumnHeader, {
+                    column,
+                    title: "Role",
+                }),
 
             cell: ({ row }) =>
                 h(MemberRoleBadge, {
@@ -49,6 +57,9 @@ export function createColumns({
 
         {
             id: "actions",
+            meta: {
+                label: "Actions",
+            },
 
             header: () =>
                 h(
