@@ -102,12 +102,17 @@ const table = useVueTable({
 
 <template>
     <div class="space-y-4">
+        <!-- Toolbar -->
         <DataTableToolbar
             :table="table"
             :search-column="searchColumn"
             :search-placeholder="searchPlaceholder"
         />
-        <div class="rounded-xl border overflow-hidden">
+
+        <!-- ========================================= -->
+        <!-- DESKTOP TABLE -->
+        <!-- ========================================= -->
+        <div class="hidden md:block rounded-xl border overflow-hidden">
             <Table>
                 <TableHeader>
                     <TableRow
@@ -161,6 +166,71 @@ const table = useVueTable({
             </Table>
         </div>
 
+        <!-- ========================================= -->
+        <!-- MOBILE CARDS -->
+        <!-- ========================================= -->
+        <div class="md:hidden space-y-3">
+            <template v-if="table.getRowModel().rows?.length">
+                <div
+                    v-for="row in table.getRowModel().rows"
+                    :key="row.id"
+                    class="rounded-xl border bg-background p-4 shadow-sm"
+                >
+                    <div
+                        v-for="cell in row.getVisibleCells()"
+                        :key="cell.id"
+                        class="flex items-start justify-between gap-4 py-2"
+                        :class="{
+                            'border-b pb-3 mb-1': cell.column.id === 'name',
+
+                            'pt-3': cell.column.id === 'actions',
+                        }"
+                    >
+                        <!-- Label -->
+                        <div
+                            class="shrink-0 text-sm text-muted-foreground"
+                            :class="{
+                                'sr-only': cell.column.id === 'name',
+                            }"
+                        >
+                            {{
+                                cell.column.columnDef.meta?.label ??
+                                cell.column.id
+                            }}
+                        </div>
+
+                        <!-- Value -->
+                        <div
+                            class="min-w-0 text-right"
+                            :class="{
+                                'w-full text-left': cell.column.id === 'name',
+
+                                'flex-1':
+                                    cell.column.id !== 'name' &&
+                                    cell.column.id !== 'actions',
+
+                                'ml-auto': cell.column.id === 'actions',
+                            }"
+                        >
+                            <FlexRender
+                                :render="cell.column.columnDef.cell"
+                                :props="cell.getContext()"
+                            />
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Empty state -->
+            <div
+                v-else
+                class="rounded-xl border px-4 py-12 text-center text-sm text-muted-foreground"
+            >
+                No results found.
+            </div>
+        </div>
+
+        <!-- Pagination -->
         <DataTablePagination :table="table" />
     </div>
 </template>

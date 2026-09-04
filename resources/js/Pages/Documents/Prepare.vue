@@ -20,6 +20,7 @@ import { useFeedback } from "@/Composables/useFeedback";
 
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Save } from "lucide-vue-next";
+import { hide } from "@unovis/ts/components/free-brush/style";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -327,6 +328,7 @@ async function deleteField(fieldId) {
 */
 
 async function placeField(pageNumber, event) {
+    showLoading("Placing signature field...");
     if (!editor.placingSignature) {
         return;
     }
@@ -377,6 +379,8 @@ async function placeField(pageNumber, event) {
     });
 
     editor.placingSignature = false;
+
+    hideLoading();
 }
 
 /*

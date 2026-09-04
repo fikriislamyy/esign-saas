@@ -54,7 +54,7 @@ export const columns = [
                 Link,
                 {
                     href: route("documents.show", row.original.id),
-                    class: "font-medium hover:underline",
+                    class: "font-medium hover:underline break-words",
                 },
                 () => row.original.name,
             ),
