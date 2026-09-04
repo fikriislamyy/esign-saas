@@ -119,7 +119,7 @@ function downloadDocument() {
 
     <AppLayout>
         <!-- Confirmation -->
-
+        <LoadingOverlay :show="loading" :text="loadingText" fullscreen />
         <FeedbackDialog
             v-model:open="confirmationOpen"
             type="confirmation"
