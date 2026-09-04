@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 
 import { computed, ref } from "vue";
 
+import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
+
 import { useFeedback } from "@/Composables/useFeedback";
 
 const props = defineProps({
@@ -22,7 +24,8 @@ const props = defineProps({
     },
 });
 
-const { showConfirmation } = useFeedback();
+const { loading, loadingText, showLoading, hideLoading, showConfirmation } =
+    useFeedback();
 
 const fieldCounts = computed(() => props.signerFieldCounts ?? {});
 
@@ -85,15 +88,18 @@ function removeSigner(signer) {
         cancelText: "Cancel",
 
         onConfirm: () => {
+            showLoading("Removing signer...");
             router.delete(route("documents.signers.destroy", signer.id), {
                 preserveScroll: true,
             });
+            hideLoading();
         },
     });
 }
 </script>
 
 <template>
+    <LoadingOverlay :show="loading" :text="loadingText" fullscreen />
     <div class="min-w-0 space-y-6">
         <!-- Toolbar -->
 

@@ -29,9 +29,10 @@ const props = defineProps({
         title="Dashboard"
         subtitle="Overview recent documents and Activity"
     >
-        <div class="space-y-10">
+        <div class="min-w-0 space-y-10">
             <DashboardHeader />
-            <div class="flex justify-end">
+
+            <div class="flex min-w-0 justify-end">
                 <DashboardFilter
                     :range="range"
                     :start-date="startDate"
@@ -41,9 +42,9 @@ const props = defineProps({
 
             <DashboardStats :stats="stats" />
 
-            <div class="grid gap-6 lg:grid-cols-3">
+            <div class="grid min-w-0 gap-6 lg:grid-cols-3">
                 <ActivityChart
-                    class="lg:col-span-2"
+                    class="min-w-0 lg:col-span-2"
                     :data="chart"
                     :range="range"
                     :start-date="startDate"
@@ -51,10 +52,14 @@ const props = defineProps({
                     :summary="summary"
                 />
 
-                <StatusChart :data="statusChart" :stats="stats" />
+                <StatusChart
+                    class="min-w-0"
+                    :data="statusChart"
+                    :stats="stats"
+                />
             </div>
 
-            <RecentDocuments :documents="recentDocuments" />
+            <RecentDocuments class="min-w-0" :documents="recentDocuments" />
         </div>
     </AppLayout>
 </template>

@@ -16,7 +16,6 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
-import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
 
 import { useFeedback } from "@/Composables/useFeedback";
 
@@ -32,7 +31,7 @@ const props = defineProps({
     },
 });
 
-const { showLoading, hideLoading } = useFeedback();
+const { loading, loadingText, showLoading, hideLoading } = useFeedback();
 
 const open = ref(false);
 
@@ -240,4 +239,6 @@ function submit() {
             </form>
         </DialogContent>
     </Dialog>
+
+    <LoadingOverlay :show="loading" :text="loadingText" fullscreen />
 </template>

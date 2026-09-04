@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { router } from "@inertiajs/vue3";
 import { parseDate } from "@internationalized/date";
 
@@ -11,14 +11,11 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 
 import { RangeCalendar } from "@/components/ui/range-calendar";
 import { Button } from "@/components/ui/button";
+
 import FadeIn from "@/Components/animations/FadeIn.vue";
 
 const props = defineProps({
@@ -27,9 +24,15 @@ const props = defineProps({
         default: "week",
     },
 
-    startDate: String,
+    startDate: {
+        type: String,
+        default: "",
+    },
 
-    endDate: String,
+    endDate: {
+        type: String,
+        default: "",
+    },
 });
 
 const selectedRange = ref(props.range);
@@ -41,6 +44,30 @@ const customRange = ref({
 
     end: props.endDate ? parseDate(props.endDate) : undefined,
 });
+
+/*
+|--------------------------------------------------------------------------
+| Responsive calendar
+|--------------------------------------------------------------------------
+*/
+
+const calendarMonths = ref(1);
+
+let mediaQuery = null;
+
+function updateCalendarMonths() {
+    if (!mediaQuery) {
+        return;
+    }
+
+    calendarMonths.value = mediaQuery.matches ? 2 : 1;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Range selection
+|--------------------------------------------------------------------------
+*/
 
 function changeRange(value) {
     selectedRange.value = value;
@@ -86,64 +113,78 @@ function applyCustomRange() {
         },
     );
 }
+
+/*
+|--------------------------------------------------------------------------
+| Lifecycle
+|--------------------------------------------------------------------------
+*/
+
+onMounted(() => {
+    mediaQuery = window.matchMedia("(min-width: 768px)");
+
+    updateCalendarMonths();
+
+    mediaQuery.addEventListener("change", updateCalendarMonths);
+});
+
+onBeforeUnmount(() => {
+    mediaQuery?.removeEventListener("change", updateCalendarMonths);
+});
 </script>
 
 <template>
     <FadeIn :delay="100" direction="left" type="fade">
-        <div class="flex items-start justify-between">
-            <div class="flex items-center gap-3">
-                <Popover v-model:open="showCalendar">
-                    <PopoverTrigger as-child>
-                        <div>
-                            <Select
-                                :model-value="selectedRange"
-                                @update:model-value="changeRange"
+        <div class="flex min-w-0 justify-end">
+            <!-- Range select -->
+
+            <Select
+                :model-value="selectedRange"
+                @update:model-value="changeRange"
+            >
+                <SelectTrigger class="w-[180px]">
+                    <SelectValue />
+                </SelectTrigger>
+
+                <SelectContent>
+                    <SelectItem value="today"> Today </SelectItem>
+
+                    <SelectItem value="week"> This Week </SelectItem>
+
+                    <SelectItem value="month"> This Month </SelectItem>
+
+                    <SelectItem value="year"> This Year </SelectItem>
+
+                    <SelectItem value="custom"> Custom Range... </SelectItem>
+                </SelectContent>
+            </Select>
+
+            <!-- Custom calendar -->
+
+            <Popover :open="showCalendar" @update:open="showCalendar = $event">
+                <PopoverContent
+                    align="end"
+                    class="w-auto max-w-[calc(100vw-2rem)] p-3 sm:p-4"
+                >
+                    <div class="space-y-4">
+                        <RangeCalendar
+                            v-model="customRange"
+                            :number-of-months="calendarMonths"
+                        />
+
+                        <div class="flex justify-end">
+                            <Button
+                                :disabled="
+                                    !customRange?.start || !customRange?.end
+                                "
+                                @click="applyCustomRange"
                             >
-                                <SelectTrigger class="w-[180px]">
-                                    <SelectValue />
-                                </SelectTrigger>
-
-                                <SelectContent>
-                                    <SelectItem value="today">
-                                        Today
-                                    </SelectItem>
-
-                                    <SelectItem value="week">
-                                        This Week
-                                    </SelectItem>
-
-                                    <SelectItem value="month">
-                                        This Month
-                                    </SelectItem>
-
-                                    <SelectItem value="year">
-                                        This Year
-                                    </SelectItem>
-
-                                    <SelectItem value="custom">
-                                        Custom Range...
-                                    </SelectItem>
-                                </SelectContent>
-                            </Select>
+                                Apply
+                            </Button>
                         </div>
-                    </PopoverTrigger>
-
-                    <PopoverContent align="start" class="w-auto p-4">
-                        <div class="space-y-4">
-                            <RangeCalendar
-                                v-model="customRange"
-                                :number-of-months="2"
-                            />
-
-                            <div class="flex justify-end">
-                                <Button @click="applyCustomRange">
-                                    Apply
-                                </Button>
-                            </div>
-                        </div>
-                    </PopoverContent>
-                </Popover>
-            </div>
+                    </div>
+                </PopoverContent>
+            </Popover>
         </div>
     </FadeIn>
 </template>

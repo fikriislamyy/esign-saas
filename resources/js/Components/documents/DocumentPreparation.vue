@@ -103,29 +103,38 @@ const isReady = computed(() => {
             <div
                 v-for="signer in document.signers ?? []"
                 :key="signer.id"
-                class="flex items-center justify-between rounded-lg border p-3"
+                class="flex min-w-0 flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-                <div>
-                    <p class="font-medium">
+                <!-- Signer -->
+
+                <div class="min-w-0 flex-1">
+                    <p class="break-words font-medium">
                         {{ signer.name }}
                     </p>
 
-                    <p class="text-sm text-muted-foreground">
+                    <p class="break-all text-sm text-muted-foreground">
                         {{ signer.email }}
                     </p>
                 </div>
 
+                <!-- Status -->
+
                 <Badge
                     v-if="(fieldCounts[signer.id] ?? 0) > 0"
                     variant="success"
+                    class="w-fit max-w-full shrink-0"
                 >
-                    <CheckCircle2 class="mr-1 h-3.5 w-3.5" />
+                    <CheckCircle2 class="mr-1 h-3.5 w-3.5 shrink-0" />
                     Ready
                 </Badge>
 
-                <Badge v-else variant="warning">
-                    <AlertCircle class="mr-1 h-3.5 w-3.5" />
-                    Incomplete
+                <Badge
+                    v-else
+                    variant="warning"
+                    class="w-fit max-w-full shrink-0"
+                >
+                    <AlertCircle class="mr-1 h-3.5 w-3.5 shrink-0" />
+                    Missing Field
                 </Badge>
             </div>
         </div>

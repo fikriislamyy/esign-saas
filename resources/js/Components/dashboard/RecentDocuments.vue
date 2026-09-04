@@ -35,45 +35,50 @@ const viewDocument = (id) => {
     router.visit(route("documents.show", id));
 };
 
-const editDocument = (id) => {
-    router.visit(route("documents.edit", id));
+const viewAll = () => {
+    router.visit(route("documents.index"));
 };
 </script>
 
 <template>
-    <Card>
-        <CardHeader class="flex flex-row items-center justify-between">
-            <CardTitle> Recent Documents </CardTitle>
+    <Card class="min-w-0 overflow-hidden">
+        <CardHeader
+            class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+            <CardTitle>Recent Documents</CardTitle>
 
             <Button
                 variant="ghost"
                 size="sm"
-                @click="router.visit(route('documents.index'))"
+                class="w-fit shrink-0 gap-2"
+                @click="viewAll"
             >
-                <Button variant="ghost" class="gap-2">
-                    View All
-                    <ChevronRight class="h-4 w-4" />
-                </Button>
+                View All
+
+                <ChevronRight class="h-4 w-4" />
             </Button>
         </CardHeader>
 
-        <CardContent>
+        <CardContent class="min-w-0">
             <div v-if="documents.length" class="divide-y">
                 <div
                     v-for="document in documents"
                     :key="document.id"
-                    class="group flex items-center justify-between rounded-xl px-3 py-4 transition-all duration-200 hover:bg-muted/40 hover:shadow-sm"
+                    class="group flex min-w-0 items-start gap-3 rounded-xl px-3 py-4 transition-all duration-200 hover:bg-muted/40 hover:shadow-sm"
                 >
-                    <div class="flex items-center gap-3">
+                    <!-- Document -->
+
+                    <div class="flex min-w-0 flex-1 items-center gap-3">
                         <div
-                            class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-200 group-hover:scale-105"
+                            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-200 group-hover:scale-105"
                         >
                             <FileText class="h-5 w-5" />
                         </div>
 
-                        <div>
+                        <div class="min-w-0 flex-1">
                             <p
-                                class="max-w-[320px] truncate font-medium transition-colors group-hover:text-primary"
+                                class="truncate font-medium transition-colors group-hover:text-primary"
+                                :title="document.name"
                             >
                                 {{ document.name }}
                             </p>
@@ -84,14 +89,19 @@ const editDocument = (id) => {
                         </div>
                     </div>
 
-                    <div class="flex items-center gap-3">
+                    <!-- Actions -->
+
+                    <div class="flex shrink-0 items-center gap-2">
                         <Badge
                             :variant="badgeVariant(document.status)"
+                            class="shrink-0"
                             :class="{
                                 'bg-yellow-100 text-yellow-600':
                                     document.status === 'draft',
+
                                 'bg-blue-100 text-blue-600':
                                     document.status === 'sent',
+
                                 'bg-green-100 text-green-700':
                                     document.status === 'completed',
                             }"
@@ -105,7 +115,7 @@ const editDocument = (id) => {
                         <Button
                             variant="ghost"
                             size="icon"
-                            class="rounded-full transition-all hover:bg-primary/10 hover:text-primary"
+                            class="shrink-0 rounded-full transition-all hover:bg-primary/10 hover:text-primary"
                             @click="viewDocument(document.id)"
                         >
                             <Eye class="h-4 w-4" />
@@ -113,6 +123,8 @@ const editDocument = (id) => {
                     </div>
                 </div>
             </div>
+
+            <!-- Empty state -->
 
             <div
                 v-else

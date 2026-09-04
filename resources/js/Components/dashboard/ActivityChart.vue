@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+
 import {
     Card,
     CardContent,
@@ -17,18 +18,43 @@ import {
     VisScatter,
 } from "@unovis/vue";
 
-import { Line, Scatter } from "@unovis/ts";
+import { Scatter } from "@unovis/ts";
 
 import { BarChart3 } from "lucide-vue-next";
 
 import FadeIn from "@/Components/animations/FadeIn.vue";
 
 const props = defineProps({
-    data: Array,
-    range: String,
-    startDate: String,
-    endDate: String,
-    summary: Object,
+    data: {
+        type: Array,
+        default: () => [],
+    },
+
+    range: {
+        type: String,
+        default: "week",
+    },
+
+    startDate: {
+        type: String,
+        default: "",
+    },
+
+    endDate: {
+        type: String,
+        default: "",
+    },
+
+    summary: {
+        type: Object,
+        default: () => ({
+            peakLabel: "",
+            peakValue: 0,
+            peakTotal: 0,
+            average: 0,
+            total: 0,
+        }),
+    },
 });
 
 const hoveredPointScatter = ref(null);
@@ -59,49 +85,28 @@ const totalDocuments = computed(() =>
 
 const maxY = computed(() => {
     const max = Math.max(...chartData.value.map((i) => i.y), 1);
+
     return max + 1;
 });
 
 function formatXAxis(index) {
     const point = chartData.value[index];
 
-    if (!point) return "";
+    if (!point) {
+        return "";
+    }
 
     switch (props.range) {
         case "today":
-            return point.label;
-
         case "week":
-            return point.label;
-
         case "month":
-            return point.label;
-
         case "year":
-            return point.label;
-
         default:
             return point.label;
     }
 }
-
-const highest = computed(() => {
-    return Math.max(...chartData.value.map((i) => i.y), 0);
-});
-
-const lowest = computed(() => {
-    return Math.min(...chartData.value.map((i) => i.y), 0);
-});
-
-const average = computed(() => {
-    if (!chartData.value.length) return 0;
-
-    return (
-        chartData.value.reduce((sum, i) => sum + i.y, 0) /
-        chartData.value.length
-    ).toFixed(1);
-});
 </script>
+
 <style>
 [data-vis-xy-container] g[class*="scatter-component"] path {
     opacity: 0.5;
@@ -112,18 +117,22 @@ const average = computed(() => {
     opacity: 1;
 }
 </style>
+
 <template>
     <FadeIn type="scale" :delay="300">
-        <Card class="h-full rounded-2xl shadow-sm">
-            <CardHeader class="flex flex-row items-start justify-between">
-                <div>
+        <Card class="min-w-0 overflow-hidden rounded-2xl shadow-sm">
+            <CardHeader
+                class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
+            >
+                <div class="min-w-0">
                     <CardTitle>Document Activity</CardTitle>
+
                     <CardDescription>
                         Activity during selected range
                     </CardDescription>
                 </div>
 
-                <div class="text-right">
+                <div class="shrink-0 text-left sm:text-right">
                     <p class="text-4xl font-bold">
                         {{ totalDocuments }}
                     </p>
@@ -132,13 +141,15 @@ const average = computed(() => {
                 </div>
             </CardHeader>
 
-            <CardContent>
+            <CardContent class="min-w-0">
+                <!-- Empty state -->
+
                 <div
                     v-if="chartData.length === 0"
-                    class="h-[360px] flex items-center justify-center text-muted-foreground"
+                    class="flex h-[300px] w-full items-center justify-center text-muted-foreground sm:h-[360px]"
                 >
                     <div
-                        class="flex h-[360px] flex-col items-center justify-center text-center"
+                        class="flex max-w-sm flex-col items-center justify-center text-center"
                     >
                         <BarChart3 class="h-10 w-10 text-muted-foreground" />
 
@@ -151,43 +162,57 @@ const average = computed(() => {
                     </div>
                 </div>
 
-                <VisXYContainer
+                <!-- Chart -->
+
+                <div
                     v-else
-                    :data="chartData"
-                    :padding="{ left: 50, right: 20, top: 20, bottom: 40 }"
+                    class="h-[300px] w-full min-w-0 overflow-hidden sm:h-[360px]"
                 >
-                    <VisAxis type="x" :tick-format="formatXAxis" />
+                    <VisXYContainer
+                        :data="chartData"
+                        :padding="{
+                            left: 45,
+                            right: 15,
+                            top: 20,
+                            bottom: 35,
+                        }"
+                        style="width: 100%; height: 100%"
+                    >
+                        <VisAxis type="x" :tick-format="formatXAxis" />
 
-                    <VisAxis type="y" :domain="[0, maxY]" />
+                        <VisAxis type="y" :domain="[0, maxY]" />
 
-                    <VisArea
-                        :x="(d) => d.x"
-                        :y="(d) => d.y"
-                        :duration="500"
-                        color="rgba(59,130,246,.14)"
-                    />
+                        <VisArea
+                            :x="(d) => d.x"
+                            :y="(d) => d.y"
+                            :duration="500"
+                            color="rgba(59,130,246,.14)"
+                        />
 
-                    <VisLine
-                        :x="(d) => d.x"
-                        :y="(d) => d.y"
-                        :duration="500"
-                        color="#3b82f6"
-                        :lineWidth="3"
-                    />
+                        <VisLine
+                            :x="(d) => d.x"
+                            :y="(d) => d.y"
+                            :duration="500"
+                            color="#3b82f6"
+                            :lineWidth="3"
+                        />
 
-                    <VisScatter
-                        :x="(d) => d.x"
-                        :y="(d) => d.y"
-                        color="#3B82F6"
-                        :size="12"
-                    />
+                        <VisScatter
+                            :x="(d) => d.x"
+                            :y="(d) => d.y"
+                            color="#3B82F6"
+                            :size="12"
+                        />
 
-                    <VisTooltip :triggers="tooltipTriggers" />
-                </VisXYContainer>
+                        <VisTooltip :triggers="tooltipTriggers" />
+                    </VisXYContainer>
+                </div>
+
+                <!-- Summary -->
 
                 <div class="mt-6 border-t pt-6">
-                    <div class="grid grid-cols-3 gap-6">
-                        <div>
+                    <div class="grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-3">
+                        <div class="min-w-0">
                             <p
                                 class="text-xs uppercase tracking-wide text-muted-foreground"
                             >
@@ -203,7 +228,7 @@ const average = computed(() => {
                             </p>
                         </div>
 
-                        <div>
+                        <div class="min-w-0">
                             <p
                                 class="text-xs uppercase tracking-wide text-muted-foreground"
                             >
@@ -219,7 +244,7 @@ const average = computed(() => {
                             </p>
                         </div>
 
-                        <div>
+                        <div class="min-w-0">
                             <p
                                 class="text-xs uppercase tracking-wide text-muted-foreground"
                             >
