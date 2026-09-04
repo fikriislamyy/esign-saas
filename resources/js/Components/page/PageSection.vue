@@ -7,7 +7,7 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 
-const props = defineProps({
+defineProps({
     title: {
         type: String,
         default: "",
@@ -26,30 +26,32 @@ const props = defineProps({
 </script>
 
 <template>
-    <Card class="overflow-hidden">
+    <Card class="min-w-0 overflow-hidden">
         <CardHeader
             v-if="title || description || $slots.headerActions"
             class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
         >
-            <div class="space-y-1">
-                <CardTitle v-if="title">
+            <!-- Text -->
+            <div class="min-w-0 flex-1 space-y-1">
+                <CardTitle class="break-words">
                     {{ title }}
                 </CardTitle>
 
-                <CardDescription v-if="description">
+                <CardDescription v-if="description" class="break-words">
                     {{ description }}
                 </CardDescription>
             </div>
 
+            <!-- Actions -->
             <div
                 v-if="$slots.headerActions"
-                class="flex shrink-0 items-center gap-2"
+                class="flex shrink-0 flex-wrap items-center gap-2"
             >
                 <slot name="headerActions" />
             </div>
         </CardHeader>
 
-        <CardContent :class="{ 'p-0': !padding }">
+        <CardContent :class="['min-w-0', { 'p-0': !padding }]">
             <slot />
         </CardContent>
     </Card>

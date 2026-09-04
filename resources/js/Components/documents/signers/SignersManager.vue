@@ -27,7 +27,6 @@ const { showConfirmation } = useFeedback();
 const fieldCounts = computed(() => props.signerFieldCounts ?? {});
 
 const editingOrder = ref(false);
-
 const draggedSigner = ref(null);
 
 const orderForm = useForm({
@@ -95,12 +94,12 @@ function removeSigner(signer) {
 </script>
 
 <template>
-    <div class="space-y-6">
+    <div class="min-w-0 space-y-6">
         <!-- Toolbar -->
 
         <div
             v-if="document.status === 'draft' && document.signers.length > 1"
-            class="flex justify-end gap-2"
+            class="flex flex-wrap justify-end gap-2"
         >
             <Button
                 v-if="!editingOrder"
@@ -108,20 +107,17 @@ function removeSigner(signer) {
                 @click="startEditOrder"
             >
                 <Pencil class="mr-2 h-4 w-4" />
-
                 Edit Order
             </Button>
 
             <template v-else>
                 <Button variant="outline" @click="cancelEditOrder">
                     <X class="mr-2 h-4 w-4" />
-
                     Cancel
                 </Button>
 
                 <Button @click="saveOrder">
                     <Save class="mr-2 h-4 w-4" />
-
                     Save Order
                 </Button>
             </template>
@@ -129,19 +125,23 @@ function removeSigner(signer) {
 
         <!-- NORMAL MODE -->
 
-        <div v-if="!editingOrder" class="space-y-3">
+        <div v-if="!editingOrder" class="min-w-0 space-y-3">
             <div
                 v-for="signer in document.signers"
                 :key="signer.id"
-                class="rounded-xl border p-4"
+                class="min-w-0 rounded-xl border p-4"
             >
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="font-semibold">
+                <div
+                    class="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
+                >
+                    <!-- Signer information -->
+
+                    <div class="min-w-0 flex-1">
+                        <p class="break-words font-semibold">
                             {{ signer.name }}
                         </p>
 
-                        <p class="text-sm text-muted-foreground">
+                        <p class="break-all text-sm text-muted-foreground">
                             {{ signer.email }}
                         </p>
 
@@ -151,8 +151,15 @@ function removeSigner(signer) {
                         </p>
                     </div>
 
-                    <div class="flex flex-col items-end gap-2">
-                        <Badge variant="outline">
+                    <!-- Status / actions -->
+
+                    <div
+                        class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-col sm:items-end"
+                    >
+                        <Badge
+                            variant="outline"
+                            class="max-w-full whitespace-normal text-center"
+                        >
                             {{
                                 signer.signing_order === 0
                                     ? "Parallel"
@@ -168,14 +175,10 @@ function removeSigner(signer) {
                         </Badge>
 
                         <Badge
-                            v-else-if="signer.status === 'email_sent'"
-                            variant="warning"
-                        >
-                            Waiting
-                        </Badge>
-
-                        <Badge
-                            v-else-if="signer.status === 'sent'"
+                            v-else-if="
+                                signer.status === 'email_sent' ||
+                                signer.status === 'sent'
+                            "
                             variant="warning"
                         >
                             Waiting
@@ -195,6 +198,7 @@ function removeSigner(signer) {
                         <Badge
                             v-if="(fieldCounts[signer.id] || 0) === 0"
                             variant="destructive"
+                            class="max-w-full whitespace-normal text-center"
                         >
                             No Signature Field
                         </Badge>
@@ -221,7 +225,7 @@ function removeSigner(signer) {
 
         <!-- REORDER MODE -->
 
-        <div v-else class="space-y-3">
+        <div v-else class="min-w-0 space-y-3">
             <div
                 v-for="(signer, index) in orderForm.signers"
                 :key="signer.id"
@@ -229,23 +233,27 @@ function removeSigner(signer) {
                 @dragstart="startDrag(index)"
                 @dragover.prevent
                 @drop="dropSigner(index)"
-                class="flex cursor-move items-center gap-4 rounded-xl border p-4"
+                class="flex min-w-0 cursor-move items-start gap-4 rounded-xl border p-4"
             >
-                <GripVertical class="h-5 w-5 text-muted-foreground" />
+                <GripVertical
+                    class="mt-1 h-5 w-5 shrink-0 text-muted-foreground"
+                />
 
-                <div class="flex-1">
-                    <p class="font-medium">
+                <div class="min-w-0 flex-1">
+                    <p class="break-words font-medium">
                         {{ signer.name }}
                     </p>
 
-                    <p class="text-sm text-muted-foreground">
+                    <p class="break-all text-sm text-muted-foreground">
                         {{ signer.email }}
                     </p>
                 </div>
 
-                <Badge variant="outline">
-                    Order
-                    {{ index + 1 }}
+                <Badge
+                    variant="outline"
+                    class="shrink-0 whitespace-normal text-center"
+                >
+                    Order {{ index + 1 }}
                 </Badge>
             </div>
 
