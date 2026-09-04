@@ -12,6 +12,10 @@
 /storage/framework/sessions/*
 /storage/framework/testing/*
 /storage/framework/views/*
+!/storage/app/
+!/storage/app/public/
+!/storage/app/public/images/
+!/storage/app/public/images/*
 
 /bootstrap/cache/*
 
