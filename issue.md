@@ -1,62 +1,63 @@
-# Replace email verification link with a 6-digit OTP code
+# Add Templates: reusable documents with pre-placed signature fields (no signers)
 
 ## Goal
 
-Change the registration → verification flow from "click a link in your email" to
-"type a 6-digit code from your email".
+Add a **Templates** menu that works like **Documents**, minus everything about signers and
+sending. A template is a PDF plus a set of signature-field positions. Later (not in this
+issue) the Documents flow will let a user pick a template to start from.
 
-**Current flow**
+**In scope (this issue)**
 
-1. User fills the register form and submits
-2. User is logged in and redirected to `/verify-email`
-3. Laravel sends the default "Verify Email Address" email with a signed link
-4. User clicks the link → `GET /verify-email/{id}/{hash}` marks them verified
-5. User is redirected to `/dashboard`
+- Upload a template PDF → it appears in a table
+- Open a template → see its info + a preview button
+- "Prepare" a template → place / drag / resize / delete signature fields on the PDF
+  (exactly the existing Prepare editor, but without choosing a signer first)
+- Sidebar menu item **Templates**
 
-**New flow**
+**Out of scope (do not build)**
 
-1. User fills the register form and submits
-2. App generates a 6-digit OTP, stores it in `otp_verifications`, emails it to the user
-3. User is logged in and redirected to `/verify-email`, which now shows an OTP input
-4. User types the code → `POST /verify-email` checks it
-5. If valid: mark email verified, redirect to `/dashboard`. If invalid/expired: show error.
-6. "Resend code" button generates a new OTP and emails it again
-
-**What stays the same:** `User implements MustVerifyEmail`, the `verified` middleware on
-dashboard routes, `email_verified_at` column, the login page, the register form itself.
+- Using a template when creating a document
+- Signers, sending, OTP, status, deleting templates
 
 ---
 
-## Copy from the existing signer-OTP flow
+## How Documents works today (you are copying this)
 
-This app **already has an OTP flow** for document signers. Copy its structure — do not
-invent a new pattern.
+Read these files first — every new file in this issue is a trimmed copy of one of them.
 
-| Existing (signer OTP) | You will create (user email OTP) |
-|---|---|
-| `app/Services/SigningOtpService.php` | `app/Services/EmailVerificationOtpService.php` |
-| `app/Mail/SignatureRequestMail.php` | `app/Mail/EmailVerificationOtpMail.php` |
-| `resources/views/emails/signature-request.blade.php` | `resources/views/emails/email-verification-otp.blade.php` |
-| `resources/js/Pages/Signing/Otp.vue` | rewrite `resources/js/Pages/Auth/VerifyEmail.vue` |
+| Layer | Documents (existing) | Templates (you create) |
+|---|---|---|
+| Migration | `database/migrations/2026_06_10_134106_create_documents_table.php` | `xxxx_create_templates_table.php` |
+| Migration | `database/migrations/2026_06_12_123059_create_document_signature_fields_table.php` | `xxxx_create_template_signature_fields_table.php` |
+| Model | `app/Models/Document.php` | `app/Models/Template.php` |
+| Model | `app/Models/DocumentSignatureField.php` | `app/Models/TemplateSignatureField.php` |
+| Controller | `app/Http/Controllers/DocumentController.php` (`index`, `store`, `show`, `prepare`, `preview`) | `app/Http/Controllers/TemplateController.php` |
+| Controller | `app/Http/Controllers/DocumentSignatureFieldController.php` | `app/Http/Controllers/TemplateSignatureFieldController.php` |
+| Routes | `routes/web.php` — the `documents.*` block | new `templates.*` block |
+| Sidebar | `resources/js/Components/Layout/navigation.js` | add one item |
+| Page | `resources/js/Pages/Documents/Index.vue` | `resources/js/Pages/Templates/Index.vue` |
+| Page | `resources/js/Pages/Documents/Show.vue` | `resources/js/Pages/Templates/Show.vue` |
+| Page | `resources/js/Pages/Documents/Prepare.vue` | `resources/js/Pages/Templates/Prepare.vue` |
+| Component | `resources/js/Components/documents/columns.js` | `resources/js/Components/templates/columns.js` |
+| Component | `resources/js/Components/documents/DocumentTable.vue` | `resources/js/Components/templates/TemplateTable.vue` |
+| Component | `resources/js/Components/documents/DocumentInfo.vue` | `resources/js/Components/templates/TemplateInfo.vue` |
+| Component | `resources/js/Components/documents/prepare/PrepareSidebar.vue` | `resources/js/Components/templates/TemplatePrepareSidebar.vue` |
 
-Read those four existing files before you start.
+**Reused as-is (do not copy):** `UploadCard.vue`, `PdfCanvas.vue`, `PrepareToolbar.vue`,
+`ZoomControls.vue`, `PageNavigator.vue`, `SignatureField.vue` (one tiny edit, see Step 12),
+`PageHeader`, `PageSection`, `DataTable`, `useFeedback`.
 
-## Files you will touch
+Conventions in this codebase you must follow:
 
-| Action | Path |
-|---|---|
-| Create | `database/migrations/xxxx_create_otp_verifications_table.php` |
-| Create | `app/Models/OtpVerification.php` |
-| Create | `app/Services/EmailVerificationOtpService.php` |
-| Create | `app/Mail/EmailVerificationOtpMail.php` |
-| Create | `resources/views/emails/email-verification-otp.blade.php` |
-| Edit | `app/Models/User.php` — override `sendEmailVerificationNotification()` |
-| Edit | `routes/auth.php` — replace the signed-link route with a POST route |
-| Edit | `app/Http/Controllers/Auth/VerifyEmailController.php` — verify OTP instead of signed URL |
-| Edit | `app/Http/Controllers/Auth/RegisteredUserController.php` — redirect to verification page |
-| Edit | `app/Http/Controllers/Auth/EmailVerificationNotificationController.php` — change status string |
-| Rewrite | `resources/js/Pages/Auth/VerifyEmail.vue` |
-| Edit | `tests/Feature/Auth/EmailVerificationTest.php`, `tests/Feature/Auth/RegistrationTest.php` |
+- All primary keys are **UUIDs**: `$table->uuid('id')->primary()` in migrations and
+  `use HasUuids; public $incrementing = false; protected $keyType = 'string';` in models.
+- Foreign keys to UUID tables use `foreignUuid(...)`.
+- Every controller action checks ownership:
+  `abort_unless($model->organization_id === $request->user()->organization_id, 403);`
+- Files are stored on the disk named by `env('DOCUMENTS_DISK', 'documents')`.
+- Field coordinates are **fractions of the page (0–1)**, not pixels. Default new-field size
+  is `width: 0.25, height: 0.06`.
+- Run `php artisan` **inside the container**: `docker compose exec app php artisan ...`
 
 ---
 
@@ -69,499 +70,629 @@ docker compose up -d
 npm run dev
 ```
 
-- App: http://localhost:8000
-- Mailpit (catches all outgoing email): http://localhost:8025
+Open http://localhost:8000, log in, and click **Documents** so you can compare as you go.
 
-Every `php artisan` command below must be run **inside the container**:
-`docker compose exec app php artisan ...`
-
-### Step 1 — Migration
+### Step 1 — `templates` migration
 
 ```bash
-docker compose exec app php artisan make:migration create_otp_verifications_table
+docker compose exec app php artisan make:migration create_templates_table
 ```
-
-Edit the generated file in `database/migrations/`:
 
 ```php
 public function up(): void
 {
-    Schema::create('otp_verifications', function (Blueprint $table) {
-        $table->id();
-        $table->foreignUuid('user_id')->constrained()->cascadeOnDelete();
-        $table->string('otp', 6);
-        $table->dateTime('expired_at');
+    Schema::create('templates', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+
+        $table->foreignUuid('organization_id')
+            ->constrained()
+            ->cascadeOnDelete();
+
+        $table->string('name');
+        $table->string('file_path');
+        $table->unsignedBigInteger('file_size');
+        $table->string('mime_type');
+
         $table->timestamps();
     });
 }
 
 public function down(): void
 {
-    Schema::dropIfExists('otp_verifications');
+    Schema::dropIfExists('templates');
 }
 ```
 
-> **Gotcha:** `users.id` is a **UUID** (see `2014_10_12_000000_create_users_table.php`), so
-> `user_id` must be `foreignUuid`, not `foreignId`. Using `foreignId` will fail on PostgreSQL.
+(The spec says `file_size long` — `unsignedBigInteger` is the Laravel equivalent and matches
+the `documents` table.)
 
-Run it:
+### Step 2 — `template_signature_fields` migration
+
+```bash
+docker compose exec app php artisan make:migration create_template_signature_fields_table
+```
+
+```php
+public function up(): void
+{
+    Schema::create('template_signature_fields', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+
+        $table->foreignUuid('template_id')
+            ->constrained()
+            ->cascadeOnDelete();
+
+        $table->integer('page');
+
+        $table->double('x');
+        $table->double('y');
+        $table->double('width');
+        $table->double('height');
+
+        $table->timestamps();
+    });
+}
+
+public function down(): void
+{
+    Schema::dropIfExists('template_signature_fields');
+}
+```
+
+Run both:
 
 ```bash
 docker compose exec app php artisan migrate
 ```
 
-### Step 2 — Model
+### Step 3 — Models
 
-Create `app/Models/OtpVerification.php`:
+`app/Models/Template.php`:
 
 ```php
 <?php
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class Template extends Model
+{
+    use HasUuids;
+
+    protected $fillable = [
+        'organization_id',
+        'name',
+        'file_path',
+        'file_size',
+        'mime_type',
+    ];
+
+    public $incrementing = false;
+
+    protected $keyType = 'string';
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
+    }
+
+    public function signatureFields(): HasMany
+    {
+        return $this->hasMany(TemplateSignatureField::class);
+    }
+}
+```
+
+`app/Models/TemplateSignatureField.php`:
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class OtpVerification extends Model
+class TemplateSignatureField extends Model
 {
-    protected $fillable = ['user_id', 'otp', 'expired_at'];
+    use HasUuids;
 
-    protected $casts = [
-        'expired_at' => 'datetime',
+    protected $fillable = [
+        'template_id',
+        'page',
+        'x',
+        'y',
+        'width',
+        'height',
     ];
 
-    public function user(): BelongsTo
+    public $incrementing = false;
+
+    protected $keyType = 'string';
+
+    public function template(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(Template::class);
     }
 }
 ```
 
-### Step 3 — Service
+In `app/Models/Organization.php`, next to the existing `documents()` method, add:
 
-Create `app/Services/EmailVerificationOtpService.php`. Mirror `SigningOtpService` but store
-the row in `otp_verifications`.
+```php
+public function templates()
+{
+    return $this->hasMany(Template::class);
+}
+```
+
+### Step 4 — `TemplateController`
+
+Create `app/Http/Controllers/TemplateController.php`. It is `DocumentController` with the
+signer/send/status parts removed.
 
 ```php
 <?php
 
-namespace App\Services;
+namespace App\Http\Controllers;
 
-use App\Models\OtpVerification;
-use App\Models\User;
+use App\Models\Template;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Inertia\Inertia;
+use Inertia\Response;
 
-class EmailVerificationOtpService
+class TemplateController extends Controller
 {
-    public const EXPIRES_IN_MINUTES = 10;
-
-    public function generate(User $user): string
+    public function index(Request $request): Response
     {
-        $otp = (string) random_int(100000, 999999);
+        $templates = $request->user()->organization
+            ->templates()
+            ->withCount('signatureFields')
+            ->latest()
+            ->get()
+            ->map(function ($template) {
+                $template->created_at_human = $template->created_at->diffForHumans();
 
-        // Only one active code per user.
-        OtpVerification::where('user_id', $user->id)->delete();
+                return $template;
+            });
 
-        OtpVerification::create([
-            'user_id' => $user->id,
-            'otp' => $otp,
-            'expired_at' => now()->addMinutes(self::EXPIRES_IN_MINUTES),
+        return Inertia::render('Templates/Index', [
+            'templates' => $templates,
+        ]);
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:pdf', 'max:10240'],
         ]);
 
-        return $otp;
+        $file = $request->file('file');
+
+        $path = $file->store('templates', env('DOCUMENTS_DISK', 'documents'));
+
+        Template::create([
+            'organization_id' => $request->user()->organization_id,
+            'name' => pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME),
+            'file_path' => $path,
+            'file_size' => $file->getSize(),
+            'mime_type' => $file->getMimeType(),
+        ]);
+
+        return back();
     }
 
-    public function verify(User $user, string $otp): bool
+    public function show(Request $request, Template $template): Response
     {
-        $record = OtpVerification::where('user_id', $user->id)
-            ->where('otp', $otp)
-            ->where('expired_at', '>', now())
-            ->latest()
-            ->first();
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
 
-        if (! $record) {
-            return false;
-        }
+        $template->loadCount('signatureFields');
 
-        $record->delete();
+        $template->created_at_human = $template->created_at->diffForHumans();
 
-        return true;
+        return Inertia::render('Templates/Show', [
+            'template' => $template,
+        ]);
+    }
+
+    public function prepare(Request $request, Template $template): Response
+    {
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        return Inertia::render('Templates/Prepare', [
+            'template' => $template->load('signatureFields'),
+        ]);
+    }
+
+    public function preview(Request $request, Template $template)
+    {
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        return Storage::disk(env('DOCUMENTS_DISK', 'documents'))->response(
+            $template->file_path,
+            $template->name . '.pdf',
+            ['Content-Disposition' => 'inline']
+        );
     }
 }
 ```
 
-### Step 4 — Mailable + email template
+Note: templates accept **PDF only** (`mimes:pdf`) because the Prepare editor renders with
+pdf.js and can't open Word files.
 
-Create `app/Mail/EmailVerificationOtpMail.php`:
+### Step 5 — `TemplateSignatureFieldController`
+
+Create `app/Http/Controllers/TemplateSignatureFieldController.php`. Copy of
+`DocumentSignatureFieldController` with `signer_id` removed and the ownership check added to
+`update`/`destroy` (the document version relies on other checks; templates should be safe on
+their own).
 
 ```php
 <?php
 
-namespace App\Mail;
+namespace App\Http\Controllers;
 
-use App\Models\User;
-use Illuminate\Bus\Queueable;
-use Illuminate\Mail\Mailable;
-use Illuminate\Queue\SerializesModels;
+use App\Models\Template;
+use App\Models\TemplateSignatureField;
+use Illuminate\Http\Request;
 
-class EmailVerificationOtpMail extends Mailable
+class TemplateSignatureFieldController extends Controller
 {
-    use Queueable, SerializesModels;
-
-    public function __construct(
-        public User $user,
-        public string $otp
-    ) {}
-
-    public function build()
+    public function store(Request $request, Template $template)
     {
-        return $this
-            ->subject('Your EZSign verification code')
-            ->view('emails.email-verification-otp')
-            ->with([
-                'user' => $this->user,
-                'otp' => $this->otp,
-            ]);
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $validated = $request->validate([
+            'page' => ['required', 'integer', 'min:1'],
+            'x' => ['required', 'numeric', 'min:0'],
+            'y' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $field = TemplateSignatureField::create([
+            'template_id' => $template->id,
+            'page' => $validated['page'],
+            'x' => $validated['x'],
+            'y' => $validated['y'],
+            'width' => 0.25,
+            'height' => 0.06,
+        ]);
+
+        return response()->json(['success' => true, 'field' => $field]);
+    }
+
+    public function update(Request $request, TemplateSignatureField $signatureField)
+    {
+        abort_unless(
+            $signatureField->template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $signatureField->update($request->only('x', 'y', 'width', 'height'));
+
+        return response()->json(['success' => true]);
+    }
+
+    public function destroy(Request $request, TemplateSignatureField $signatureField)
+    {
+        abort_unless(
+            $signatureField->template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $signatureField->delete();
+
+        return response()->json(['success' => true]);
     }
 }
 ```
-
-Create `resources/views/emails/email-verification-otp.blade.php`. **Copy the whole file**
-`resources/views/emails/signature-request.blade.php` to get the same inline styles and
-outer wrapper, then replace the inner content with:
-
-- Heading: `Verify your email`
-- `Hello {{ $user->name }},`
-- `Use the code below to finish creating your EZSign account. It expires in 10 minutes.`
-- The `{{ $otp }}` in the same big, letter-spaced box the signature-request template uses
-  (search that file for `$otp` — around line 99 — and copy that block).
-- `If you did not create an account, you can ignore this email.`
-
-Remove everything about documents/signers from the copy.
-
-### Step 5 — Send the OTP instead of the link
-
-Laravel sends the default link email through `User::sendEmailVerificationNotification()`
-(it is triggered by the `Registered` event and by the "resend" controller). Override that one
-method in `app/Models/User.php` so both places send the OTP email instead:
-
-Add these imports at the top of `User.php`:
-
-```php
-use App\Mail\EmailVerificationOtpMail;
-use App\Services\EmailVerificationOtpService;
-use Illuminate\Support\Facades\Mail;
-```
-
-Add this method inside the class:
-
-```php
-public function sendEmailVerificationNotification(): void
-{
-    $otp = app(EmailVerificationOtpService::class)->generate($this);
-
-    Mail::to($this->email)->send(new EmailVerificationOtpMail($this, $otp));
-}
-```
-
-Also add the relationship (optional but handy):
-
-```php
-public function otpVerifications()
-{
-    return $this->hasMany(OtpVerification::class);
-}
-```
-
-Nothing else about `Registered` / the event listener needs to change.
 
 ### Step 6 — Routes
 
-In `routes/auth.php`, inside the `auth` middleware group, **replace** this:
+In `routes/web.php`:
+
+1. Add imports at the top with the other controllers:
 
 ```php
-Route::get('verify-email/{id}/{hash}', VerifyEmailController::class)
-            ->middleware(['signed', 'throttle:6,1'])
-            ->name('verification.verify');
+use App\Http\Controllers\TemplateController;
+use App\Http\Controllers\TemplateSignatureFieldController;
 ```
 
-with this:
+2. Inside the `Route::middleware('auth', 'verified')->group(...)`, right after the last
+   `documents.*` route, add:
 
 ```php
-Route::post('verify-email', VerifyEmailController::class)
-            ->middleware('throttle:6,1')
-            ->name('verification.verify');
+Route::get('/templates', [TemplateController::class, 'index'])
+    ->name('templates.index');
+
+Route::post('/templates', [TemplateController::class, 'store'])
+    ->name('templates.store');
+
+Route::get('/templates/{template}', [TemplateController::class, 'show'])
+    ->name('templates.show');
+
+Route::get('/templates/{template}/prepare', [TemplateController::class, 'prepare'])
+    ->name('templates.prepare');
+
+Route::get('/templates/{template}/preview', [TemplateController::class, 'preview'])
+    ->name('templates.preview');
+
+Route::post('/templates/{template}/signature-fields', [TemplateSignatureFieldController::class, 'store'])
+    ->name('templates.signature-fields.store');
+
+Route::patch('/template-signature-fields/{signatureField}', [TemplateSignatureFieldController::class, 'update'])
+    ->name('templates.signature-fields.update');
+
+Route::delete('/template-signature-fields/{signatureField}', [TemplateSignatureFieldController::class, 'destroy'])
+    ->name('templates.signature-fields.destroy');
 ```
 
-Keep `verification.notice` (GET `verify-email`) and `verification.send`
-(POST `email/verification-notification`) exactly as they are.
+Check they registered:
 
-### Step 7 — VerifyEmailController
+```bash
+docker compose exec app php artisan route:list --name=templates
+```
 
-Replace the whole body of `app/Http/Controllers/Auth/VerifyEmailController.php`:
+You should see 8 routes.
 
-```php
-<?php
+### Step 7 — Sidebar item
 
-namespace App\Http\Controllers\Auth;
+In `resources/js/Components/Layout/navigation.js`:
 
-use App\Http\Controllers\Controller;
-use App\Providers\RouteServiceProvider;
-use App\Services\EmailVerificationOtpService;
-use Illuminate\Auth\Events\Verified;
-use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
+- Add `LayoutTemplate` to the `lucide-vue-next` import.
+- Add this item **right after** the Documents item:
 
-class VerifyEmailController extends Controller
+```js
 {
-    public function __construct(
-        private EmailVerificationOtpService $otpService
-    ) {}
-
-    public function __invoke(Request $request): RedirectResponse
-    {
-        $user = $request->user();
-
-        if ($user->hasVerifiedEmail()) {
-            return redirect()->intended(RouteServiceProvider::HOME);
-        }
-
-        $request->validate([
-            'otp' => ['required', 'digits:6'],
-        ]);
-
-        if (! $this->otpService->verify($user, $request->otp)) {
-            throw ValidationException::withMessages([
-                'otp' => 'The code is invalid or has expired.',
-            ]);
-        }
-
-        if ($user->markEmailAsVerified()) {
-            event(new Verified($user));
-        }
-
-        return redirect()->intended(RouteServiceProvider::HOME.'?verified=1');
-    }
-}
+    title: "Templates",
+    icon: LayoutTemplate,
+    route: "templates.index",
+},
 ```
 
-`EmailVerificationRequest` is no longer used — remove that import.
+### Step 8 — `Templates/Index.vue`
 
-### Step 8 — Registration redirect
+Copy `resources/js/Pages/Documents/Index.vue` → `resources/js/Pages/Templates/Index.vue` and
+change:
 
-In `app/Http/Controllers/Auth/RegisteredUserController.php::store()`, change the last line:
+| Find | Replace with |
+|---|---|
+| `documents: Array` | `templates: Array` |
+| `route("documents.store")` | `route("templates.store")` |
+| `import DocumentTable from "@/Components/documents/DocumentTable.vue"` | `import TemplateTable from "@/Components/templates/TemplateTable.vue"` |
+| `<DocumentTable :documents="documents" />` | `<TemplateTable :templates="templates" />` |
+| `<Head title="Documents" />` | `<Head title="Templates" />` |
+| `FileText` icon | `LayoutTemplate` |
+| Header title/description | `Templates` / `Reusable documents with pre-placed signature fields.` |
+| Upload section title/description | `Upload Template` / `Upload a PDF to use as a template.` |
+| Table section title/description | `All Templates` / `Browse and manage your organization's templates.` |
+| Feedback strings | say "template" instead of "document" |
 
-```php
-// before
-return redirect(RouteServiceProvider::HOME);
+`UploadCard` is reused unchanged (its button says "Upload Document" — acceptable for now).
 
-// after
-return redirect()->route('verification.notice');
+### Step 9 — `TemplateTable.vue` + `columns.js`
+
+Create `resources/js/Components/templates/TemplateTable.vue` — copy of `DocumentTable.vue`:
+
+- prop `templates` instead of `documents`
+- `<ResourceCount :count="templates.length" singular="Template" />`
+- `search-placeholder="Search templates..."`
+- `import { columns } from "./columns";` (the new file below)
+
+Create `resources/js/Components/templates/columns.js` — copy of
+`resources/js/Components/documents/columns.js` with:
+
+- **Delete the whole `status` column** and the `badgeVariant()` helper (templates have no status).
+- Every `route("documents.show", ...)` → `route("templates.show", ...)`.
+- Column label `"Document"` → `"Template"`.
+- Add a new column after `name`:
+
+```js
+{
+    accessorKey: "signature_fields_count",
+    meta: { label: "Fields" },
+    header: ({ column }) =>
+        h(DataTableColumnHeader, { column, title: "Fields" }),
+    cell: ({ row }) => row.original.signature_fields_count ?? 0,
+},
 ```
 
-(The `verified` middleware would redirect there anyway, but being explicit makes the flow
-obvious and makes the test below straightforward.)
+Remove now-unused imports (`Badge`, `badgeVariants`, `Pencil`).
 
-### Step 9 — Resend controller status string
+### Step 10 — `Templates/Show.vue` + `TemplateInfo.vue`
 
-In `app/Http/Controllers/Auth/EmailVerificationNotificationController.php`, change:
+Create `resources/js/Components/templates/TemplateInfo.vue` — copy of `DocumentInfo.vue`:
 
-```php
-return back()->with('status', 'verification-link-sent');
-// to
-return back()->with('status', 'verification-code-sent');
-```
-
-### Step 10 — Rewrite `VerifyEmail.vue`
-
-Rewrite `resources/js/Pages/Auth/VerifyEmail.vue`. Keep the **outer look** of the current
-file (`AuthLayout`, the `Card` with the round icon, title, description) and take the
-**OTP input + resend button with 60-second cooldown** from `Signing/Otp.vue`.
-
-Requirements:
-
-- Props: `status: String`.
-- Email shown from `usePage().props.auth.user.email` (same as today).
-- `form = useForm({ otp: "" })`; submit posts to `route("verification.verify")`.
-- `Input` with `inputmode="numeric"`, `maxlength="6"`, `autocomplete="one-time-code"`,
-  `placeholder="000000"`, class `text-center text-2xl tracking-[0.5em]`.
-- Show `form.errors.otp` under the input in `text-sm text-destructive text-center`.
-- Submit button disabled while `form.processing || form.otp.length !== 6`.
-- Resend button: `resendForm.post(route("verification.send"))`, then start a 60 s cooldown
-  (copy the `resendCooldown` logic from `Signing/Otp.vue` verbatim).
-- Green success box when `status === "verification-code-sent"` with text
-  "A new code has been sent to your email."
-- Keep the existing **Sign out** link at the bottom.
-- Text: title "Verify your email", description "Enter the 6-digit code we sent to
-  **{email}**. It expires in 10 minutes."
-
-Skeleton to fill in:
+- prop `template` instead of `document`
+- **Remove** the Status block, the Signing Progress block, the `signedCount` computed, and
+  `statusVariant`/`statusLabel` helpers and the `Badge` import.
+- **Remove** the "Uploaded By" block (templates have no `owner_id`).
+- **Add** a block:
 
 ```vue
-<script setup>
-import { computed, ref } from "vue";
-import { Head, Link, useForm, usePage } from "@inertiajs/vue3";
-import AuthLayout from "@/Layouts/AuthLayout.vue";
-import { MailCheck, Loader2, RefreshCcw, LogOut, ShieldCheck } from "lucide-vue-next";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+<div class="space-y-2">
+    <dt class="text-sm text-muted-foreground">Signature Fields</dt>
+    <dd class="font-medium">{{ template.signature_fields_count ?? 0 }}</dd>
+</div>
+```
 
-const props = defineProps({ status: String });
+Keep File Type, File Size, Uploaded At.
 
-const page = usePage();
-const email = computed(() => page.props.auth.user.email);
+Create `resources/js/Pages/Templates/Show.vue` — copy of `Documents/Show.vue`, then:
 
-const form = useForm({ otp: "" });
-const resendForm = useForm({});
-const resendCooldown = ref(0);
+- Props: only `template: Object`.
+- Delete: `sendForm`, `sendForSignature()`, `sendDocument()`, `downloadDocument()`, the
+  confirmation `FeedbackDialog`, all `SignersSection` / `DocumentPreparation` /
+  `DocumentActions` imports and usage, the "Preparation Status" section, the "Signers" section.
+- Keep `previewDocument()` but point it at `route("templates.preview", props.template.id)`.
+- Header: `:title="template.name + ' - Template Details'"`,
+  `description="Manage template information and signature field layout."`,
+  icon `LayoutTemplate`.
+- Header actions slot — put the two buttons inline (no separate component needed):
 
-const verify = () => form.post(route("verification.verify"));
+```vue
+<template #actions>
+    <div class="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" @click="previewDocument">
+            <Eye class="mr-2 h-4 w-4" />
+            Preview
+        </Button>
 
-const resend = () => {
-    // copy from Signing/Otp.vue, but post to route("verification.send")
-};
-
-const codeSent = computed(() => props.status === "verification-code-sent");
-</script>
-
-<template>
-    <Head title="Verify Email" />
-    <AuthLayout>
-        <Card class="w-full max-w-md rounded-2xl border shadow-xl bg-background/95">
-            <!-- header: same as current file -->
-            <CardContent class="space-y-6">
-                <!-- green "code sent" box (v-if="codeSent") -->
-                <form @submit.prevent="verify" class="space-y-4">
-                    <!-- Input + error + submit button -->
-                </form>
-                <!-- resend button with cooldown -->
-                <!-- Sign out link: same as current file -->
-            </CardContent>
-        </Card>
-    </AuthLayout>
+        <Button as-child>
+            <Link :href="route('templates.prepare', template.id)">
+                <FilePenLine class="mr-2 h-4 w-4" />
+                Prepare Template
+            </Link>
+        </Button>
+    </div>
 </template>
 ```
 
-### Step 11 — Update tests
+- Body: one `PageSection` titled "Template Information" containing
+  `<TemplateInfo :template="template" />`.
 
-`tests/Feature/Auth/EmailVerificationTest.php` — delete the two signed-URL tests
-(`test_email_can_be_verified`, `test_email_is_not_verified_with_invalid_hash`) and add:
+### Step 11 — `TemplatePrepareSidebar.vue`
 
-```php
-public function test_email_can_be_verified_with_valid_otp(): void
-{
-    $user = User::factory()->create(['email_verified_at' => null]);
-    Event::fake();
+Create `resources/js/Components/templates/TemplatePrepareSidebar.vue` — copy of
+`resources/js/Components/documents/prepare/PrepareSidebar.vue`, then:
 
-    $otp = app(EmailVerificationOtpService::class)->generate($user);
+- prop `template` instead of `document` (and `{{ template.name }}` in the summary box).
+- **Delete** the `SignerSelector` import and the `<SignerSelector ... />` line.
+- The "Add Signature Field" button: remove `:disabled="!editor.selectedSigner"`.
+- Title/description: `Prepare Template` / `Place signature fields on the PDF.`
+- Instructions: delete "1. Select a signer." and renumber the rest (1–3).
 
-    $response = $this->actingAs($user)->post('/verify-email', ['otp' => $otp]);
+### Step 12 — `Templates/Prepare.vue` (the big one)
 
-    Event::assertDispatched(Verified::class);
-    $this->assertTrue($user->fresh()->hasVerifiedEmail());
-    $response->assertRedirect(RouteServiceProvider::HOME.'?verified=1');
-}
+Copy `resources/js/Pages/Documents/Prepare.vue` → `resources/js/Pages/Templates/Prepare.vue`.
+The editor logic (rendering, drag, resize, zoom, pages) stays byte-for-byte. Make **only**
+these edits:
 
-public function test_email_is_not_verified_with_wrong_otp(): void
-{
-    $user = User::factory()->create(['email_verified_at' => null]);
+1. **Prop rename.** `document: { type: Object, required: true }` →
+   `template: { type: Object, required: true }`. Then find-and-replace in this file:
+   - `props.document` → `props.template` (every occurrence)
+   - in the `<template>` section: `:document="document"` → `:template="template"`,
+     `document.id` → `template.id`, `document.name` → `template.name`
+   - ⚠️ Do **not** touch `document.addEventListener` / `window.` — those refer to the
+     browser DOM, not the prop. Only rename where it means the Inertia prop.
 
-    app(EmailVerificationOtpService::class)->generate($user);
+2. **Routes.** Replace every `route("documents.…")` with the `templates` equivalent:
+   - `documents.preview` → `templates.preview`
+   - `documents.show` → `templates.show`
+   - `documents.signature-fields.store` → `templates.signature-fields.store`
+   - `documents.signature-fields.update` → `templates.signature-fields.update`
+   - `documents.signature-fields.destroy` → `templates.signature-fields.destroy`
 
-    $response = $this->actingAs($user)->post('/verify-email', ['otp' => '000000']);
+3. **Initial fields.** `props.document.signature_fields` → `props.template.signature_fields`
+   (this happens automatically from the rename in 1, just confirm it).
 
-    $response->assertSessionHasErrors('otp');
-    $this->assertFalse($user->fresh()->hasVerifiedEmail());
-}
+4. **`placeField()`** — delete the block
+   `if (!editor.selectedSigner) { return; }` and delete the line
+   `signer_id: editor.selectedSigner.id,` from the axios payload.
 
-public function test_email_is_not_verified_with_expired_otp(): void
-{
-    $user = User::factory()->create(['email_verified_at' => null]);
+5. **`finishPreparing()`** — there is no server "finish" step for templates. Replace the
+   whole function body with:
 
-    $otp = app(EmailVerificationOtpService::class)->generate($user);
-    OtpVerification::where('user_id', $user->id)->update(['expired_at' => now()->subMinute()]);
-
-    $response = $this->actingAs($user)->post('/verify-email', ['otp' => $otp]);
-
-    $response->assertSessionHasErrors('otp');
-    $this->assertFalse($user->fresh()->hasVerifiedEmail());
-}
-
-public function test_otp_email_is_sent_on_registration(): void
-{
-    Mail::fake();
-
-    $this->post('/register', [
-        'organization_name' => 'Test Organization',
-        'name' => 'Test User',
-        'email' => 'test@example.com',
-        'password' => 'password',
-        'password_confirmation' => 'password',
-    ]);
-
-    Mail::assertSent(EmailVerificationOtpMail::class, fn ($mail) => $mail->hasTo('test@example.com'));
-    $this->assertDatabaseCount('otp_verifications', 1);
+```js
+function finishPreparing() {
+    router.visit(route("templates.show", props.template.id));
 }
 ```
 
-Add the needed `use` lines: `App\Models\OtpVerification`, `App\Services\EmailVerificationOtpService`,
-`App\Mail\EmailVerificationOtpMail`, `Illuminate\Support\Facades\Mail`. Remove the now-unused
-`URL` import.
+   and delete `handleFeedbackClose()`; change the `FeedbackDialog` at the bottom to
+   `@close="closeFeedback"`.
 
-`tests/Feature/Auth/RegistrationTest.php` — in `test_new_users_can_register`, change
-`$response->assertRedirect(RouteServiceProvider::HOME);` to
-`$response->assertRedirect(route('verification.notice'));`. Add `Mail::fake();` at the top of
-that test so it doesn't try to talk to SMTP.
+6. **Sidebar.** Replace the import
+   `import PrepareSidebar from "@/Components/documents/prepare/PrepareSidebar.vue";` with
+   `import TemplatePrepareSidebar from "@/Components/templates/TemplatePrepareSidebar.vue";`
+   and the tag `<PrepareSidebar ... />` with `<TemplatePrepareSidebar :template="template" … />`
+   (same other props/events).
 
-Run:
+7. **Text.** `<Head :title="\`Prepare - ${template.name}\`" />`, header
+   `title="Prepare Template"`, sidebar `PageSection` description
+   `"Place signature fields."`, button label `"Done"` instead of "Finish Preparing".
+
+8. Remove the unused import `import { hide } from "@unovis/ts/components/free-brush/style";`
+   (it's dead code copied from the original).
+
+**One shared-component edit** — `resources/js/Components/documents/prepare/SignatureField.vue`
+line ~94 shows `{{ field.signer?.name }}`. Template fields have no signer, so the box would be
+blank. Change it to:
+
+```vue
+{{ field.signer?.name ?? "Signature" }}
+```
+
+This is safe for documents (they always have a signer).
+
+### Step 13 — Build and smoke-test
 
 ```bash
-docker compose exec app php artisan test --filter=Auth
+npm run build
 ```
 
-All Auth tests must pass.
+Then in the browser:
+
+1. Sidebar shows **Templates** between Documents and Members.
+2. `/templates` → upload a PDF → it appears in the table with `Fields = 0`.
+3. Click the name → Show page with info and two buttons. **Preview** opens the PDF in a new tab.
+4. **Prepare Template** → the editor loads the PDF. **Add Signature Field** is enabled
+   immediately (no signer step). Click on the page → a box labelled "Signature" appears.
+5. Drag it, resize it, delete it, add two more, change page, add one there.
+6. Click **Done** → back on Show; `Signature Fields` shows the right count. Reload
+   `/templates` — the Fields column matches.
+7. Re-open Prepare → the fields are where you left them.
+8. Log in as a user from **another organization** and open the first org's template URL
+   directly → you get a 403.
 
 ---
 
-## Manual verification (do this before opening the PR)
-
-1. Go to http://localhost:8000/register and create an account.
-2. You should land on `/verify-email` with a 6-digit input.
-3. Open http://localhost:8025 — an email "Your EZSign verification code" must be there.
-4. Type a **wrong** code → red error "The code is invalid or has expired."
-5. Type the **right** code → redirected to `/dashboard`.
-6. Register another account, click **Resend code** → a second email arrives, button shows a
-   60 s countdown, and only the newest code works.
-7. Check the page in dark mode too.
-
 ## Rules / gotchas
 
-- `users.id` is a UUID → use `foreignUuid('user_id')` in the migration.
-- Do **not** remove `MustVerifyEmail` from `User` or the `verified` middleware from
-  `routes/web.php` — the whole point is to keep that gate and only change how it's satisfied.
-- Do **not** add packages.
-- Run `php artisan` **inside the container** (`docker compose exec app ...`); the host PHP is
-  8.4 and the lock file requires 8.3.
-- `route("verification.verify")` now has no parameters — in Vue call it with no args.
-- If Vite is not running, run `npm run build` so the new `VerifyEmail.vue` is served.
-- Frontend import paths: `@/components/ui/...` (lowercase) for primitives,
-  `@/Layouts/...` and `@/Pages/...` (capitalised) for the rest — match existing files.
+- UUID primary keys and `foreignUuid` everywhere — copy the `documents` migrations, not the
+  Laravel default stubs.
+- Keep field coordinates as 0–1 fractions; don't "fix" them to pixels.
+- Don't add signer, status, or send logic anywhere in templates.
+- Don't modify the existing Documents pages/components except the one-line fallback in
+  `SignatureField.vue`.
+- `route()` in Vue is the Ziggy helper — route names must exactly match `routes/web.php`.
+- Run `php artisan` inside the container (`docker compose exec app …`).
+- If the sidebar item does not appear, check the icon import in `navigation.js`.
+- If the Prepare page shows a blank canvas, open the browser console — a wrong `route()` name
+  in `templates.preview` is the usual cause.
 
 ## Definition of done
 
-- [ ] Migration + `OtpVerification` model exist; `otp_verifications` table matches the spec
-      (`id`, `user_id`, `otp` string(6), `expired_at`, `created_at`, `updated_at`)
-- [ ] Registering sends an OTP email (visible in Mailpit), not a link email
-- [ ] `/verify-email` shows an OTP input; correct code → dashboard; wrong/expired → error
-- [ ] Resend works with a 60 s cooldown and invalidates the previous code
-- [ ] Old `GET /verify-email/{id}/{hash}` route is gone
-- [ ] `php artisan test --filter=Auth` passes
-- [ ] One commit on branch `feature/otp-email-verification`:
+- [ ] `templates` and `template_signature_fields` tables exist with the exact columns in the spec
+- [ ] `Template` / `TemplateSignatureField` models with relations; `Organization::templates()`
+- [ ] 8 `templates.*` routes registered and organisation-scoped (403 for other orgs)
+- [ ] Sidebar shows **Templates**
+- [ ] Index: upload PDF, table with name / fields / size / uploaded
+- [ ] Show: info + Preview + Prepare Template buttons, no signer UI
+- [ ] Prepare: add/drag/resize/delete fields without selecting a signer; persists across reloads
+- [ ] `npm run build` passes; no console errors on the three pages
+- [ ] One commit on branch `feature/templates`:
 
 ```
-feat: verify email with a 6-digit OTP instead of a signed link
+feat: add document templates with reusable signature field layouts
 
-Store codes in otp_verifications, email them on registration and resend,
-and replace the signed-URL verification route with a POST that checks the code.
+Templates are organisation-scoped PDFs with pre-placed signature fields
+and no signers; the Prepare editor is reused without the signer step.
 ```

@@ -1,6 +1,7 @@
 import {
     LayoutDashboard,
     FileText,
+    LayoutTemplate,
     Users,
     Settings,
     WalletCards,
@@ -21,6 +22,12 @@ export const navigation = [
                 title: "Documents",
                 icon: FileText,
                 route: "documents.index",
+            },
+
+            {
+                title: "Templates",
+                icon: LayoutTemplate,
+                route: "templates.index",
             },
 
             {

@@ -61,6 +61,11 @@ class Organization extends Model
         );
     }
 
+    public function templates()
+    {
+        return $this->hasMany(Template::class);
+    }
+
     public function wallet(): HasOne
     {
         return $this->hasOne(

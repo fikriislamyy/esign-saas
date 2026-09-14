@@ -91,7 +91,7 @@ function handleDelete() {
             class="pointer-events-none flex h-full items-center justify-center rounded-md px-2 text-center"
         >
             <span class="truncate text-xs font-semibold text-foreground">
-                {{ field.signer?.name }}
+                {{ field.signer?.name ?? "Signature" }}
             </span>
         </div>
 
