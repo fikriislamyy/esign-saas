@@ -9,7 +9,7 @@ import AppLayout from "@/Layouts/AppLayout.vue";
 import PageHeader from "@/Components/page/PageHeader.vue";
 import PageSection from "@/Components/page/PageSection.vue";
 
-import PrepareSidebar from "@/Components/documents/prepare/PrepareSidebar.vue";
+import TemplatePrepareSidebar from "@/Components/templates/TemplatePrepareSidebar.vue";
 import PrepareToolbar from "@/Components/documents/prepare/PrepareToolbar.vue";
 import PdfCanvas from "@/Components/documents/prepare/PdfCanvas.vue";
 
@@ -21,7 +21,6 @@ import { loadPdf } from "@/Composables/usePdfLoader";
 
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Save } from "lucide-vue-next";
-import { hide } from "@unovis/ts/components/free-brush/style";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -29,7 +28,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const props = defineProps({
-    document: {
+    template: {
         type: Object,
         required: true,
     },
@@ -110,7 +109,7 @@ const editor = reactive({
 */
 
 const signatureFields = ref(
-    (props.document.signature_fields ?? []).map((field) => ({
+    (props.template.signature_fields ?? []).map((field) => ({
         ...field,
 
         x: Number(field.x),
@@ -206,43 +205,8 @@ function showFeedback(type, title, message) {
     feedback.open = true;
 }
 
-async function finishPreparing() {
-    if (loading.value) {
-        return;
-    }
-
-    showLoading("Finishing document preparation...");
-
-    try {
-        await axios.post(route("documents.prepare.finish", props.document.id));
-
-        showSuccess(
-            "The document has been successfully prepared and is ready for the next step.",
-            "Preparation Complete",
-            "Continue",
-        );
-    } catch (error) {
-        console.error(error);
-
-        showError(
-            error.response?.data?.message ??
-                "Something went wrong while finishing document preparation.",
-            "Preparation Failed",
-            "Close",
-        );
-    } finally {
-        hideLoading();
-    }
-}
-
-function handleFeedbackClose() {
-    const shouldRedirect = feedbackType.value === "success";
-
-    closeFeedback();
-
-    if (shouldRedirect) {
-        router.visit(route("documents.show", props.document.id));
-    }
+function finishPreparing() {
+    router.visit(route("templates.show", props.template.id));
 }
 
 /*
@@ -297,7 +261,7 @@ async function renderPage() {
 */
 
 async function saveField(field) {
-    await axios.patch(route("documents.signature-fields.update", field.id), {
+    await axios.patch(route("templates.signature-fields.update", field.id), {
         x: field.x,
 
         y: field.y,
@@ -315,7 +279,7 @@ async function saveField(field) {
 */
 
 async function deleteField(fieldId) {
-    await axios.delete(route("documents.signature-fields.destroy", fieldId));
+    await axios.delete(route("templates.signature-fields.destroy", fieldId));
 
     signatureFields.value = signatureFields.value.filter(
         (field) => field.id !== fieldId,
@@ -334,10 +298,6 @@ async function placeField(pageNumber, event) {
         return;
     }
 
-    if (!editor.selectedSigner) {
-        return;
-    }
-
     const target = event.currentTarget;
 
     const rect = target.getBoundingClientRect();
@@ -351,10 +311,8 @@ async function placeField(pageNumber, event) {
     const height = 60 / canvasHeight.value;
 
     const response = await axios.post(
-        route("documents.signature-fields.store", props.document.id),
+        route("templates.signature-fields.store", props.template.id),
         {
-            signer_id: editor.selectedSigner.id,
-
             page: pageNumber,
 
             x,
@@ -577,9 +535,9 @@ async function stopInteraction(event) {
 
 onMounted(async () => {
     try {
-        showLoading("Loading document...");
+        showLoading("Loading template...");
 
-        pdfDoc = await loadPdf(route("documents.pdf", props.document.id));
+        pdfDoc = await loadPdf(route("templates.pdf", props.template.id));
 
         console.log("PDF loaded successfully:", pdfDoc.numPages, "pages");
 
@@ -619,14 +577,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <Head :title="`Prepare - ${document.name}`" />
+    <Head :title="`Prepare - ${template.name}`" />
 
     <AppLayout>
         <div class="space-y-8">
-            <PageHeader title="Prepare Document" :description="document.name">
+            <PageHeader title="Prepare Template" :description="template.name">
                 <template #actions>
                     <Button variant="outline" as-child>
-                        <Link :href="route('documents.show', document.id)">
+                        <Link :href="route('templates.show', template.id)">
                             <ArrowLeft class="mr-2 h-4 w-4" />
                             Back
                         </Link>
@@ -635,7 +593,7 @@ onUnmounted(() => {
                     <Button :disabled="loading" @click="finishPreparing">
                         <Save class="mr-2 h-4 w-4" />
 
-                        {{ loading ? "Finishing..." : "Finish Preparing" }}
+                        {{ loading ? "Finishing..." : "Done" }}
                     </Button>
                 </template>
             </PageHeader>
@@ -648,10 +606,10 @@ onUnmounted(() => {
                 <PageSection
                     class="lg:col-span-1"
                     title="Preparation"
-                    description="Configure signature fields."
+                    description="Place signature fields."
                 >
-                    <PrepareSidebar
-                        :document="document"
+                    <TemplatePrepareSidebar
+                        :template="template"
                         :editor="editor"
                         :signature-fields="signatureFields"
                         @start-placement="editor.placingSignature = true"
@@ -704,7 +662,7 @@ onUnmounted(() => {
             :title="feedbackTitle"
             :message="feedbackMessage"
             :button-text="feedbackButtonText"
-            @close="handleFeedbackClose"
+            @close="closeFeedback"
         />
     </AppLayout>
 </template>

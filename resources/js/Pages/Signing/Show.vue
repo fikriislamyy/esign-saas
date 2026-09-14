@@ -7,6 +7,7 @@ import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
 import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
 
 import { useFeedback } from "@/Composables/useFeedback";
+import { loadPdf } from "@/Composables/usePdfLoader";
 
 import axios from "axios";
 
@@ -439,12 +440,9 @@ function handleWorkspaceResize(width) {
 */
 
 onMounted(async () => {
-    const pdfUrl = route("documents.preview", props.document.id);
     showLoading("Loading document...");
     try {
-        pdfDoc = await pdfjsLib.getDocument({
-            url: pdfUrl,
-        }).promise;
+        pdfDoc = await loadPdf(route("signing.pdf", props.signer.token));
 
         totalPages.value = pdfDoc.numPages;
 

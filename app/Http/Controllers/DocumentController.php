@@ -502,6 +502,29 @@ class DocumentController extends Controller
         );
     }
 
+    public function pdf(
+        Request $request,
+        Document $document
+    ) {
+        abort_unless(
+            $document->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $filePath = $document->signed_path ?: $document->file_path;
+
+        abort_unless(
+            $filePath,
+            404
+        );
+
+        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($filePath);
+
+        return response()->json([
+            'data' => base64_encode($contents),
+        ]);
+    }
+
     public function finishPrepare(
         Request $request,
         Document $document

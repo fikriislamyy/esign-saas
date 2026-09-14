@@ -9,6 +9,8 @@ use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\DocumentSignerController;
 use App\Http\Controllers\SigningController;
 use App\Http\Controllers\DocumentSignatureFieldController;
+use App\Http\Controllers\TemplateController;
+use App\Http\Controllers\TemplateSignatureFieldController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BillingTopupController;
 use App\Http\Controllers\StripeWebhookController;
@@ -78,6 +80,11 @@ Route::middleware('guest')->group(function () {
         '/sign/{token}/completed',
         [SigningController::class, 'completed']
     )->name('sign.completed');
+
+    Route::get(
+        '/sign/{token}/pdf',
+        [SigningController::class, 'pdf']
+    )->name('signing.pdf');
 
 Route::middleware('auth', 'verified')->group(function () {
     Route::get('/dashboard', function () {
@@ -160,6 +167,11 @@ Route::middleware('auth', 'verified')->group(function () {
     )->name('documents.preview');
 
     Route::get(
+        '/documents/{document}/pdf',
+        [DocumentController::class, 'pdf']
+    )->name('documents.pdf');
+
+    Route::get(
         '/documents/{document}/download',
         [DocumentController::class, 'download']
     )->name('documents.download');
@@ -183,6 +195,33 @@ Route::middleware('auth', 'verified')->group(function () {
         '/documents/{document}/prepare/finish',
         [DocumentController::class, 'finishPrepare']
     )->name('documents.prepare.finish');
+
+    Route::get('/templates', [TemplateController::class, 'index'])
+        ->name('templates.index');
+
+    Route::post('/templates', [TemplateController::class, 'store'])
+        ->name('templates.store');
+
+    Route::get('/templates/{template}', [TemplateController::class, 'show'])
+        ->name('templates.show');
+
+    Route::get('/templates/{template}/prepare', [TemplateController::class, 'prepare'])
+        ->name('templates.prepare');
+
+    Route::get('/templates/{template}/preview', [TemplateController::class, 'preview'])
+        ->name('templates.preview');
+
+    Route::get('/templates/{template}/pdf', [TemplateController::class, 'pdf'])
+        ->name('templates.pdf');
+
+    Route::post('/templates/{template}/signature-fields', [TemplateSignatureFieldController::class, 'store'])
+        ->name('templates.signature-fields.store');
+
+    Route::patch('/template-signature-fields/{signatureField}', [TemplateSignatureFieldController::class, 'update'])
+        ->name('templates.signature-fields.update');
+
+    Route::delete('/template-signature-fields/{signatureField}', [TemplateSignatureFieldController::class, 'destroy'])
+        ->name('templates.signature-fields.destroy');
 
     Route::delete(
         '/invitations/{invitation}',
