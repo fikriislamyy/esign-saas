@@ -25,6 +25,15 @@ import Typewriter from "@/Components/Typewriter.vue";
 import FadeIn from "@/Components/animations/FadeIn.vue";
 import SlideIn from "@/Components/animations/SlideIn.vue";
 
+import HowItWorks from "@/Components/landing/HowItWorks.vue";
+import FeatureTabs from "@/Components/landing/FeatureTabs.vue";
+import SecurityCompliance from "@/Components/landing/SecurityCompliance.vue";
+import UseCases from "@/Components/landing/UseCases.vue";
+import Testimonials from "@/Components/landing/Testimonials.vue";
+import Pricing from "@/Components/landing/Pricing.vue";
+import Faq from "@/Components/landing/Faq.vue";
+import CtaBanner from "@/Components/landing/CtaBanner.vue";
+
 const activePreview = ref(0);
 const isDarkMode = ref(false);
 
@@ -76,8 +85,8 @@ onUnmounted(() => {
 });
 </script>
 <template>
-    <Head title="Manage your organization documents" />
-    <div class="min-h-screen bg-background">
+    <Head title="EZSign — Send, sign and track documents online" />
+    <div class="min-h-screen scroll-smooth bg-background">
         <!-- Background Glow -->
         <div class="pointer-events-none absolute inset-0 overflow-hidden">
             <div
@@ -102,6 +111,13 @@ onUnmounted(() => {
 
                         <span class="text-xl font-bold"> EZSign </span>
                     </div>
+
+                    <nav class="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
+                        <a href="#how-it-works" class="hover:text-foreground">How it works</a>
+                        <a href="#security" class="hover:text-foreground">Security</a>
+                        <a href="#pricing" class="hover:text-foreground">Pricing</a>
+                        <a href="#faq" class="hover:text-foreground">FAQ</a>
+                    </nav>
 
                     <div class="flex items-center gap-2">
                         <Link href="/login">
@@ -333,6 +349,15 @@ onUnmounted(() => {
                 </FadeIn>
             </div>
         </section>
+
+        <HowItWorks />
+        <FeatureTabs />
+        <SecurityCompliance />
+        <UseCases />
+        <Testimonials />
+        <Pricing />
+        <Faq />
+        <CtaBanner />
 
         <!-- Footer -->
         <footer class="border-t">
