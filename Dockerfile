@@ -87,6 +87,8 @@ COPY . .
 # PHP dependencies
 COPY --from=vendor /var/www/vendor ./vendor
 
+# Regenerate autoloader for the final image
+RUN composer dump-autoload --no-dev --optimize
 
 # Compiled frontend assets
 COPY --from=frontend /var/www/public/build ./public/build

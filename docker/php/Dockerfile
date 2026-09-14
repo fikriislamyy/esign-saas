@@ -18,4 +18,9 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Match the host user so bind-mounted storage/ and bootstrap/cache are writable
+ARG UID=1000
+ARG GID=1000
+RUN usermod -u ${UID} www-data && groupmod -g ${GID} www-data
+
 WORKDIR /var/www
