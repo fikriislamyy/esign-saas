@@ -73,12 +73,12 @@ const formattedWalletIdr = computed(() => {
         <!-- Left -->
         <div class="flex min-w-0 items-center gap-3">
             <!-- Mobile Sidebar -->
-            <div class="md:hidden">
+            <div class="lg:hidden">
                 <MobileSidebar />
             </div>
 
             <!-- Desktop Sidebar Toggle -->
-            <div class="hidden md:block">
+            <div class="hidden lg:block">
                 <Button
                     variant="ghost"
                     size="icon"
@@ -88,7 +88,7 @@ const formattedWalletIdr = computed(() => {
                 </Button>
             </div>
 
-            <div v-if="title" class="hidden min-w-0 flex-col gap-1 md:flex">
+            <div v-if="title" class="hidden min-w-0 flex-col gap-1 lg:flex">
                 <AppBreadcrumb :items="breadcrumbs" />
 
                 <h1 class="truncate text-xl font-semibold tracking-tight">
@@ -103,7 +103,7 @@ const formattedWalletIdr = computed(() => {
                 </p>
             </div>
 
-            <div class="hidden h-6 w-px bg-border md:block" />
+            <div class="hidden h-6 w-px bg-border lg:block" />
         </div>
 
         <!-- Right -->

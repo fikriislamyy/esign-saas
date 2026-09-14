@@ -12,7 +12,7 @@ defineProps({
 
 <template>
     <section :id="id" :class="muted ? 'bg-muted/40' : ''">
-        <div class="mx-auto max-w-7xl px-6 py-24">
+        <div class="mx-auto max-w-7xl px-4 py-24 lg:px-8">
             <FadeIn type="fade" direction="up">
                 <div class="mx-auto mb-16 max-w-2xl text-center">
                     <p v-if="eyebrow" class="mb-3 text-sm font-semibold uppercase tracking-wider text-primary">

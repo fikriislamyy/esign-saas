@@ -5,7 +5,7 @@ import FadeIn from "@/Components/animations/FadeIn.vue";
 </script>
 
 <template>
-    <section class="mx-auto max-w-7xl px-6 pb-24">
+    <section class="mx-auto max-w-7xl px-4 pb-24 lg:px-8">
         <FadeIn type="scale">
             <div class="rounded-3xl border bg-primary/10 px-8 py-16 text-center">
                 <h2 class="text-3xl font-bold sm:text-4xl">

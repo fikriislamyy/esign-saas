@@ -56,7 +56,7 @@ function toggleSidebar() {
                 />
 
                 <main class="flex-1 overflow-y-auto bg-muted/20">
-                    <div class="mx-auto w-full max-w-7xl p-6 lg:p-8">
+                    <div class="mx-auto w-full max-w-7xl p-4 lg:p-8">
                         <slot />
                     </div>
                 </main>

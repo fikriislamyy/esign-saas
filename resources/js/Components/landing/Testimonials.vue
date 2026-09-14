@@ -25,7 +25,7 @@ const testimonials = [
 
 <template>
     <LandingSection eyebrow="Testimonials" title="Loved by teams that sign a lot">
-        <div class="grid gap-6 md:grid-cols-3">
+        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <FadeIn v-for="testimonial in testimonials" :key="testimonial.author" type="fade">
                 <Card>
                     <CardContent class="pt-6">

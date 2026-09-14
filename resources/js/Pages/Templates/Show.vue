@@ -66,7 +66,7 @@ function previewTemplate() {
                     :icon="LayoutTemplate"
                 >
                     <template #actions>
-                        <div class="flex flex-wrap justify-end gap-2">
+                        <div class="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
                             <Button variant="outline" @click="previewTemplate">
                                 <Eye class="mr-2 h-4 w-4" />
                                 Preview

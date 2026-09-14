@@ -20,7 +20,7 @@ const open = ref(false);
             </Button>
         </SheetTrigger>
 
-        <SheetContent side="left" class="w-[300px] p-0">
+        <SheetContent side="left" class="w-[85vw] max-w-[300px] p-0">
             <AppSidebar mobile :collapsed="false" :hide-text="false" />
         </SheetContent>
     </Sheet>

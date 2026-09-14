@@ -21,10 +21,10 @@ const emit = defineEmits(["send", "preview", "download"]);
 </script>
 
 <template>
-    <div class="flex flex-col items-end gap-2">
+    <div class="flex flex-col gap-2 sm:items-end">
         <!-- Actions -->
 
-        <div class="flex flex-wrap justify-end gap-2">
+        <div class="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
             <!-- Draft -->
 
             <template
@@ -77,7 +77,7 @@ const emit = defineEmits(["send", "preview", "download"]);
                 document.signers.length &&
                 !canSend
             "
-            class="max-w-sm text-right text-sm text-destructive"
+            class="max-w-sm text-sm text-destructive sm:text-right"
         >
             Every signer must have at least one signature field before sending
             the document.

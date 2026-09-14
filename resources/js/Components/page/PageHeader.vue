@@ -18,25 +18,23 @@ const props = defineProps({
 </script>
 
 <template>
-    <div
-        class="flex flex-col gap-5 md:flex-row md:items-center md:justify-between"
-    >
+    <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         <!-- Left -->
 
-        <div class="flex items-start gap-4">
+        <div class="flex min-w-0 items-start gap-4">
             <div
                 v-if="icon"
-                class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border bg-muted/60"
+                class="hidden h-14 w-14 shrink-0 items-center justify-center rounded-2xl border bg-muted/60 sm:flex"
             >
                 <component :is="icon" class="h-7 w-7" />
             </div>
 
-            <div class="space-y-1">
-                <h1 class="text-3xl font-bold tracking-tight">
+            <div class="min-w-0 space-y-1">
+                <h1 class="break-words text-2xl font-bold tracking-tight sm:text-3xl">
                     {{ title }}
                 </h1>
 
-                <p v-if="description" class="text-muted-foreground">
+                <p v-if="description" class="break-words text-muted-foreground">
                     {{ description }}
                 </p>
             </div>
@@ -44,7 +42,10 @@ const props = defineProps({
 
         <!-- Right -->
 
-        <div v-if="$slots.actions" class="flex items-center gap-2">
+        <div
+            v-if="$slots.actions"
+            class="grid gap-2 sm:flex sm:flex-wrap sm:items-center"
+        >
             <slot name="actions" />
         </div>
     </div>

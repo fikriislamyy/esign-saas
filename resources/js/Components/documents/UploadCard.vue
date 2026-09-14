@@ -98,10 +98,10 @@ function formatSize(bytes) {
 
         <!-- Actions -->
 
-        <div class="flex justify-end">
+        <div class="flex flex-col sm:flex-row sm:justify-end">
             <Button
                 size="lg"
-                class="min-w-[180px]"
+                class="w-full sm:w-auto sm:min-w-[180px]"
                 :disabled="!form.file || form.processing"
                 @click="$emit('upload')"
             >

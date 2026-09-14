@@ -112,7 +112,7 @@ const table = useVueTable({
         <!-- ========================================= -->
         <!-- DESKTOP TABLE -->
         <!-- ========================================= -->
-        <div class="hidden md:block rounded-xl border overflow-hidden">
+        <div class="hidden md:block rounded-xl border overflow-x-auto">
             <Table>
                 <TableHeader>
                     <TableRow

@@ -165,7 +165,7 @@ function downloadDocument() {
             <!-- Dashboard -->
 
             <FadeIn :delay="200" type="scale">
-                <div class="grid gap-6 lg:grid-cols-5">
+                <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
                     <PageSection
                         class="lg:col-span-3"
                         title="Document Information"

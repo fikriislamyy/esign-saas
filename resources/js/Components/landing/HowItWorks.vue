@@ -27,7 +27,7 @@ const steps = [
 
 <template>
     <LandingSection id="how-it-works" eyebrow="How it works" title="Sign a document in three steps">
-        <div class="grid gap-8 md:grid-cols-3">
+        <div class="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             <FadeIn v-for="(step, index) in steps" :key="step.number" type="slide" direction="up" :delay="index * 150">
                 <div class="text-center">
                     <div class="mb-6 flex justify-center">

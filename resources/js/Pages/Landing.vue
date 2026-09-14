@@ -33,6 +33,7 @@ import Testimonials from "@/Components/landing/Testimonials.vue";
 import Pricing from "@/Components/landing/Pricing.vue";
 import Faq from "@/Components/landing/Faq.vue";
 import CtaBanner from "@/Components/landing/CtaBanner.vue";
+import LandingMobileNav from "@/Components/landing/LandingMobileNav.vue";
 
 const activePreview = ref(0);
 const isDarkMode = ref(false);
@@ -100,7 +101,7 @@ onUnmounted(() => {
                 class="sticky top-0 z-50 border-b bg-background/80 backdrop-blur"
             >
                 <div
-                    class="mx-auto flex h-16 max-w-7xl items-center justify-between px-6"
+                    class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-8"
                 >
                     <div class="flex items-center gap-3">
                         <div
@@ -112,7 +113,7 @@ onUnmounted(() => {
                         <span class="text-xl font-bold"> EZSign </span>
                     </div>
 
-                    <nav class="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
+                    <nav class="hidden items-center gap-6 text-sm text-muted-foreground lg:flex">
                         <a href="#how-it-works" class="hover:text-foreground">How it works</a>
                         <a href="#security" class="hover:text-foreground">Security</a>
                         <a href="#pricing" class="hover:text-foreground">Pricing</a>
@@ -120,21 +121,25 @@ onUnmounted(() => {
                     </nav>
 
                     <div class="flex items-center gap-2">
-                        <Link href="/login">
+                        <Link href="/login" class="hidden sm:block">
                             <Button variant="ghost"> Sign In </Button>
                         </Link>
 
                         <Link href="/register">
                             <Button> Get Started </Button>
                         </Link>
+
+                        <div class="lg:hidden">
+                            <LandingMobileNav />
+                        </div>
                     </div>
                 </div>
             </header>
         </SlideIn>
 
         <!-- Hero -->
-        <section class="mx-auto max-w-7xl px-6 py-24">
-            <div class="grid items-center gap-16 lg:grid-cols-2">
+        <section class="mx-auto max-w-7xl px-4 py-12 sm:py-20 lg:px-8 lg:py-24">
+            <div class="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
                 <!-- Left -->
                 <div>
                     <FadeIn type="slide" direction="right">
@@ -148,7 +153,7 @@ onUnmounted(() => {
                     </FadeIn>
                     <FadeIn type="fade">
                         <h1
-                            class="text-5xl font-extrabold tracking-tight lg:text-6xl"
+                            class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl"
                         >
                             <Typewriter
                                 text="Secure Digital Signing for Modern Teams"
@@ -166,7 +171,7 @@ onUnmounted(() => {
                         </p>
                     </FadeIn>
 
-                    <div class="mt-8 flex flex-wrap gap-4">
+                    <div class="mt-8 grid gap-3 sm:flex sm:flex-wrap sm:gap-4">
                         <FadeIn direction="right" :delay="400">
                             <Link href="/register">
                                 <Button size="lg"> Get Started </Button>
@@ -286,8 +291,8 @@ onUnmounted(() => {
         </section>
 
         <!-- Features -->
-        <section class="mx-auto max-w-7xl px-6 pb-24">
-            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <section class="mx-auto max-w-7xl px-4 pb-24 lg:px-8">
+            <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
                 <FadeIn :delay="200" :once="false" type="scale">
                     <Card>
                         <CardHeader>
@@ -362,7 +367,7 @@ onUnmounted(() => {
         <!-- Footer -->
         <footer class="border-t">
             <div
-                class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-muted-foreground md:flex-row"
+                class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 py-8 text-sm text-muted-foreground lg:px-8 sm:flex-row"
             >
                 <p>© 2026 EZSign. All rights reserved.</p>
 

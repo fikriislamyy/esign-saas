@@ -32,7 +32,7 @@ const emit = defineEmits(["start-placement"]);
 </script>
 
 <template>
-    <Card class="sticky top-6">
+    <Card class="lg:sticky lg:top-6">
         <CardHeader>
             <CardTitle> Prepare Template </CardTitle>
 

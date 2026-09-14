@@ -35,7 +35,7 @@ const plans = [
 
 <template>
     <LandingSection id="pricing" muted eyebrow="Pricing" title="Start free. Scale when you're ready." subtitle="Top up credits and pay only for what you sign.">
-        <div class="grid gap-6 md:grid-cols-3">
+        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <FadeIn v-for="plan in plans" :key="plan.name" type="scale">
                 <Card :class="plan.popular && 'border-primary shadow-lg'">
                     <CardHeader>
