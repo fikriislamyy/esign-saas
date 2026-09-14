@@ -90,4 +90,18 @@ class TemplateController extends Controller
             ['Content-Disposition' => 'inline']
         );
     }
+
+    public function pdf(Request $request, Template $template)
+    {
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($template->file_path);
+
+        return response()->json([
+            'data' => base64_encode($contents),
+        ]);
+    }
 }

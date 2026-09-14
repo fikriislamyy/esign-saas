@@ -81,6 +81,11 @@ Route::middleware('guest')->group(function () {
         [SigningController::class, 'completed']
     )->name('sign.completed');
 
+    Route::get(
+        '/sign/{token}/pdf',
+        [SigningController::class, 'pdf']
+    )->name('signing.pdf');
+
 Route::middleware('auth', 'verified')->group(function () {
     Route::get('/dashboard', function () {
         return Inertia::render('Dashboard');
@@ -162,6 +167,11 @@ Route::middleware('auth', 'verified')->group(function () {
     )->name('documents.preview');
 
     Route::get(
+        '/documents/{document}/pdf',
+        [DocumentController::class, 'pdf']
+    )->name('documents.pdf');
+
+    Route::get(
         '/documents/{document}/download',
         [DocumentController::class, 'download']
     )->name('documents.download');
@@ -200,6 +210,9 @@ Route::middleware('auth', 'verified')->group(function () {
 
     Route::get('/templates/{template}/preview', [TemplateController::class, 'preview'])
         ->name('templates.preview');
+
+    Route::get('/templates/{template}/pdf', [TemplateController::class, 'pdf'])
+        ->name('templates.pdf');
 
     Route::post('/templates/{template}/signature-fields', [TemplateSignatureFieldController::class, 'store'])
         ->name('templates.signature-fields.store');

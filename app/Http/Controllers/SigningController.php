@@ -86,7 +86,24 @@ class SigningController extends Controller
             ]);
         }
 
+    public function pdf(string $token)
+    {
+        $signer = DocumentSigner::with('document')
+            ->where('token', $token)
+            ->firstOrFail();
 
+        $document = $signer->document;
+
+        $filePath = $document->signed_path ?: $document->file_path;
+
+        abort_unless($filePath, 404);
+
+        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($filePath);
+
+        return response()->json([
+            'data' => base64_encode($contents),
+        ]);
+    }
 
     public function finish(Request $request, string $token)
     {
