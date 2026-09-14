@@ -109,8 +109,8 @@ const updatePassword = () => {
                     </p>
                 </div>
 
-                <div class="flex items-center gap-4">
-                    <Button type="submit" :disabled="form.processing">
+                <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
+                    <Button type="submit" :disabled="form.processing" class="w-full sm:w-auto">
                         Update Password
                     </Button>
 

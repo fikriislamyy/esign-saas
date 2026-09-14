@@ -532,7 +532,7 @@ onBeforeUnmount(() => {
 
                     <Button
                         size="lg"
-                        class="shrink-0"
+                        class="w-full shrink-0 sm:w-auto"
                         :disabled="!allFieldsSigned || signing"
                         @click="finishSigning"
                     >

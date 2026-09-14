@@ -52,7 +52,7 @@ const deleteUser = () => {
         <CardContent>
             <Dialog v-model:open="open">
                 <DialogTrigger as-child>
-                    <Button variant="destructive"> Delete Account </Button>
+                    <Button variant="destructive" class="w-full sm:w-auto"> Delete Account </Button>
                 </DialogTrigger>
 
                 <DialogContent class="sm:max-w-md">
@@ -84,8 +84,8 @@ const deleteUser = () => {
                         </p>
                     </div>
 
-                    <DialogFooter>
-                        <Button variant="outline" @click="open = false">
+                    <DialogFooter class="grid gap-2 sm:flex sm:justify-end">
+                        <Button variant="outline" @click="open = false" class="w-full sm:w-auto">
                             Cancel
                         </Button>
 
@@ -93,6 +93,7 @@ const deleteUser = () => {
                             variant="destructive"
                             @click="deleteUser"
                             :disabled="form.processing"
+                            class="w-full sm:w-auto"
                         >
                             Delete Account
                         </Button>

@@ -115,7 +115,7 @@ const submit = () => {
                     </div>
 
                     <div class="pt-2">
-                        <Button @click="submit" :disabled="form.processing">
+                        <Button @click="submit" :disabled="form.processing" class="w-full sm:w-auto">
                             Save Changes
                         </Button>
                     </div>

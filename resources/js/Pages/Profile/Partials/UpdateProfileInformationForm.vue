@@ -79,8 +79,8 @@ const form = useForm({
             </p>
         </div>
 
-        <div class="flex items-center gap-3">
-            <Button type="submit" :disabled="form.processing">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Button type="submit" :disabled="form.processing" class="w-full sm:w-auto">
                 Save Changes
             </Button>
 

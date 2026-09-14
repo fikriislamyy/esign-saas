@@ -55,7 +55,7 @@ const submit = () => {
                     placeholder="Confirm password"
                 />
 
-                <Button class="w-full" :disabled="form.processing">
+                <Button class="w-full sm:w-auto" :disabled="form.processing">
                     Join Organization
                 </Button>
             </form>

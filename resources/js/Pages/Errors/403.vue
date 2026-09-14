@@ -96,8 +96,8 @@ function goBack() {
 
                     <!-- Action -->
 
-                    <div class="flex justify-center">
-                        <Button variant="outline" type="button" @click="goBack">
+                    <div class="flex flex-col sm:flex-row sm:justify-center">
+                        <Button variant="outline" type="button" @click="goBack" class="w-full sm:w-auto">
                             <ArrowLeft class="mr-2 h-4 w-4" />
 
                             Go Back
