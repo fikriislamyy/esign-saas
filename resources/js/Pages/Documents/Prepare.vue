@@ -329,7 +329,6 @@ async function deleteField(fieldId) {
 */
 
 async function placeField(pageNumber, event) {
-    showLoading("Placing signature field...");
     if (!editor.placingSignature) {
         return;
     }
@@ -350,38 +349,50 @@ async function placeField(pageNumber, event) {
 
     const height = 60 / canvasHeight.value;
 
-    const response = await axios.post(
-        route("documents.signature-fields.store", props.document.id),
-        {
-            signer_id: editor.selectedSigner.id,
+    showLoading("Placing signature field...");
 
-            page: pageNumber,
+    try {
+        const response = await axios.post(
+            route("documents.signature-fields.store", props.document.id),
+            {
+                signer_id: editor.selectedSigner.id,
 
-            x,
+                page: pageNumber,
 
-            y,
+                x,
 
-            width,
+                y,
 
-            height,
-        },
-    );
+                width,
 
-    signatureFields.value.push({
-        ...response.data.field,
+                height,
+            },
+        );
 
-        x: Number(response.data.field.x),
+        signatureFields.value.push({
+            ...response.data.field,
 
-        y: Number(response.data.field.y),
+            x: Number(response.data.field.x),
 
-        width: Number(response.data.field.width),
+            y: Number(response.data.field.y),
 
-        height: Number(response.data.field.height),
-    });
+            width: Number(response.data.field.width),
 
-    editor.placingSignature = false;
+            height: Number(response.data.field.height),
+        });
 
-    hideLoading();
+        editor.placingSignature = false;
+    } catch (error) {
+        console.error(error);
+
+        showError(
+            error.response?.data?.message ??
+                "The signature field could not be placed. Please try again.",
+            "Placement Failed",
+        );
+    } finally {
+        hideLoading();
+    }
 }
 
 /*
