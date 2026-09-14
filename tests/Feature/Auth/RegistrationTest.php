@@ -4,6 +4,7 @@ namespace Tests\Feature\Auth;
 
 use App\Providers\RouteServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class RegistrationTest extends TestCase
@@ -19,6 +20,8 @@ class RegistrationTest extends TestCase
 
     public function test_new_users_can_register(): void
     {
+        Mail::fake();
+
         $response = $this->post('/register', [
             'organization_name' => 'Test Organization',
             'name' => 'Test User',
@@ -29,7 +32,7 @@ class RegistrationTest extends TestCase
 
         $this->assertAuthenticated();
 
-        $response->assertRedirect(RouteServiceProvider::HOME);
+        $response->assertRedirect(route('verification.notice'));
 
         $this->assertDatabaseHas('organizations', [
             'name' => 'Test Organization',

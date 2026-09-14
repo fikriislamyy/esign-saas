@@ -2,12 +2,15 @@
 
 namespace App\Models;
 
+use App\Mail\EmailVerificationOtpMail;
+use App\Services\EmailVerificationOtpService;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Support\Facades\Mail;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
@@ -53,6 +56,18 @@ class User extends Authenticatable implements MustVerifyEmail
     public function organization()
     {
         return $this->belongsTo(Organization::class);
+    }
+
+    public function otpVerifications()
+    {
+        return $this->hasMany(OtpVerification::class);
+    }
+
+    public function sendEmailVerificationNotification(): void
+    {
+        $otp = app(EmailVerificationOtpService::class)->generate($this);
+
+        Mail::to($this->email)->send(new EmailVerificationOtpMail($this, $otp));
     }
 
     public function isOwner(): bool
