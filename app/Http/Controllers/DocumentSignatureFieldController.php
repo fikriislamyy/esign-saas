@@ -35,7 +35,15 @@ class DocumentSignatureFieldController extends Controller
                 'required',
                 'min:0',
             ],
+            'width' => ['nullable', 'numeric', 'min:0'],
+            'height' => ['nullable', 'numeric', 'min:0'],
         ]);
+
+        abort_unless(
+            $document->signers()->whereKey($validated['signer_id'])->exists(),
+            422,
+            'The selected signer does not belong to this document.'
+        );
 
         $field = DocumentSignatureField::create([
             'document_id' => $document->id,
@@ -43,8 +51,8 @@ class DocumentSignatureFieldController extends Controller
             'page' => $validated['page'],
             'x' => $validated['x'],
             'y' => $validated['y'],
-            'width' => 0.25,
-            'height' => 0.06,
+            'width' => $validated['width'] ?? 0.25,
+            'height' => $validated['height'] ?? 0.06,
         ]);
 
         $field->load('signer');
@@ -75,6 +83,20 @@ class DocumentSignatureFieldController extends Controller
         DocumentSignatureField $signatureField
     ) {
         $signatureField->delete();
+
+        return response()->json([
+            'success' => true,
+        ]);
+    }
+
+    public function destroyAll(Request $request, Document $document)
+    {
+        abort_unless(
+            $document->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $document->signatureFields()->delete();
 
         return response()->json([
             'success' => true,

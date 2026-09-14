@@ -12,6 +12,8 @@ import PageSection from "@/Components/page/PageSection.vue";
 import PrepareSidebar from "@/Components/documents/prepare/PrepareSidebar.vue";
 import PrepareToolbar from "@/Components/documents/prepare/PrepareToolbar.vue";
 import PdfCanvas from "@/Components/documents/prepare/PdfCanvas.vue";
+import UseTemplateDialog from "@/Components/documents/prepare/UseTemplateDialog.vue";
+import AssignSignerDialog from "@/Components/documents/prepare/AssignSignerDialog.vue";
 
 import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
 import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
@@ -32,6 +34,11 @@ const props = defineProps({
     document: {
         type: Object,
         required: true,
+    },
+
+    templates: {
+        type: Array,
+        default: () => [],
     },
 });
 
@@ -60,6 +67,8 @@ const {
 */
 
 let pdfDoc = null;
+
+let documentPageCount = 0;
 
 /*
 |--------------------------------------------------------------------------
@@ -121,6 +130,8 @@ const signatureFields = ref(
     })),
 );
 
+const freeFields = ref([]);
+
 /*
 |--------------------------------------------------------------------------
 | Canvas
@@ -140,9 +151,12 @@ const pdfCanvas = ref(null);
 */
 
 function pageFields() {
-    return signatureFields.value.filter(
-        (field) => Number(field.page) === Number(editor.currentPage),
-    );
+    const page = Number(editor.currentPage);
+
+    return [
+        ...signatureFields.value.filter((field) => Number(field.page) === page),
+        ...freeFields.value.filter((field) => Number(field.page) === page),
+    ];
 }
 
 /*
@@ -208,6 +222,15 @@ function showFeedback(type, title, message) {
 
 async function finishPreparing() {
     if (loading.value) {
+        return;
+    }
+
+    if (freeFields.value.length > 0) {
+        showError(
+            `${freeFields.value.length} template field(s) still have no signer. Click each unassigned field to assign a signer, or discard them from the sidebar.`,
+            "Unassigned Fields",
+        );
+
         return;
     }
 
@@ -320,6 +343,154 @@ async function deleteField(fieldId) {
     signatureFields.value = signatureFields.value.filter(
         (field) => field.id !== fieldId,
     );
+}
+
+/*
+|--------------------------------------------------------------------------
+| Use Template
+|--------------------------------------------------------------------------
+*/
+
+const templateDialogOpen = ref(false);
+
+const applyingTemplate = ref(false);
+
+const TEMPLATE_PAGES_ERROR =
+    "template signature fields is exceeding the current document pages, please use uploaded document as base for the new template";
+
+async function applyTemplate(template) {
+    if (applyingTemplate.value) {
+        return;
+    }
+
+    const templateFields = template.signature_fields ?? [];
+
+    const maxPage = templateFields.length
+        ? Math.max(...templateFields.map((field) => Number(field.page)))
+        : 0;
+
+    if (maxPage > documentPageCount) {
+        templateDialogOpen.value = false;
+
+        showError(TEMPLATE_PAGES_ERROR, "Template Not Applicable");
+
+        return;
+    }
+
+    applyingTemplate.value = true;
+
+    showLoading("Applying template...");
+
+    try {
+        await axios.delete(
+            route("documents.signature-fields.destroy-all", props.document.id),
+        );
+
+        signatureFields.value = [];
+
+        freeFields.value = templateFields.map((field) => ({
+            id: `free-${field.id}`,
+            free: true,
+            signer: null,
+            page: Number(field.page),
+            x: Number(field.x),
+            y: Number(field.y),
+            width: Number(field.width),
+            height: Number(field.height),
+        }));
+
+        editor.placingSignature = false;
+
+        templateDialogOpen.value = false;
+    } catch (error) {
+        console.error(error);
+
+        templateDialogOpen.value = false;
+
+        showError(
+            error.response?.data?.message ??
+                "The template could not be applied. Please try again.",
+            "Template Not Applied",
+        );
+    } finally {
+        hideLoading();
+
+        applyingTemplate.value = false;
+    }
+}
+
+function discardFreeFields() {
+    freeFields.value = [];
+}
+
+/*
+|--------------------------------------------------------------------------
+| Assign Free Field
+|--------------------------------------------------------------------------
+*/
+
+const assignDialogOpen = ref(false);
+
+const assigningField = ref(null);
+
+const assigning = ref(false);
+
+function openAssignDialog(field) {
+    assigningField.value = field;
+
+    assignDialogOpen.value = true;
+}
+
+async function assignFreeField(signer) {
+    const field = assigningField.value;
+
+    if (!field || assigning.value) {
+        return;
+    }
+
+    assigning.value = true;
+
+    showLoading("Assigning signer...");
+
+    try {
+        const response = await axios.post(
+            route("documents.signature-fields.store", props.document.id),
+            {
+                signer_id: signer.id,
+                page: field.page,
+                x: field.x,
+                y: field.y,
+                width: field.width,
+                height: field.height,
+            },
+        );
+
+        signatureFields.value.push({
+            ...response.data.field,
+            x: Number(response.data.field.x),
+            y: Number(response.data.field.y),
+            width: Number(response.data.field.width),
+            height: Number(response.data.field.height),
+        });
+
+        freeFields.value = freeFields.value.filter((f) => f.id !== field.id);
+
+        assignDialogOpen.value = false;
+
+        assigningField.value = null;
+    } catch (error) {
+        console.error(error);
+
+        showError(
+            error.response?.data?.message ??
+                "The signer could not be assigned. Please try again.",
+            "Assignment Failed",
+        );
+    } finally {
+        hideLoading();
+
+        assigning.value = false;
+    }
 }
 
 /*
@@ -596,6 +767,8 @@ onMounted(async () => {
 
         editor.totalPages = pdfDoc.numPages;
 
+        documentPageCount = pdfDoc.numPages;
+
         await renderPage();
 
         console.log("PDF page rendered successfully.");
@@ -665,7 +838,10 @@ onUnmounted(() => {
                         :document="document"
                         :editor="editor"
                         :signature-fields="signatureFields"
+                        :free-fields="freeFields"
                         @start-placement="editor.placingSignature = true"
+                        @use-template="templateDialogOpen = true"
+                        @discard-free-fields="discardFreeFields"
                     />
                 </PageSection>
 
@@ -693,6 +869,7 @@ onUnmounted(() => {
                             @drag-start="startDrag"
                             @resize-start="startResize"
                             @delete-field="deleteField"
+                            @assign-field="openAssignDialog"
                         >
                             <template #canvas>
                                 <canvas
@@ -716,6 +893,20 @@ onUnmounted(() => {
             :message="feedbackMessage"
             :button-text="feedbackButtonText"
             @close="handleFeedbackClose"
+        />
+
+        <UseTemplateDialog
+            v-model:open="templateDialogOpen"
+            :templates="templates"
+            :processing="applyingTemplate"
+            @use="applyTemplate"
+        />
+
+        <AssignSignerDialog
+            v-model:open="assignDialogOpen"
+            :signers="document.signers"
+            :processing="assigning"
+            @assign="assignFreeField"
         />
     </AppLayout>
 </template>

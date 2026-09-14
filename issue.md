@@ -1,410 +1,838 @@
-# Make every page responsive: mobile (< 640px), tablet (640–1024px), desktop (> 1024px)
+# Documents/Prepare: "Use Template" action with free (unassigned) signature fields
 
 ## Goal
 
-Every page must work at three sizes with no horizontal scrolling, no clipped text, and the
-main call-to-action visible without scrolling:
+On the **Prepare Document** page (`/documents/{id}/prepare`) add a **Use Template** button.
+Clicking it opens a dialog listing the organization's templates. The user picks one and clicks
+**Use**. Then:
 
-| Size | Width | Layout rules |
-|---|---|---|
-| **Mobile** | < 640px | One column. Buttons full width. Hamburger menu. Every tappable thing ≥ 44px tall. 16px side gutters. |
-| **Tablet** | 640–1024px | Two-column grids where there are several cards. Hamburger menu (the 280px sidebar would eat a third of the screen). 16px gutters. |
-| **Desktop** | > 1024px | 3+ column grids. Persistent sidebar. Hover states. 32px gutters. |
+1. The app checks that the document has enough pages for the template's fields.
+2. **Not enough pages** → close the template dialog and show an error dialog with exactly:
+   > template signature fields is exceeding the current document pages, please use uploaded document as base for the new template
+3. **Enough pages** → delete every signature field the document already has (server-side), then
+   show the template's fields on the PDF as **free fields**.
 
-In Tailwind terms: **mobile = no prefix, tablet = `sm:`, desktop = `lg:`.** Do not use `md:`
-or `xl:` for layout decisions in this task — those are the wrong breakpoints (768 / 1280)
-and the reason the current app is inconsistent.
+A **free field**:
 
-The app is already about 70% responsive. This is an audit-and-fix job, not a rewrite. Most
-changes are one class swap per line. Do them in order — Part A is the foundation the rest
-depends on.
+- exists **only in the browser**. Nothing is written to `document_signature_fields` yet. Its
+  page / x / y / width / height come straight from the template's `template_signature_fields`.
+- is **locked**: it cannot be moved, resized, or deleted.
+- shows the label **"Unassigned"** and looks different (dashed border) so the user knows it
+  still needs an owner.
+- when **clicked**, opens a **signer picker dialog** listing the document's signers. Picking a
+  signer creates the real `document_signature_fields` row (POST to the existing store route)
+  with that signer, and the free field is replaced by the normal, editable field.
 
-## Tools you need
+Free fields are lost on page reload (they were never saved). That is expected. The sidebar shows
+how many are still unassigned and offers a **Discard unassigned** action, and **Finish
+Preparing** refuses to run while any remain.
 
-Chrome DevTools → toggle device toolbar (Ctrl+Shift+M). Add three custom sizes and check
-every page at each: **375 × 812** (mobile), **768 × 1024** (tablet), **1280 × 800** (desktop).
-Also drag the width slowly from 375 to 1280 and watch for anything that jumps or overflows.
+## Page count
 
-Run the app:
+The `documents` table has no page count and the server never needs it: the check is done in
+the browser. Count the pages once when the PDF is loaded on mount (`pdfDoc.numPages`) and keep
+it in a **module-level variable** `documentPageCount` in `Prepare.vue`. Use that variable for
+the check — not a prop, not a request.
 
-```bash
-docker compose up -d
-npm run dev
-```
+"Exceeding" means: the highest `page` among the template's fields is greater than
+`documentPageCount`. A 3-page document can use a template with fields on pages 1–3, or 1–2, or
+just 1. It cannot use one with a field on page 4.
+
+## What already exists (read these first)
+
+| Thing | Where |
+|---|---|
+| Prepare page: `pdfDoc`, `editor` state, `signatureFields` ref, `pageFields()`, `placeField`, `deleteField`, `finishPreparing` | `resources/js/Pages/Documents/Prepare.vue` |
+| Sidebar (signer selector, **Add Signature Field** button, instructions) | `resources/js/Components/documents/prepare/PrepareSidebar.vue` |
+| Canvas wrapper that renders fields for the current page | `resources/js/Components/documents/prepare/PdfCanvas.vue` |
+| One field box — already has an `editable` prop that hides delete/resize and blocks drag | `resources/js/Components/documents/prepare/SignatureField.vue` |
+| Feedback helpers (`showError`, `showLoading`, `hideLoading`) | `resources/js/Composables/useFeedback.js` (already used in Prepare.vue) |
+| Document field CRUD (`store`, `update`, `destroy`) | `app/Http/Controllers/DocumentSignatureFieldController.php` |
+| Routes for the above | `routes/web.php` ~lines 180–192 |
+| Template + fields models | `app/Models/Template.php`, `app/Models/TemplateSignatureField.php` |
+| Org → templates relation | `app/Models/Organization.php` `templates()` |
+| Dialog UI primitives (working example: `Components/billing/TopUpDialog.vue`) | `resources/js/components/ui/dialog` |
+| Prepare page props | `DocumentController::prepare()` (`app/Http/Controllers/DocumentController.php` ~line 425) |
+
+Both template fields and document fields store `x, y, width, height` as **fractions of the page
+(0–1)**, so values copy over 1:1 — no conversion.
+
+No database migration is needed: free fields never touch the database, so `signer_id` stays
+`NOT NULL`.
 
 ---
 
-## Part A — Foundation (do this first, it fixes most pages at once)
+## Step 1 — Backend: send templates (with their fields) to the Prepare page
 
-### A1 — Sidebar: persistent only on desktop, hamburger below
+`app/Http/Controllers/DocumentController.php`, method `prepare()`. Change `Inertia::render` to:
 
-Today the sidebar appears at `md` (768px). Move it to `lg`.
+```php
+return Inertia::render('Documents/Prepare', [
+    'document' => $document->load([
+        'signers',
+        'signatureFields.signer',
+    ]),
 
-`resources/js/Components/Layout/AppSidebar.vue` — line ~41:
-
-| Find | Replace |
-|---|---|
-| `'hidden md:flex flex-col border-r border-border/50 bg-card'` | `'hidden lg:flex flex-col border-r border-border/50 bg-card'` |
-
-`resources/js/Components/Layout/AppHeader.vue`:
-
-| Find | Replace |
-|---|---|
-| `<div class="md:hidden">` (wraps `<MobileSidebar />`) | `<div class="lg:hidden">` |
-| `<div class="hidden md:block">` (wraps the desktop toggle button) | `<div class="hidden lg:block">` |
-| `class="hidden min-w-0 flex-col gap-1 md:flex"` | `class="hidden min-w-0 flex-col gap-1 lg:flex"` |
-| `class="hidden h-6 w-px bg-border md:block"` | `class="hidden h-6 w-px bg-border lg:block"` |
-
-`resources/js/Components/MobileSidebar.vue`:
-
-| Find | Replace |
-|---|---|
-| `class="w-[300px] p-0"` | `class="w-[85vw] max-w-[300px] p-0"` |
-
-### A2 — Page gutters
-
-`resources/js/Layouts/AppLayout.vue`:
-
-| Find | Replace |
-|---|---|
-| `class="mx-auto w-full max-w-7xl p-6 lg:p-8"` | `class="mx-auto w-full max-w-7xl p-4 lg:p-8"` |
-
-That gives 16px on mobile and tablet, 32px on desktop. The header already uses
-`px-4 lg:px-8` — leave it.
-
-### A3 — 44px touch targets on mobile
-
-Do this in the shared UI primitives so every page gets it for free. Tailwind v4 supports
-`max-sm:` = "only below 640px".
-
-`resources/js/components/ui/button/index.js` — the long base class string on line ~6. Add
-`max-sm:min-h-11 max-sm:min-w-11` to it. Put it right after `inline-flex`:
-
-```
-... group/button inline-flex max-sm:min-h-11 max-sm:min-w-11 shrink-0 items-center ...
+    'templates' => $request->user()->organization
+        ->templates()
+        ->with('signatureFields:id,template_id,page,x,y,width,height')
+        ->latest()
+        ->get(['id', 'name', 'created_at']),
+]);
 ```
 
-`resources/js/components/ui/input/Input.vue` — line ~29, the class string contains `h-9`.
-Change it to `h-9 max-sm:h-11`.
+Check: open `/documents/{id}/prepare` and inspect `$page.props.templates` in Vue devtools —
+each template has `signature_fields: [{ id, page, x, y, width, height }, ...]`.
 
-`resources/js/components/ui/select/SelectTrigger.vue` — line ~32, contains
-`data-[size=default]:h-9`. Change it to `data-[size=default]:h-9 max-sm:data-[size=default]:h-11`.
+## Step 2 — Backend: bulk-clear endpoint
 
-Sidebar nav items are already `h-11` — nothing to do.
+Applying a template must delete the document's existing fields in one go.
 
-Check: at 375px every button, input and select is at least 44px tall. At 640px+ they are
-back to their normal size.
+### 2a. Route
 
-### A4 — PageHeader: stack, wrap, full-width actions on mobile
+`routes/web.php`, next to the other `documents.signature-fields.*` routes (~line 180):
 
-`resources/js/Components/page/PageHeader.vue` — replace the whole `<template>`:
-
-```vue
-<template>
-    <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-        <!-- Left -->
-
-        <div class="flex min-w-0 items-start gap-4">
-            <div
-                v-if="icon"
-                class="hidden h-14 w-14 shrink-0 items-center justify-center rounded-2xl border bg-muted/60 sm:flex"
-            >
-                <component :is="icon" class="h-7 w-7" />
-            </div>
-
-            <div class="min-w-0 space-y-1">
-                <h1 class="break-words text-2xl font-bold tracking-tight sm:text-3xl">
-                    {{ title }}
-                </h1>
-
-                <p v-if="description" class="break-words text-muted-foreground">
-                    {{ description }}
-                </p>
-            </div>
-        </div>
-
-        <!-- Right -->
-
-        <div
-            v-if="$slots.actions"
-            class="grid gap-2 sm:flex sm:flex-wrap sm:items-center"
-        >
-            <slot name="actions" />
-        </div>
-    </div>
-</template>
+```php
+Route::delete(
+    '/documents/{document}/signature-fields',
+    [DocumentSignatureFieldController::class, 'destroyAll']
+)->name('documents.signature-fields.destroy-all');
 ```
 
-What this does: title shrinks and wraps on mobile instead of overflowing; the icon box is
-hidden on mobile to save space; the actions container is a **grid** on mobile, which
-stretches every button to full width automatically, and becomes a normal flex row at `sm`.
+### 2b. Controller method
 
-### A5 — Tables must scroll sideways, never clip
+`app/Http/Controllers/DocumentSignatureFieldController.php`, add:
 
-`resources/js/Components/data-table/DataTable.vue` — line ~115:
+```php
+public function destroyAll(Request $request, Document $document)
+{
+    abort_unless(
+        $document->organization_id === $request->user()->organization_id,
+        403
+    );
 
-| Find | Replace |
-|---|---|
-| `class="hidden md:block rounded-xl border overflow-hidden"` | `class="hidden md:block rounded-xl border overflow-x-auto"` |
+    $document->signatureFields()->delete();
 
-(`md` is fine here — the card view below 768px is a content decision, not a layout
-breakpoint. The point is that if the table is wider than its container it scrolls inside
-the card instead of pushing the whole page sideways.)
+    return response()->json([
+        'success' => true,
+    ]);
+}
+```
 
-Do the same in `resources/js/Components/billing/TransactionTable.vue` if it has its own
-`overflow-hidden` wrapper around a `<table>`.
+## Step 3 — Backend: let `store` accept width and height
 
-**Stop here and check all pages at 375 / 768 / 1280.** Most of the remaining issues below
-are about grids and specific components.
+Today `store()` hard-codes `width => 0.25, height => 0.06` and ignores what the client sends.
+A free field must keep the template's exact size, so `store` needs to accept them (optional, so
+the existing click-to-place flow keeps working).
 
----
+In `DocumentSignatureFieldController::store`, extend the validation:
 
-## Part B — Grids: tablet = 2 columns, desktop = 3+
+```php
+$validated = $request->validate([
+    'signer_id' => ['required', 'exists:document_signers,id'],
+    'page' => ['required', 'integer', 'min:1'],
+    'x' => ['required', 'numeric', 'min:0'],
+    'y' => ['required', 'numeric', 'min:0'],
+    'width' => ['nullable', 'numeric', 'min:0'],
+    'height' => ['nullable', 'numeric', 'min:0'],
+]);
+```
 
-For every grid below, the rule is `sm:grid-cols-2 lg:grid-cols-N`. One-line class swaps:
+and in the `create([...])` call replace the two hard-coded lines with:
 
-| File | Find | Replace |
-|---|---|---|
-| `Components/dashboard/DashboardStats.vue` | `md:grid-cols-2 xl:grid-cols-4` | `sm:grid-cols-2 lg:grid-cols-4` |
-| `Components/members/MemberStats.vue` | `sm:grid-cols-2 xl:grid-cols-4` | `sm:grid-cols-2 lg:grid-cols-4` |
-| `Components/billing/BillingStats.vue` | `sm:grid-cols-2 xl:grid-cols-3` | `sm:grid-cols-2 lg:grid-cols-3` |
-| `Pages/Landing.vue` (~line 290) | `md:grid-cols-2 lg:grid-cols-4` | `sm:grid-cols-2 lg:grid-cols-4` |
-| `Components/landing/Pricing.vue` | `md:grid-cols-3` | `sm:grid-cols-2 lg:grid-cols-3` |
-| `Components/landing/Testimonials.vue` | `md:grid-cols-3` | `sm:grid-cols-2 lg:grid-cols-3` |
-| `Components/landing/HowItWorks.vue` | `md:grid-cols-3` | `sm:grid-cols-2 lg:grid-cols-3` |
-| `Components/landing/SecurityCompliance.vue` | `md:grid-cols-2` | `sm:grid-cols-2` |
-| `Pages/Documents/Show.vue` (~line 168) | `grid gap-6 lg:grid-cols-5` | `grid gap-6 sm:grid-cols-2 lg:grid-cols-5` |
+```php
+'width' => $validated['width'] ?? 0.25,
+'height' => $validated['height'] ?? 0.06,
+```
 
-Leave these alone — they are already correct: `UseCases.vue`, `Dashboard.vue`
-(`lg:grid-cols-3`), both `Prepare.vue` pages (`lg:grid-cols-4`), `DocumentInfo.vue` /
-`TemplateInfo.vue` (`sm:grid-cols-2`).
+Also add an ownership check so a signer from another document can't be used — insert this right
+after the `validate()` call:
 
-Note: with three cards on a 2-column tablet grid the third card sits alone on the second
-row. That's acceptable.
+```php
+abort_unless(
+    $document->signers()->whereKey($validated['signer_id'])->exists(),
+    422,
+    'The selected signer does not belong to this document.'
+);
+```
 
----
+Check: the existing **Add Signature Field** click-to-place still works (it already sends
+width/height, so placed fields will now be 180×60 px at the zoom used — that is fine).
 
-## Part C — Page-by-page fixes
+## Step 4 — Frontend: template picker dialog
 
-### C1 — Landing page (`resources/js/Pages/Landing.vue`)
-
-**Hamburger menu.** The nav links are `hidden … md:flex` and simply vanish on mobile.
-Create `resources/js/Components/landing/LandingMobileNav.vue`:
+Create `resources/js/Components/documents/prepare/UseTemplateDialog.vue`:
 
 ```vue
 <script setup>
-import { ref } from "vue";
-import { Link } from "@inertiajs/vue3";
-import { Menu } from "lucide-vue-next";
+import { computed, ref, watch } from "vue";
+import { LayoutTemplate, Check } from "lucide-vue-next";
 
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+
 import { Button } from "@/components/ui/button";
 
-const open = ref(false);
+const props = defineProps({
+    open: { type: Boolean, default: false },
+    templates: { type: Array, default: () => [] },
+    processing: { type: Boolean, default: false },
+});
 
-const links = [
-    { label: "How it works", href: "#how-it-works" },
-    { label: "Security", href: "#security" },
-    { label: "Pricing", href: "#pricing" },
-    { label: "FAQ", href: "#faq" },
-];
+const emit = defineEmits(["update:open", "use"]);
+
+const selectedId = ref(null);
+
+const selectedTemplate = computed(
+    () => props.templates.find((t) => t.id === selectedId.value) ?? null,
+);
+
+watch(
+    () => props.open,
+    (isOpen) => {
+        if (isOpen) selectedId.value = null;
+    },
+);
+
+function maxPage(template) {
+    const pages = (template.signature_fields ?? []).map((f) => Number(f.page));
+
+    return pages.length ? Math.max(...pages) : 0;
+}
+
+function use() {
+    if (selectedTemplate.value) emit("use", selectedTemplate.value);
+}
 </script>
 
 <template>
-    <Sheet v-model:open="open">
-        <SheetTrigger as-child>
-            <Button variant="ghost" size="icon" aria-label="Open menu">
-                <Menu class="h-5 w-5" />
-            </Button>
-        </SheetTrigger>
+    <Dialog :open="open" @update:open="emit('update:open', $event)">
+        <DialogContent class="sm:max-w-lg">
+            <DialogHeader>
+                <DialogTitle>Use Template</DialogTitle>
 
-        <SheetContent side="right" class="flex w-[85vw] max-w-[320px] flex-col gap-2 p-6">
-            <a
-                v-for="link in links"
-                :key="link.href"
-                :href="link.href"
-                class="flex h-11 items-center rounded-lg px-3 text-base hover:bg-muted"
-                @click="open = false"
+                <DialogDescription>
+                    Pick a template. Its fields replace every field currently on
+                    this document. You assign a signer to each field afterwards.
+                </DialogDescription>
+            </DialogHeader>
+
+            <div
+                v-if="templates.length === 0"
+                class="rounded-xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
             >
-                {{ link.label }}
-            </a>
-
-            <div class="mt-4 grid gap-2 border-t pt-4">
-                <Button variant="outline" as-child>
-                    <Link href="/login">Sign In</Link>
-                </Button>
-
-                <Button as-child>
-                    <Link href="/register">Get Started</Link>
-                </Button>
+                No templates yet. Upload one from the Templates page first.
             </div>
-        </SheetContent>
-    </Sheet>
+
+            <div v-else class="max-h-[50vh] space-y-2 overflow-y-auto">
+                <button
+                    v-for="template in templates"
+                    :key="template.id"
+                    type="button"
+                    class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60"
+                    :class="template.id === selectedId ? 'border-primary bg-primary/5' : 'border-border'"
+                    @click="selectedId = template.id"
+                >
+                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <LayoutTemplate class="h-5 w-5" />
+                    </div>
+
+                    <div class="min-w-0 flex-1">
+                        <p class="truncate text-sm font-medium">{{ template.name }}</p>
+
+                        <p class="text-xs text-muted-foreground">
+                            {{ template.signature_fields.length }}
+                            {{ template.signature_fields.length === 1 ? "field" : "fields" }}
+                            <template v-if="maxPage(template)">
+                                · up to page {{ maxPage(template) }}
+                            </template>
+                        </p>
+                    </div>
+
+                    <Check v-if="template.id === selectedId" class="h-4 w-4 shrink-0 text-primary" />
+                </button>
+            </div>
+
+            <DialogFooter class="grid gap-2 sm:flex sm:justify-end">
+                <Button variant="outline" :disabled="processing" @click="emit('update:open', false)">
+                    Cancel
+                </Button>
+
+                <Button :disabled="!selectedTemplate || processing" @click="use">
+                    {{ processing ? "Applying..." : "Use" }}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
 </template>
 ```
 
-Then in `Landing.vue`:
+## Step 5 — Frontend: signer picker dialog (opened by clicking a free field)
 
-1. Import it: `import LandingMobileNav from "@/Components/landing/LandingMobileNav.vue";`
-2. Header container (~line 103): `px-6` → `px-4 lg:px-8`.
-3. Desktop nav (~line 115): `md:flex` → `lg:flex`.
-4. Replace the header's right-hand button block (the `<div class="flex items-center gap-2">`
-   with Sign In / Get Started) with:
+Create `resources/js/Components/documents/prepare/AssignSignerDialog.vue`:
 
 ```vue
-<div class="flex items-center gap-2">
-    <Link href="/login" class="hidden sm:block">
-        <Button variant="ghost"> Sign In </Button>
-    </Link>
+<script setup>
+import { Check, UserRound } from "lucide-vue-next";
 
-    <Link href="/register">
-        <Button> Get Started </Button>
-    </Link>
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 
-    <div class="lg:hidden">
-        <LandingMobileNav />
+import { Button } from "@/components/ui/button";
+
+defineProps({
+    open: { type: Boolean, default: false },
+    signers: { type: Array, default: () => [] },
+    processing: { type: Boolean, default: false },
+});
+
+const emit = defineEmits(["update:open", "assign"]);
+</script>
+
+<template>
+    <Dialog :open="open" @update:open="emit('update:open', $event)">
+        <DialogContent class="sm:max-w-md">
+            <DialogHeader>
+                <DialogTitle>Assign Signer</DialogTitle>
+
+                <DialogDescription>
+                    Choose who must sign in this field.
+                </DialogDescription>
+            </DialogHeader>
+
+            <div class="max-h-[50vh] space-y-2 overflow-y-auto">
+                <button
+                    v-for="signer in signers"
+                    :key="signer.id"
+                    type="button"
+                    :disabled="processing"
+                    class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-50"
+                    @click="emit('assign', signer)"
+                >
+                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <UserRound class="h-5 w-5" />
+                    </div>
+
+                    <div class="min-w-0 flex-1">
+                        <p class="truncate text-sm font-medium">{{ signer.name }}</p>
+                        <p class="truncate text-xs text-muted-foreground">{{ signer.email }}</p>
+                    </div>
+
+                    <Check class="h-4 w-4 shrink-0 text-muted-foreground" />
+                </button>
+            </div>
+
+            <DialogFooter class="grid gap-2 sm:flex sm:justify-end">
+                <Button variant="outline" :disabled="processing" @click="emit('update:open', false)">
+                    Cancel
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+</template>
+```
+
+Clicking a signer row assigns immediately (no separate confirm button) — one tap on mobile.
+
+## Step 6 — Frontend: make a field box clickable when it is free
+
+`resources/js/Components/documents/prepare/SignatureField.vue`.
+
+Add `"assign"` to the emits:
+
+```js
+const emit = defineEmits(["dragStart", "resizeStart", "delete", "assign"]);
+```
+
+Add a click handler in `<script setup>`:
+
+```js
+function handleClick(event) {
+    // Free (template) fields open the signer picker. Normal fields do nothing on click.
+    if (props.field.free) {
+        event.stopPropagation();
+
+        emit("assign", props.field);
+    }
+}
+```
+
+Change the root `<div>` in the template — replace its opening tag with:
+
+```vue
+<div
+    class="absolute select-none rounded-lg border-2 bg-background/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md dark:bg-slate-900/90"
+    :class="{
+        'cursor-move border-primary': editable && !editor.isResizing,
+        'border-primary': !field.free && !editable,
+        'cursor-pointer border-dashed border-amber-500 bg-amber-50/90 dark:bg-amber-950/60':
+            field.free,
+    }"
+    :style="{
+        ...style,
+        touchAction: 'none',
+    }"
+    @pointerdown.stop="handleDragStart"
+    @click.stop="handleClick"
+>
+```
+
+(`border-primary` moved from the static class into `:class` so free fields can be amber and
+dashed instead.)
+
+Change the label so free fields say "Unassigned":
+
+```vue
+<span class="truncate text-xs font-semibold text-foreground">
+    {{ field.free ? "Unassigned" : (field.signer?.name ?? "Signature") }}
+</span>
+```
+
+The delete button and resize handle already have `v-if="editable"` and `handleDragStart`
+already returns early when `!editable` — Step 7 passes `:editable="!field.free"`, so free fields
+are locked with no further changes here.
+
+**Why `@click.stop`:** the parent `.pdf-page` div in `PdfCanvas.vue` has `@click` that places a
+new field while in placement mode. Without `.stop`, clicking a free field would also drop a new
+field underneath it.
+
+## Step 7 — Frontend: pass `editable` and forward `assign` through `PdfCanvas.vue`
+
+`resources/js/Components/documents/prepare/PdfCanvas.vue`.
+
+Add `"assignField"` to emits:
+
+```js
+const emit = defineEmits(["placeField", "dragStart", "resizeStart", "deleteField", "assignField"]);
+```
+
+Update the `<SignatureField ... />` usage:
+
+```vue
+<SignatureField
+    v-for="field in fields"
+    :key="field.id"
+    :field="field"
+    :editable="!field.free"
+    :canvas-width="canvasWidth"
+    :canvas-height="canvasHeight"
+    :editor="editor"
+    @drag-start="handleDragStart"
+    @resize-start="handleResizeStart"
+    @delete="handleDelete"
+    @assign="emit('assignField', $event)"
+/>
+```
+
+## Step 8 — Frontend: Prepare page wiring
+
+All edits in `resources/js/Pages/Documents/Prepare.vue`.
+
+### 8a. Props
+
+```js
+const props = defineProps({
+    document: { type: Object, required: true },
+    templates: { type: Array, default: () => [] },
+});
+```
+
+### 8b. Imports
+
+Next to the other component imports:
+
+```js
+import UseTemplateDialog from "@/Components/documents/prepare/UseTemplateDialog.vue";
+import AssignSignerDialog from "@/Components/documents/prepare/AssignSignerDialog.vue";
+```
+
+### 8c. Global page count
+
+Directly under `let pdfDoc = null;` (~line 62):
+
+```js
+let documentPageCount = 0;
+```
+
+In `onMounted`, right after `editor.totalPages = pdfDoc.numPages;` (~line 597):
+
+```js
+documentPageCount = pdfDoc.numPages;
+```
+
+(`editor.totalPages` stays — the toolbar uses it. `documentPageCount` is the variable the
+template check reads.)
+
+### 8d. Free fields state + canvas merge
+
+After the `signatureFields` ref (~line 122):
+
+```js
+const freeFields = ref([]);
+```
+
+Replace `pageFields()` (~line 142) with:
+
+```js
+function pageFields() {
+    const page = Number(editor.currentPage);
+
+    return [
+        ...signatureFields.value.filter((field) => Number(field.page) === page),
+        ...freeFields.value.filter((field) => Number(field.page) === page),
+    ];
+}
+```
+
+### 8e. Use-template flow
+
+Add after `deleteField` (~line 323):
+
+```js
+/*
+|--------------------------------------------------------------------------
+| Use Template
+|--------------------------------------------------------------------------
+*/
+
+const templateDialogOpen = ref(false);
+
+const applyingTemplate = ref(false);
+
+const TEMPLATE_PAGES_ERROR =
+    "template signature fields is exceeding the current document pages, please use uploaded document as base for the new template";
+
+async function applyTemplate(template) {
+    if (applyingTemplate.value) {
+        return;
+    }
+
+    const templateFields = template.signature_fields ?? [];
+
+    const maxPage = templateFields.length
+        ? Math.max(...templateFields.map((field) => Number(field.page)))
+        : 0;
+
+    if (maxPage > documentPageCount) {
+        templateDialogOpen.value = false;
+
+        showError(TEMPLATE_PAGES_ERROR, "Template Not Applicable");
+
+        return;
+    }
+
+    applyingTemplate.value = true;
+
+    showLoading("Applying template...");
+
+    try {
+        await axios.delete(
+            route("documents.signature-fields.destroy-all", props.document.id),
+        );
+
+        signatureFields.value = [];
+
+        freeFields.value = templateFields.map((field) => ({
+            id: `free-${field.id}`,
+            free: true,
+            signer: null,
+            page: Number(field.page),
+            x: Number(field.x),
+            y: Number(field.y),
+            width: Number(field.width),
+            height: Number(field.height),
+        }));
+
+        editor.placingSignature = false;
+
+        templateDialogOpen.value = false;
+    } catch (error) {
+        console.error(error);
+
+        templateDialogOpen.value = false;
+
+        showError(
+            error.response?.data?.message ??
+                "The template could not be applied. Please try again.",
+            "Template Not Applied",
+        );
+    } finally {
+        hideLoading();
+
+        applyingTemplate.value = false;
+    }
+}
+
+function discardFreeFields() {
+    freeFields.value = [];
+}
+
+/*
+|--------------------------------------------------------------------------
+| Assign Free Field
+|--------------------------------------------------------------------------
+*/
+
+const assignDialogOpen = ref(false);
+
+const assigningField = ref(null);
+
+const assigning = ref(false);
+
+function openAssignDialog(field) {
+    assigningField.value = field;
+
+    assignDialogOpen.value = true;
+}
+
+async function assignFreeField(signer) {
+    const field = assigningField.value;
+
+    if (!field || assigning.value) {
+        return;
+    }
+
+    assigning.value = true;
+
+    showLoading("Assigning signer...");
+
+    try {
+        const response = await axios.post(
+            route("documents.signature-fields.store", props.document.id),
+            {
+                signer_id: signer.id,
+                page: field.page,
+                x: field.x,
+                y: field.y,
+                width: field.width,
+                height: field.height,
+            },
+        );
+
+        signatureFields.value.push({
+            ...response.data.field,
+            x: Number(response.data.field.x),
+            y: Number(response.data.field.y),
+            width: Number(response.data.field.width),
+            height: Number(response.data.field.height),
+        });
+
+        freeFields.value = freeFields.value.filter((f) => f.id !== field.id);
+
+        assignDialogOpen.value = false;
+
+        assigningField.value = null;
+    } catch (error) {
+        console.error(error);
+
+        showError(
+            error.response?.data?.message ??
+                "The signer could not be assigned. Please try again.",
+            "Assignment Failed",
+        );
+    } finally {
+        hideLoading();
+
+        assigning.value = false;
+    }
+}
+```
+
+### 8f. Block Finish while free fields remain
+
+At the top of `finishPreparing` (~line 209), after the `if (loading.value) return;` guard:
+
+```js
+if (freeFields.value.length > 0) {
+    showError(
+        `${freeFields.value.length} template field(s) still have no signer. Click each unassigned field to assign a signer, or discard them from the sidebar.`,
+        "Unassigned Fields",
+    );
+
+    return;
+}
+```
+
+### 8g. Template markup
+
+Sidebar (~line 664) — pass the new data and events:
+
+```vue
+<PrepareSidebar
+    :document="document"
+    :editor="editor"
+    :signature-fields="signatureFields"
+    :free-fields="freeFields"
+    @start-placement="editor.placingSignature = true"
+    @use-template="templateDialogOpen = true"
+    @discard-free-fields="discardFreeFields"
+/>
+```
+
+Canvas (~line 687) — add the assign event:
+
+```vue
+<PdfCanvas
+    ...existing props/events...
+    @assign-field="openAssignDialog"
+>
+```
+
+Dialogs — next to the existing `<FeedbackDialog>` at the bottom:
+
+```vue
+<UseTemplateDialog
+    v-model:open="templateDialogOpen"
+    :templates="templates"
+    :processing="applyingTemplate"
+    @use="applyTemplate"
+/>
+
+<AssignSignerDialog
+    v-model:open="assignDialogOpen"
+    :signers="document.signers"
+    :processing="assigning"
+    @assign="assignFreeField"
+/>
+```
+
+### 8h. Do not show a success dialog
+
+`handleFeedbackClose` redirects to the document page when the feedback type is `success`. Never
+call `showSuccess` in `applyTemplate` or `assignFreeField` — the fields changing on the canvas
+is the confirmation.
+
+## Step 9 — Frontend: sidebar button + unassigned notice
+
+`resources/js/Components/documents/prepare/PrepareSidebar.vue`.
+
+Icons (line 2):
+
+```js
+import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle } from "lucide-vue-next";
+```
+
+Props — add:
+
+```js
+freeFields: {
+    type: Array,
+    default: () => [],
+},
+```
+
+Emits:
+
+```js
+const emit = defineEmits(["start-placement", "use-template", "discard-free-fields"]);
+```
+
+Summary block — show the unassigned count under the field count:
+
+```vue
+<p class="mt-2 text-sm text-muted-foreground">
+    {{ signatureFields.length }}
+    {{ signatureFields.length === 1 ? "Field" : "Fields" }}
+    <span v-if="freeFields.length" class="text-amber-600 dark:text-amber-400">
+        · {{ freeFields.length }} unassigned
+    </span>
+</p>
+```
+
+Tools block — under **Add Signature Field** add the new button. **It does not need a signer
+selected**, because ownership is chosen per field afterwards:
+
+```vue
+<Button
+    variant="outline"
+    class="w-full"
+    @click="emit('use-template')"
+>
+    <LayoutTemplate class="mr-2 h-4 w-4" />
+
+    Use Template
+</Button>
+```
+
+Unassigned notice — add after the **Placement Mode** transition block:
+
+```vue
+<div
+    v-if="freeFields.length"
+    class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+>
+    <div class="flex gap-3">
+        <AlertTriangle class="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
+
+        <div class="space-y-2">
+            <p class="text-sm font-medium">
+                {{ freeFields.length }} unassigned
+                {{ freeFields.length === 1 ? "field" : "fields" }}
+            </p>
+
+            <p class="text-sm text-muted-foreground">
+                Click each dashed field on the PDF to choose its signer.
+                Unassigned fields are not saved.
+            </p>
+
+            <Button variant="ghost" size="sm" @click="emit('discard-free-fields')">
+                Discard unassigned
+            </Button>
+        </div>
     </div>
 </div>
 ```
 
-**Hero above the fold.** ~line 136 onward:
+Instructions block — add a line:
 
-| Find | Replace |
-|---|---|
-| `class="mx-auto max-w-7xl px-6 py-24"` (hero section) | `class="mx-auto max-w-7xl px-4 py-12 sm:py-20 lg:px-8 lg:py-24"` |
-| `class="grid items-center gap-16 lg:grid-cols-2"` | `class="grid items-center gap-10 lg:grid-cols-2 lg:gap-16"` |
-| `class="text-5xl font-extrabold tracking-tight lg:text-6xl"` | `class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl"` |
-| `class="mt-8 flex flex-wrap gap-4"` (the CTA row) | `class="mt-8 grid gap-3 sm:flex sm:flex-wrap sm:gap-4"` |
-
-Check: at 375 × 812 the "Get Started" hero button is visible without scrolling.
-
-**Every other section** in `Landing.vue` and in `Components/landing/*.vue` that uses
-`px-6`: change to `px-4 lg:px-8`. (`grep -n "px-6" resources/js/Pages/Landing.vue resources/js/Components/landing/*.vue`
-lists them.) Footer (~line 365): `md:flex-row` → `sm:flex-row`.
-
-### C2 — Documents / Templates Show pages
-
-`resources/js/Components/documents/DocumentActions.vue`:
-
-| Find | Replace |
-|---|---|
-| `<div class="flex flex-col items-end gap-2">` | `<div class="flex flex-col gap-2 sm:items-end">` |
-| `<div class="flex flex-wrap justify-end gap-2">` | `<div class="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">` |
-| `class="max-w-sm text-right text-sm text-destructive"` | `class="max-w-sm text-sm text-destructive sm:text-right"` |
-
-`resources/js/Pages/Templates/Show.vue` — the actions slot:
-
-| Find | Replace |
-|---|---|
-| `<div class="flex flex-wrap justify-end gap-2">` | `<div class="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">` |
-
-Both pages build the title as `name + ' - Document Details'`. Long file names now wrap
-thanks to A4; nothing more to do.
-
-### C3 — Documents / Templates Index
-
-`resources/js/Components/documents/UploadCard.vue` — the submit button has
-`class="min-w-[180px]"`. Change to `class="w-full sm:w-auto sm:min-w-[180px]"`. Check the
-row it sits in stacks on mobile (`flex-col sm:flex-row`); if it doesn't, make it.
-
-### C4 — Prepare pages (Documents and Templates)
-
-The two-button header (Back / Finish) is handled by A4. Two toolbar checks:
-
-`resources/js/Components/documents/prepare/PrepareToolbar.vue` already wraps
-(`flex-wrap`). Confirm at 375px that the page navigator and zoom controls sit on two rows
-and nothing overflows. If the zoom "120%" box overflows, shrink `gap-4` → `gap-2 sm:gap-4`.
-
-`resources/js/Components/documents/prepare/PdfCanvas.vue` — `h-[75vh]` is fine. Confirm the
-canvas scrolls inside its box on mobile (it's `overflow-auto`), and the page itself doesn't
-scroll sideways.
-
-The sticky sidebar card (`sticky top-6` in `PrepareSidebar.vue` / `TemplatePrepareSidebar.vue`)
-stacks above the canvas below `lg`. Change `sticky top-6` → `lg:sticky lg:top-6` so it
-doesn't stick while stacked.
-
-### C5 — Members
-
-`resources/js/Components/members/InviteMemberCard.vue` uses
-`grid gap-4 lg:grid-cols-[1fr_220px_auto]`. Below `lg` it stacks: email, role, button. That's
-correct. Just make sure the button has `w-full lg:w-auto`.
-
-`resources/js/Pages/Members/MemberRoleAction.vue` and `MemberRoleDialog.vue`: open the
-dialog at 375px — the dialog footer buttons must stack. If they're in a `flex` row, change
-to `grid gap-2 sm:flex sm:justify-end`.
-
-### C6 — Billing
-
-`resources/js/Components/billing/TopUpDialog.vue` — open it at 375px. The amount tabs
-(`grid w-full grid-cols-2`) are fine. Check the confirm button is full width on mobile
-(`w-full sm:w-auto`).
-
-`resources/js/Components/billing/TransactionTable.vue` — has its own mobile card layout with
-`grid grid-cols-2 gap-3 text-xs`. Confirm nothing overflows at 375px with a long
-description; add `break-words min-w-0` to the description cell if it does.
-
-### C7 — Dashboard
-
-`resources/js/Components/dashboard/DashboardFilter.vue` — `<SelectTrigger class="w-[180px]">`
-→ `class="w-full sm:w-[180px]"`, and make sure its parent row is `flex-col sm:flex-row`.
-
-`resources/js/Components/dashboard/ActivityChart.vue` — the chart is inside
-`grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-3`. Confirm the chart canvas itself has
-`min-w-0 w-full` and doesn't force horizontal scroll at 375px.
-
-### C8 — Settings / Profile
-
-`resources/js/Pages/Profile/Edit.vue`, the three `Partials/*.vue`, and
-`Pages/Settings/Organization.vue`: every form's save button should be `w-full sm:w-auto`.
-Check each form at 375px: inputs full width, no side scroll, button full width.
-
-### C9 — Auth pages
-
-`resources/js/Layouts/AuthLayout.vue` already hides the left panel below `lg`. Check the
-right panel's padding is `p-4 sm:p-8` (not a fixed `p-14`), and that the form card is
-`w-full max-w-md`. Buttons on Login / Register / ForgotPassword / ResetPassword /
-VerifyEmail / ConfirmPassword are already `w-full` — confirm, don't assume.
-
-### C10 — Signing pages
-
-`resources/js/Pages/Signing/Show.vue` — the "Finish" button block at ~line 513 is already
-`flex-col … sm:flex-row`. Make the button `w-full sm:w-auto`.
-
-`resources/js/Components/documents/signing/SigningToolbar.vue` — the `min-w-[90px]` /
-`min-w-[120px]` boxes: confirm the toolbar wraps at 375px. If not, add `flex-wrap` to the
-toolbar row.
-
-### C11 — Errors / Invitations
-
-`Pages/Errors/403.vue` and `Pages/Invitations/Accept.vue`: the decorative
-`h-[500px] w-[500px]` blur circle is inside `overflow-hidden`; leave it. Check the CTA button
-is `w-full sm:w-auto`.
+```vue
+<p>Or click <strong>Use Template</strong>, then click each field to assign a signer.</p>
+```
 
 ---
 
-## Part D — Verification checklist
+## Step 10 — Test
 
-Run through **every** page in this list at 375, 768 and 1280. For each: no horizontal
-scrollbar on `<body>`, no clipped text, primary CTA visible without scrolling, every button
-≥ 44px tall at 375.
+Setup: `docker compose up -d && npm run dev`. In one org create:
 
-```
-/                       landing
-/login  /register  /forgot-password  /verify-email
-/dashboard
-/documents  /documents/{id}  /documents/{id}/prepare
-/templates  /templates/{id}  /templates/{id}/prepare
-/members
-/billing
-/profile  /settings/organization
-/sign/{token}  (get a token from document_signers table)
-```
+- Template **A**: 2 fields on page 1.
+- Template **B**: at least one field on page 3 (upload a 3+ page PDF as the template, place a
+  field on page 3 in `/templates/{id}/prepare`).
+- Document **D1**: 1-page PDF with two signers.
+- Document **D2**: 3-page PDF with one signer.
 
-At **768 (tablet)** specifically: hamburger shows, no sidebar; stat cards are 2-up;
-Documents Show has info + preparation side by side.
+On `/documents/{id}/prepare`:
 
-At **1280 (desktop)** specifically: sidebar visible and collapsible; stat cards 3–4 up;
-hover a table row and a sidebar item — hover background appears.
+| # | Steps | Expect |
+|---|---|---|
+| 1 | Open D1, no signer selected, click **Use Template** | Dialog opens (button works without a signer) |
+| 2 | Dialog lists A and B | Field counts and "up to page N" shown; **Use** disabled until a row is picked |
+| 3 | Pick B, **Use** | Template dialog closes, error dialog with the exact "exceeding" message, canvas unchanged |
+| 4 | Pick A, **Use** | Two dashed amber "Unassigned" boxes on page 1; sidebar shows "2 unassigned" notice |
+| 5 | Try to drag, resize, or find a delete button on a free field | Nothing moves/resizes; no X button |
+| 6 | Reload the page | Free fields are gone (never saved); no rows in `document_signature_fields` |
+| 7 | Use A again, click one free field | Signer picker opens listing both signers |
+| 8 | Pick a signer | Loading, dialog closes, that box becomes a normal solid field with the signer's name, same position and size; sidebar shows "1 unassigned" |
+| 9 | Drag / resize / delete the assigned field | Works like a normally placed field |
+| 10 | Click **Finish Preparing** with 1 free field left | Error dialog "Unassigned Fields", no request sent |
+| 11 | **Discard unassigned** | Free field disappears; Finish now works |
+| 12 | Manually place 2 fields, then use A again | The 2 manual fields are deleted (server + canvas), A's free fields appear |
+| 13 | Open D2, use B, go to page 3 | Free field visible on page 3; assign it; reload → still there |
+| 14 | Placement mode on, click a free field | Signer picker opens, **no** new field placed underneath |
+| 15 | Org with zero templates | Dialog shows "No templates yet" |
+| 16 | 375px width | Both dialogs fit; footer buttons full-width |
 
 Finally:
 
@@ -416,38 +844,39 @@ npm run build
 
 ## Gotchas
 
-- **Don't use `md:` or `xl:` for anything you touch.** Mobile / `sm:` / `lg:` only. If an
-  existing `md:` decides content (like the table vs. cards switch in `DataTable.vue`) leave
-  it; if it decides layout, move it.
-- **Full-width buttons on mobile = put them in a `grid`,** not `w-full` on every button.
-  `grid gap-2 sm:flex` stretches children automatically and turns into a row at 640.
-- **`max-sm:` is "mobile only".** It's how A3 makes touch targets bigger without touching
-  tablet and desktop.
-- Never fix overflow with `overflow-hidden` on a page or card — that hides the bug. Find the
-  element with a fixed width or missing `min-w-0` and fix that. Flex children need `min-w-0`
-  to be allowed to shrink.
-- Text that can be long (document names, emails) needs `break-words` and a parent with
-  `min-w-0`.
-- Don't restyle anything — colours, spacing scale, radii all stay. This task is only about
-  what happens at different widths.
+- Free fields need a **unique `id`** for `v-for` keys and for removal after assignment — that
+  is why they use `free-${templateFieldId}`. Never send that id to the server.
+- Keep the `free: true` flag on the object; `SignatureField.vue`, `PdfCanvas.vue` and
+  `pageFields()` all rely on it.
+- `store()` must accept `width`/`height` (Step 3) or every assigned field snaps to the default
+  0.25 × 0.06 size and the template layout is lost.
+- `@click.stop` on the field root (Step 6) is required; see the note there.
+- Do not call `showSuccess` anywhere in the new code (Step 8h).
+- Do not add `editable="false"` tests based on `signer` being null — normal fields always have a
+  signer; use the `free` flag.
+- Nothing about signing (`SigningController`) changes: only real, signer-owned rows exist in the
+  database.
 
 ## Definition of done
 
-- [ ] Part A applied: sidebar at `lg`, gutters `p-4 lg:p-8`, 44px touch targets below 640,
-      PageHeader stacks with full-width actions, tables scroll inside their card
-- [ ] Part B applied: every listed grid is `sm:grid-cols-2 lg:grid-cols-N`
-- [ ] Landing has a working hamburger menu below `lg` with all four links + Sign In /
-      Get Started
-- [ ] Every page in Part D passes at 375 / 768 / 1280 with no horizontal scroll and the
-      CTA above the fold
-- [ ] No new `md:` / `xl:` layout classes introduced
-- [ ] `npm run build` passes
-- [ ] One commit on branch `feature/responsive-layouts`:
+- [ ] `DocumentController::prepare` passes `templates` with their `signature_fields`
+- [ ] `DELETE /documents/{document}/signature-fields` clears all fields (org-checked)
+- [ ] `store` accepts optional `width`/`height` and checks the signer belongs to the document
+- [ ] `documentPageCount` set once on mount and used for the page check; no page data sent to the server
+- [ ] `UseTemplateDialog.vue` and `AssignSignerDialog.vue` created
+- [ ] Free fields: locked, dashed/amber, labeled "Unassigned", click opens signer picker
+- [ ] Assigning creates the row via `documents.signature-fields.store` with the template's exact geometry and swaps the free field for the real one
+- [ ] Sidebar: **Use Template** button (no signer required), unassigned count + notice + **Discard unassigned**
+- [ ] **Finish Preparing** blocked while free fields remain
+- [ ] All 16 test rows pass, `npm run build` passes
+- [ ] One commit on branch `feature/prepare-use-template`:
 
 ```
-feat: make all pages responsive across mobile, tablet and desktop
+feat: apply template layouts as free signature fields on the prepare page
 
-Standardise on sm (640) / lg (1024) breakpoints: sidebar becomes a
-hamburger below lg, grids go 1 / 2 / 3+ columns, page actions stack
-full-width on mobile, and all controls meet a 44px touch target below sm.
+Adds a Use Template action that shows a template's fields as locked,
+unassigned fields on the document. Clicking a free field opens a signer
+picker; only then is the document signature field created. Existing
+fields are cleared when a template is applied, and the page-count check
+runs in the browser against the count taken when the PDF is loaded.
 ```

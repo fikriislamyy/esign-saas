@@ -1,5 +1,5 @@
 <script setup>
-import { FileSignature, MousePointerClick, Info } from "lucide-vue-next";
+import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle } from "lucide-vue-next";
 
 import SignerSelector from "./SignerSelector.vue";
 
@@ -28,9 +28,14 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+
+    freeFields: {
+        type: Array,
+        default: () => [],
+    },
 });
 
-const emit = defineEmits(["start-placement"]);
+const emit = defineEmits(["start-placement", "use-template", "discard-free-fields"]);
 </script>
 
 <template>
@@ -54,6 +59,9 @@ const emit = defineEmits(["start-placement"]);
                 <p class="mt-2 text-sm text-muted-foreground">
                     {{ signatureFields.length }}
                     {{ signatureFields.length === 1 ? "Field" : "Fields" }}
+                    <span v-if="freeFields.length" class="text-amber-600 dark:text-amber-400">
+                        · {{ freeFields.length }} unassigned
+                    </span>
                 </p>
             </div>
 
@@ -78,6 +86,16 @@ const emit = defineEmits(["start-placement"]);
                     <FileSignature class="mr-2 h-4 w-4" />
 
                     Add Signature Field
+                </Button>
+
+                <Button
+                    variant="outline"
+                    class="w-full"
+                    @click="emit('use-template')"
+                >
+                    <LayoutTemplate class="mr-2 h-4 w-4" />
+
+                    Use Template
                 </Button>
             </div>
 
@@ -114,6 +132,33 @@ const emit = defineEmits(["start-placement"]);
                 </div>
             </Transition>
 
+            <!-- Unassigned Notice -->
+
+            <div
+                v-if="freeFields.length"
+                class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+            >
+                <div class="flex gap-3">
+                    <AlertTriangle class="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
+
+                    <div class="space-y-2">
+                        <p class="text-sm font-medium">
+                            {{ freeFields.length }} unassigned
+                            {{ freeFields.length === 1 ? "field" : "fields" }}
+                        </p>
+
+                        <p class="text-sm text-muted-foreground">
+                            Click each dashed field on the PDF to choose its signer.
+                            Unassigned fields are not saved.
+                        </p>
+
+                        <Button variant="ghost" size="sm" @click="emit('discard-free-fields')">
+                            Discard unassigned
+                        </Button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Instructions -->
 
             <div class="rounded-xl border bg-muted/30 p-4">
@@ -131,6 +176,8 @@ const emit = defineEmits(["start-placement"]);
                         <p>3. Click on the PDF.</p>
 
                         <p>4. Drag and resize as needed.</p>
+
+                        <p>Or click <strong>Use Template</strong>, then click each field to assign a signer.</p>
                     </div>
                 </div>
             </div>
