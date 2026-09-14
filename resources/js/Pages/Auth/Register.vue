@@ -1,103 +1,296 @@
 <script setup>
-import GuestLayout from '@/Layouts/GuestLayout.vue';
-import InputError from '@/Components/InputError.vue';
-import InputLabel from '@/Components/InputLabel.vue';
-import PrimaryButton from '@/Components/PrimaryButton.vue';
-import TextInput from '@/Components/TextInput.vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
+import { ref } from "vue";
+import { Head, Link, useForm } from "@inertiajs/vue3";
+
+import {
+    Building2,
+    User,
+    Mail,
+    Lock,
+    Eye,
+    EyeOff,
+    Loader2,
+} from "lucide-vue-next";
+
+import AuthLayout from "@/Layouts/AuthLayout.vue";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card";
+
+const showPassword = ref(false);
+const showConfirmPassword = ref(false);
 
 const form = useForm({
-    name: '',
-    email: '',
-    password: '',
-    password_confirmation: '',
+    organization_name: "",
+    name: "",
+    email: "",
+    password: "",
+    password_confirmation: "",
 });
 
 const submit = () => {
-    form.post(route('register'), {
-        onFinish: () => form.reset('password', 'password_confirmation'),
+    form.post(route("register"), {
+        onFinish: () => form.reset("password", "password_confirmation"),
     });
 };
 </script>
 
 <template>
-    <GuestLayout>
-        <Head title="Register" />
+    <Head title="Register" />
 
-        <form @submit.prevent="submit">
-            <div>
-                <InputLabel for="name" value="Name" />
+    <AuthLayout>
+        <Card
+            class="w-full max-w-md rounded-2xl border bg-background/95 shadow-xl backdrop-blur"
+        >
+            <CardHeader class="pb-4 text-center">
+                <CardTitle class="text-3xl font-bold">
+                    Create your workspace 🚀
+                </CardTitle>
 
-                <TextInput
-                    id="name"
-                    type="text"
-                    class="mt-1 block w-full"
-                    v-model="form.name"
-                    required
-                    autofocus
-                    autocomplete="name"
-                />
+                <CardDescription class="text-base">
+                    Start signing documents in minutes.
+                </CardDescription>
+            </CardHeader>
 
-                <InputError class="mt-2" :message="form.errors.name" />
-            </div>
+            <CardContent class="pt-2 pb-8">
+                <form @submit.prevent="submit" class="space-y-6">
+                    <!-- Workspace -->
+                    <div class="space-y-4">
+                        <div>
+                            <h3 class="font-semibold">Workspace</h3>
 
-            <div class="mt-4">
-                <InputLabel for="email" value="Email" />
+                            <p class="text-sm text-muted-foreground">
+                                Create your team's workspace.
+                            </p>
+                        </div>
 
-                <TextInput
-                    id="email"
-                    type="email"
-                    class="mt-1 block w-full"
-                    v-model="form.email"
-                    required
-                    autocomplete="username"
-                />
+                        <div class="space-y-2">
+                            <Label for="organization">
+                                Organization Name
+                            </Label>
 
-                <InputError class="mt-2" :message="form.errors.email" />
-            </div>
+                            <div class="relative">
+                                <Building2
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                                />
 
-            <div class="mt-4">
-                <InputLabel for="password" value="Password" />
+                                <Input
+                                    id="organization"
+                                    v-model="form.organization_name"
+                                    placeholder="Acme Inc."
+                                    class="pl-10"
+                                />
+                            </div>
 
-                <TextInput
-                    id="password"
-                    type="password"
-                    class="mt-1 block w-full"
-                    v-model="form.password"
-                    required
-                    autocomplete="new-password"
-                />
+                            <p
+                                v-if="form.errors.organization_name"
+                                class="text-sm text-destructive"
+                            >
+                                {{ form.errors.organization_name }}
+                            </p>
 
-                <InputError class="mt-2" :message="form.errors.password" />
-            </div>
+                            <p class="text-xs text-muted-foreground">
+                                This will become your team's workspace.
+                            </p>
+                        </div>
+                    </div>
 
-            <div class="mt-4">
-                <InputLabel for="password_confirmation" value="Confirm Password" />
+                    <div class="border-t"></div>
 
-                <TextInput
-                    id="password_confirmation"
-                    type="password"
-                    class="mt-1 block w-full"
-                    v-model="form.password_confirmation"
-                    required
-                    autocomplete="new-password"
-                />
+                    <!-- Account -->
+                    <div class="space-y-4">
+                        <div>
+                            <h3 class="font-semibold">Your Account</h3>
 
-                <InputError class="mt-2" :message="form.errors.password_confirmation" />
-            </div>
+                            <p class="text-sm text-muted-foreground">
+                                Tell us a little about yourself.
+                            </p>
+                        </div>
 
-            <div class="flex items-center justify-end mt-4">
-                <Link
-                    :href="route('login')"
-                    class="underline text-sm text-gray-600 hover:text-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
-                    Already registered?
-                </Link>
+                        <!-- Name -->
+                        <div class="space-y-2">
+                            <Label for="name"> Full Name </Label>
 
-                <PrimaryButton class="ms-4" :class="{ 'opacity-25': form.processing }" :disabled="form.processing">
-                    Register
-                </PrimaryButton>
-            </div>
-        </form>
-    </GuestLayout>
+                            <div class="relative">
+                                <User
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                                />
+
+                                <Input
+                                    id="name"
+                                    v-model="form.name"
+                                    placeholder="John Doe"
+                                    class="pl-10"
+                                />
+                            </div>
+
+                            <p
+                                v-if="form.errors.name"
+                                class="text-sm text-destructive"
+                            >
+                                {{ form.errors.name }}
+                            </p>
+                        </div>
+
+                        <!-- Email -->
+                        <div class="space-y-2">
+                            <Label for="email"> Email Address </Label>
+
+                            <div class="relative">
+                                <Mail
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                                />
+
+                                <Input
+                                    id="email"
+                                    v-model="form.email"
+                                    type="email"
+                                    placeholder="john@example.com"
+                                    class="pl-10"
+                                />
+                            </div>
+
+                            <p
+                                v-if="form.errors.email"
+                                class="text-sm text-destructive"
+                            >
+                                {{ form.errors.email }}
+                            </p>
+                        </div>
+
+                        <!-- Password -->
+                        <div class="space-y-2">
+                            <Label for="password"> Password </Label>
+
+                            <div class="relative">
+                                <Lock
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                                />
+
+                                <Input
+                                    id="password"
+                                    v-model="form.password"
+                                    :type="showPassword ? 'text' : 'password'"
+                                    class="pl-10 pr-10"
+                                />
+
+                                <button
+                                    type="button"
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                    @click="showPassword = !showPassword"
+                                >
+                                    <Eye v-if="!showPassword" class="h-4 w-4" />
+
+                                    <EyeOff v-else class="h-4 w-4" />
+                                </button>
+                            </div>
+
+                            <p class="text-xs text-muted-foreground">
+                                Minimum 8 characters.
+                            </p>
+
+                            <p
+                                v-if="form.errors.password"
+                                class="text-sm text-destructive"
+                            >
+                                {{ form.errors.password }}
+                            </p>
+                        </div>
+
+                        <!-- Confirm Password -->
+                        <div class="space-y-2">
+                            <Label for="confirm_password">
+                                Confirm Password
+                            </Label>
+
+                            <div class="relative">
+                                <Lock
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                                />
+
+                                <Input
+                                    id="confirm_password"
+                                    v-model="form.password_confirmation"
+                                    :type="
+                                        showConfirmPassword
+                                            ? 'text'
+                                            : 'password'
+                                    "
+                                    class="pl-10 pr-10"
+                                />
+
+                                <button
+                                    type="button"
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                    @click="
+                                        showConfirmPassword =
+                                            !showConfirmPassword
+                                    "
+                                >
+                                    <Eye
+                                        v-if="!showConfirmPassword"
+                                        class="h-4 w-4"
+                                    />
+
+                                    <EyeOff v-else class="h-4 w-4" />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <Button
+                        class="h-11 w-full text-base font-semibold"
+                        :disabled="form.processing"
+                    >
+                        <Loader2
+                            v-if="form.processing"
+                            class="mr-2 h-4 w-4 animate-spin"
+                        />
+
+                        {{
+                            form.processing
+                                ? "Creating workspace..."
+                                : "Create Workspace"
+                        }}
+                    </Button>
+
+                    <div class="relative py-4">
+                        <div class="absolute inset-0 flex items-center">
+                            <span class="w-full border-t"></span>
+                        </div>
+
+                        <div class="relative flex justify-center">
+                            <span
+                                class="bg-card px-3 text-xs text-muted-foreground"
+                            >
+                                Already registered?
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="text-center">
+                        <p class="text-sm text-muted-foreground">
+                            Already have an account?
+                        </p>
+
+                        <Link
+                            :href="route('login')"
+                            class="font-semibold text-primary hover:underline"
+                        >
+                            Sign In
+                        </Link>
+                    </div>
+                </form>
+            </CardContent>
+        </Card>
+    </AuthLayout>
 </template>

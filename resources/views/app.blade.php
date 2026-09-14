@@ -12,6 +12,11 @@
 
         <!-- Scripts -->
         @routes
+        <script>
+            Ziggy.url = @js(config('app.url'));
+            Ziggy.port = null;
+        </script>
+
         @vite(['resources/js/app.js', "resources/js/Pages/{$page['component']}.vue"])
         @inertiaHead
     </head>

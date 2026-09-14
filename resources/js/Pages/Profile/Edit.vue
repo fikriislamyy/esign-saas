@@ -1,46 +1,65 @@
 <script setup>
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import DeleteUserForm from './Partials/DeleteUserForm.vue';
-import UpdatePasswordForm from './Partials/UpdatePasswordForm.vue';
-import UpdateProfileInformationForm from './Partials/UpdateProfileInformationForm.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head } from "@inertiajs/vue3";
+import { UserRound } from "lucide-vue-next";
+
+import AppLayout from "@/Layouts/AppLayout.vue";
+
+import FadeIn from "@/Components/animations/FadeIn.vue";
+import PageHeader from "@/Components/page/PageHeader.vue";
+import PageSection from "@/Components/page/PageSection.vue";
+
+import UpdateProfileInformationForm from "./Partials/UpdateProfileInformationForm.vue";
+import UpdatePasswordForm from "./Partials/UpdatePasswordForm.vue";
+import DeleteUserForm from "./Partials/DeleteUserForm.vue";
 
 defineProps({
-    mustVerifyEmail: {
-        type: Boolean,
-    },
-    status: {
-        type: String,
-    },
+    mustVerifyEmail: Boolean,
+    status: String,
 });
 </script>
 
 <template>
     <Head title="Profile" />
 
-    <AuthenticatedLayout>
-        <template #header>
-            <h2 class="font-semibold text-xl text-gray-800 leading-tight">Profile</h2>
-        </template>
+    <AppLayout>
+        <div class="max-w-4xl space-y-8">
+            <FadeIn :delay="100">
+                <PageHeader
+                    title="Profile"
+                    description="Manage your personal account settings."
+                    :icon="UserRound"
+                />
+            </FadeIn>
 
-        <div class="py-12">
-            <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-                <div class="p-4 sm:p-8 bg-white shadow sm:rounded-lg">
+            <FadeIn :delay="200" type="scale">
+                <PageSection
+                    title="Profile Information"
+                    description="Update your name and email address."
+                >
                     <UpdateProfileInformationForm
                         :must-verify-email="mustVerifyEmail"
                         :status="status"
-                        class="max-w-xl"
                     />
-                </div>
+                </PageSection>
+            </FadeIn>
 
-                <div class="p-4 sm:p-8 bg-white shadow sm:rounded-lg">
-                    <UpdatePasswordForm class="max-w-xl" />
-                </div>
+            <FadeIn :delay="300" type="scale">
+                <PageSection
+                    title="Password"
+                    description="Change your account password."
+                >
+                    <UpdatePasswordForm />
+                </PageSection>
+            </FadeIn>
 
-                <div class="p-4 sm:p-8 bg-white shadow sm:rounded-lg">
-                    <DeleteUserForm class="max-w-xl" />
-                </div>
-            </div>
+            <FadeIn :delay="400" type="scale">
+                <PageSection
+                    title="Danger Zone"
+                    description="Permanently delete your account."
+                >
+                    <DeleteUserForm />
+                </PageSection>
+            </FadeIn>
         </div>
-    </AuthenticatedLayout>
+    </AppLayout>
 </template>
