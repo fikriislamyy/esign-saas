@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Document;
-use App\Models\User;
 use App\Models\DocumentSigner;
+use App\Models\User;
 use Illuminate\Http\Request;
 
 class DocumentSignerController extends Controller
@@ -29,16 +29,13 @@ class DocumentSignerController extends Controller
             $request->member_id
         );
 
-        $alreadyExists = $document
+        $existing = $document
             ->signers()
             ->where('email', $member->email)
-            ->exists();
+            ->first();
 
-        if ($alreadyExists) {
-            return back()->withErrors([
-                'member_id' =>
-                    'This member is already a signer.',
-            ]);
+        if ($existing) {
+            return response()->json(['signer' => $existing]);
         }
 
         $signers = $document
@@ -63,7 +60,7 @@ class DocumentSignerController extends Controller
                 : 0;
         }
 
-        DocumentSigner::create([
+        $signer = DocumentSigner::create([
             'document_id' => $document->id,
 
             'name' => $member->name,
@@ -73,7 +70,7 @@ class DocumentSignerController extends Controller
             'signing_order' => $signingOrder,
         ]);
 
-        return back();
+        return response()->json(['signer' => $signer], 201);
     }
 
     public function reorder(

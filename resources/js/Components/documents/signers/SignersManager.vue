@@ -1,5 +1,5 @@
 <script setup>
-import { router, useForm } from "@inertiajs/vue3";
+import { router, useForm, Link } from "@inertiajs/vue3";
 
 import { GripVertical, Trash2, Pencil, Save, X } from "lucide-vue-next";
 
@@ -225,7 +225,15 @@ function removeSigner(signer) {
                 v-if="!document.signers.length"
                 class="rounded-xl border border-dashed py-10 text-center text-muted-foreground"
             >
-                No signers added yet.
+                No signers yet.
+                <Link
+                    v-if="document.status === 'draft'"
+                    :href="route('documents.prepare', document.id)"
+                    class="text-primary underline"
+                >
+                    Prepare the document
+                </Link>
+                to place signature fields and add signers.
             </div>
         </div>
 

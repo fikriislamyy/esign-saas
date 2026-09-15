@@ -1,284 +1,162 @@
-# Documents/Prepare: "Use Template" action with free (unassigned) signature fields
+# Prepare: pick signers from the member list when adding a field; signer manager becomes edit-only
 
 ## Goal
 
-On the **Prepare Document** page (`/documents/{id}/prepare`) add a **Use Template** button.
-Clicking it opens a dialog listing the organization's templates. The user picks one and clicks
-**Use**. Then:
+Today signers are added on the **document page** (`/documents/{id}`) through the **Add Signer**
+dialog, and then on the **Prepare page** (`/documents/{id}/prepare`) you must first pick one of
+those signers in a dropdown before **Add Signature Field** is enabled. Two screens, two steps.
 
-1. The app checks that the document has enough pages for the template's fields.
-2. **Not enough pages** → close the template dialog and show an error dialog with exactly:
-   > template signature fields is exceeding the current document pages, please use uploaded document as base for the new template
-3. **Enough pages** → delete every signature field the document already has (server-side), then
-   show the template's fields on the PDF as **free fields**.
+After this change:
 
-A **free field**:
+- **Prepare page:** clicking **Add Signature Field** opens a modal listing the organization's
+  members. Pick one, click on the PDF, and the field is created for that member. If the member is
+  not yet a signer of the document, the signer row is created automatically at that moment.
+- **Document page:** the signer section becomes an **editor only** — reorder and remove existing
+  signers. The **Add Signer** button is gone.
+- **Use Template** free fields: clicking a dashed "Unassigned" field opens the same member modal.
 
-- exists **only in the browser**. Nothing is written to `document_signature_fields` yet. Its
-  page / x / y / width / height come straight from the template's `template_signature_fields`.
-- is **locked**: it cannot be moved, resized, or deleted.
-- shows the label **"Unassigned"** and looks different (dashed border) so the user knows it
-  still needs an owner.
-- when **clicked**, opens a **signer picker dialog** listing the document's signers. Picking a
-  signer creates the real `document_signature_fields` row (POST to the existing store route)
-  with that signer, and the free field is replaced by the normal, editable field.
+One rule that shapes the whole design: **a signer row is created only when a field is actually
+placed**, never when a member is merely picked. Otherwise cancelling a placement would leave a
+signer with zero fields, and the document page refuses to send documents with such signers
+(`canSendForSignature` in `DocumentController::show`).
 
-Free fields are lost on page reload (they were never saved). That is expected. The sidebar shows
-how many are still unassigned and offers a **Discard unassigned** action, and **Finish
-Preparing** refuses to run while any remain.
+## How it works today (read this first)
 
-## Page count
+| Piece | File | What it does |
+|---|---|---|
+| Add Signer dialog | `resources/js/Components/documents/signers/AddSignerDialog.vue` | Member search + "Sequential Signing" checkbox (only when the document has no signers). Posts `member_id`, `signing_order` to `documents.signers.store` as an Inertia form. |
+| Signer section | `resources/js/Components/documents/signers/SignersSection.vue` | Header + `AddSignerDialog` + `SignersManager`. |
+| Signer manager | `resources/js/Components/documents/signers/SignersManager.vue` | Lists signers, **Edit Order** (drag & drop → `documents.signers.reorder`), remove (→ `documents.signers.destroy`). **Keep as is.** |
+| Signer store | `app/Http/Controllers/DocumentSignerController.php` `store()` | Validates `member_id`, rejects duplicates with `withErrors`, computes `signing_order` (first signer decides parallel vs sequential), creates the row, `return back()`. |
+| Show props | `app/Http/Controllers/DocumentController.php` `show()` ~line 131 | Passes `members` (org users `id, name, email`) to `Documents/Show.vue`. |
+| Prepare props | `DocumentController::prepare()` ~line 425 | Passes `document` (with `signers`, `signatureFields.signer`) and `templates`. **No members.** |
+| Signer dropdown | `resources/js/Components/documents/prepare/SignerSelector.vue` | Sets `editor.selectedSigner`. Used by `PrepareSidebar.vue`. |
+| Sidebar | `resources/js/Components/documents/prepare/PrepareSidebar.vue` | **Add Signature Field** button is `:disabled="!editor.selectedSigner"`; emits `start-placement`. |
+| Prepare page | `resources/js/Pages/Documents/Prepare.vue` | `editor.selectedSigner`, `editor.placingSignature`; `placeField()` (~line 502) posts `signer_id: editor.selectedSigner.id` to `documents.signature-fields.store` via axios; `assignFreeField(signer)` (~line 444) does the same for template free fields. |
+| Assign dialog | `resources/js/Components/documents/prepare/AssignSignerDialog.vue` | Lists **document signers** for free fields. Will be replaced by the member picker. |
 
-The `documents` table has no page count and the server never needs it: the check is done in
-the browser. Count the pages once when the PDF is loaded on mount (`pdfDoc.numPages`) and keep
-it in a **module-level variable** `documentPageCount` in `Prepare.vue`. Use that variable for
-the check — not a prop, not a request.
+The Prepare page talks to the backend with **axios** and expects JSON; the Add Signer dialog used
+Inertia forms and expects a redirect. That is why `store()` has to change its response (step 2).
 
-"Exceeding" means: the highest `page` among the template's fields is greater than
-`documentPageCount`. A 3-page document can use a template with fields on pages 1–3, or 1–2, or
-just 1. It cannot use one with a field on page 4.
+## Steps
 
-## What already exists (read these first)
+### Step 1 — Backend: give the Prepare page the member list
 
-| Thing | Where |
-|---|---|
-| Prepare page: `pdfDoc`, `editor` state, `signatureFields` ref, `pageFields()`, `placeField`, `deleteField`, `finishPreparing` | `resources/js/Pages/Documents/Prepare.vue` |
-| Sidebar (signer selector, **Add Signature Field** button, instructions) | `resources/js/Components/documents/prepare/PrepareSidebar.vue` |
-| Canvas wrapper that renders fields for the current page | `resources/js/Components/documents/prepare/PdfCanvas.vue` |
-| One field box — already has an `editable` prop that hides delete/resize and blocks drag | `resources/js/Components/documents/prepare/SignatureField.vue` |
-| Feedback helpers (`showError`, `showLoading`, `hideLoading`) | `resources/js/Composables/useFeedback.js` (already used in Prepare.vue) |
-| Document field CRUD (`store`, `update`, `destroy`) | `app/Http/Controllers/DocumentSignatureFieldController.php` |
-| Routes for the above | `routes/web.php` ~lines 180–192 |
-| Template + fields models | `app/Models/Template.php`, `app/Models/TemplateSignatureField.php` |
-| Org → templates relation | `app/Models/Organization.php` `templates()` |
-| Dialog UI primitives (working example: `Components/billing/TopUpDialog.vue`) | `resources/js/components/ui/dialog` |
-| Prepare page props | `DocumentController::prepare()` (`app/Http/Controllers/DocumentController.php` ~line 425) |
-
-Both template fields and document fields store `x, y, width, height` as **fractions of the page
-(0–1)**, so values copy over 1:1 — no conversion.
-
-No database migration is needed: free fields never touch the database, so `signer_id` stays
-`NOT NULL`.
-
----
-
-## Step 1 — Backend: send templates (with their fields) to the Prepare page
-
-`app/Http/Controllers/DocumentController.php`, method `prepare()`. Change `Inertia::render` to:
+`app/Http/Controllers/DocumentController.php`, method `prepare()`. Add a `members` prop using
+the exact same query `show()` already uses:
 
 ```php
-return Inertia::render('Documents/Prepare', [
-    'document' => $document->load([
-        'signers',
-        'signatureFields.signer',
-    ]),
+return Inertia::render(
+    'Documents/Prepare',
+    [
+        'document' => $document->load([
+            'signers',
+            'signatureFields.signer',
+        ]),
 
-    'templates' => $request->user()->organization
-        ->templates()
-        ->with('signatureFields:id,template_id,page,x,y,width,height')
-        ->latest()
-        ->get(['id', 'name', 'created_at']),
-]);
+        'members' => $request->user()->organization
+            ->users()
+            ->select('id', 'name', 'email')
+            ->orderBy('name')
+            ->get(),
+
+        'templates' => // ... unchanged
+    ]
+);
 ```
 
-Check: open `/documents/{id}/prepare` and inspect `$page.props.templates` in Vue devtools —
-each template has `signature_fields: [{ id, page, x, y, width, height }, ...]`.
+In the same file, method `show()`: **delete** the `'members' => ...` entry (~lines 131–141). The
+document page no longer needs it.
 
-## Step 2 — Backend: bulk-clear endpoint
+### Step 2 — Backend: make `DocumentSignerController::store()` return JSON and be idempotent
 
-Applying a template must delete the document's existing fields in one go.
-
-### 2a. Route
-
-`routes/web.php`, next to the other `documents.signature-fields.*` routes (~line 180):
+Replace the duplicate check and the final `return back();`:
 
 ```php
-Route::delete(
-    '/documents/{document}/signature-fields',
-    [DocumentSignatureFieldController::class, 'destroyAll']
-)->name('documents.signature-fields.destroy-all');
-```
-
-### 2b. Controller method
-
-`app/Http/Controllers/DocumentSignatureFieldController.php`, add:
-
-```php
-public function destroyAll(Request $request, Document $document)
-{
-    abort_unless(
-        $document->organization_id === $request->user()->organization_id,
-        403
-    );
-
-    $document->signatureFields()->delete();
-
-    return response()->json([
-        'success' => true,
+// before
+if ($alreadyExists) {
+    return back()->withErrors([
+        'member_id' => 'This member is already a signer.',
     ]);
 }
 ```
 
-## Step 3 — Backend: let `store` accept width and height
+```php
+// after — an existing signer is simply returned, no error
+$existing = $document->signers()->where('email', $member->email)->first();
 
-Today `store()` hard-codes `width => 0.25, height => 0.06` and ignores what the client sends.
-A free field must keep the template's exact size, so `store` needs to accept them (optional, so
-the existing click-to-place flow keeps working).
+if ($existing) {
+    return response()->json(['signer' => $existing]);
+}
+```
 
-In `DocumentSignatureFieldController::store`, extend the validation:
+(Delete the `$alreadyExists = ...` block above it; `$existing` replaces it.)
 
 ```php
-$validated = $request->validate([
-    'signer_id' => ['required', 'exists:document_signers,id'],
-    'page' => ['required', 'integer', 'min:1'],
-    'x' => ['required', 'numeric', 'min:0'],
-    'y' => ['required', 'numeric', 'min:0'],
-    'width' => ['nullable', 'numeric', 'min:0'],
-    'height' => ['nullable', 'numeric', 'min:0'],
+// before
+DocumentSigner::create([ ... ]);
+
+return back();
+```
+
+```php
+// after
+$signer = DocumentSigner::create([
+    'document_id' => $document->id,
+    'name' => $member->name,
+    'email' => $member->email,
+    'signing_order' => $signingOrder,
 ]);
+
+return response()->json(['signer' => $signer], 201);
 ```
 
-and in the `create([...])` call replace the two hard-coded lines with:
+Leave the `signing_order` computation between them untouched. Nothing else calls this endpoint
+after step 3, so the Inertia-style response is no longer needed.
 
-```php
-'width' => $validated['width'] ?? 0.25,
-'height' => $validated['height'] ?? 0.06,
+### Step 3 — Document page: signer section becomes edit-only
+
+**3a.** Delete `resources/js/Components/documents/signers/AddSignerDialog.vue`.
+
+**3b.** `resources/js/Components/documents/signers/SignersSection.vue`:
+
+- Remove the `AddSignerDialog` import and the `members` prop.
+- Remove the whole `<div class="shrink-0"> <AddSignerDialog .../> </div>` block.
+- Change the description text to: `Signers are added on the Prepare page when you place
+  signature fields.`
+
+**3c.** `resources/js/Components/documents/signers/SignersManager.vue`, empty state (~line 235):
+
+```vue
+<div
+    v-if="!document.signers.length"
+    class="rounded-xl border border-dashed py-10 text-center text-muted-foreground"
+>
+    No signers yet.
+    <Link
+        v-if="document.status === 'draft'"
+        :href="route('documents.prepare', document.id)"
+        class="text-primary underline"
+    >
+        Prepare the document
+    </Link>
+    to place signature fields and add signers.
+</div>
 ```
 
-Also add an ownership check so a signer from another document can't be used — insert this right
-after the `validate()` call:
+Add `Link` to the existing `@inertiajs/vue3` import at the top of that file.
 
-```php
-abort_unless(
-    $document->signers()->whereKey($validated['signer_id'])->exists(),
-    422,
-    'The selected signer does not belong to this document.'
-);
-```
+**3d.** `resources/js/Pages/Documents/Show.vue`: remove `members: Array` from `defineProps` and
+remove `:members="members"` from `<SignersSection ...>`.
 
-Check: the existing **Add Signature Field** click-to-place still works (it already sends
-width/height, so placed fields will now be 180×60 px at the zoom used — that is fine).
+### Step 4 — Prepare page: new `MemberPickerDialog.vue`
 
-## Step 4 — Frontend: template picker dialog
-
-Create `resources/js/Components/documents/prepare/UseTemplateDialog.vue`:
+Create `resources/js/Components/documents/prepare/MemberPickerDialog.vue`. It is
+`AddSignerDialog` minus the form: it only **emits the chosen member**.
 
 ```vue
 <script setup>
 import { computed, ref, watch } from "vue";
-import { LayoutTemplate, Check } from "lucide-vue-next";
-
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog";
-
-import { Button } from "@/components/ui/button";
-
-const props = defineProps({
-    open: { type: Boolean, default: false },
-    templates: { type: Array, default: () => [] },
-    processing: { type: Boolean, default: false },
-});
-
-const emit = defineEmits(["update:open", "use"]);
-
-const selectedId = ref(null);
-
-const selectedTemplate = computed(
-    () => props.templates.find((t) => t.id === selectedId.value) ?? null,
-);
-
-watch(
-    () => props.open,
-    (isOpen) => {
-        if (isOpen) selectedId.value = null;
-    },
-);
-
-function maxPage(template) {
-    const pages = (template.signature_fields ?? []).map((f) => Number(f.page));
-
-    return pages.length ? Math.max(...pages) : 0;
-}
-
-function use() {
-    if (selectedTemplate.value) emit("use", selectedTemplate.value);
-}
-</script>
-
-<template>
-    <Dialog :open="open" @update:open="emit('update:open', $event)">
-        <DialogContent class="sm:max-w-lg">
-            <DialogHeader>
-                <DialogTitle>Use Template</DialogTitle>
-
-                <DialogDescription>
-                    Pick a template. Its fields replace every field currently on
-                    this document. You assign a signer to each field afterwards.
-                </DialogDescription>
-            </DialogHeader>
-
-            <div
-                v-if="templates.length === 0"
-                class="rounded-xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
-            >
-                No templates yet. Upload one from the Templates page first.
-            </div>
-
-            <div v-else class="max-h-[50vh] space-y-2 overflow-y-auto">
-                <button
-                    v-for="template in templates"
-                    :key="template.id"
-                    type="button"
-                    class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60"
-                    :class="template.id === selectedId ? 'border-primary bg-primary/5' : 'border-border'"
-                    @click="selectedId = template.id"
-                >
-                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                        <LayoutTemplate class="h-5 w-5" />
-                    </div>
-
-                    <div class="min-w-0 flex-1">
-                        <p class="truncate text-sm font-medium">{{ template.name }}</p>
-
-                        <p class="text-xs text-muted-foreground">
-                            {{ template.signature_fields.length }}
-                            {{ template.signature_fields.length === 1 ? "field" : "fields" }}
-                            <template v-if="maxPage(template)">
-                                · up to page {{ maxPage(template) }}
-                            </template>
-                        </p>
-                    </div>
-
-                    <Check v-if="template.id === selectedId" class="h-4 w-4 shrink-0 text-primary" />
-                </button>
-            </div>
-
-            <DialogFooter class="grid gap-2 sm:flex sm:justify-end">
-                <Button variant="outline" :disabled="processing" @click="emit('update:open', false)">
-                    Cancel
-                </Button>
-
-                <Button :disabled="!selectedTemplate || processing" @click="use">
-                    {{ processing ? "Applying..." : "Use" }}
-                </Button>
-            </DialogFooter>
-        </DialogContent>
-    </Dialog>
-</template>
-```
-
-## Step 5 — Frontend: signer picker dialog (opened by clicking a free field)
-
-Create `resources/js/Components/documents/prepare/AssignSignerDialog.vue`:
-
-```vue
-<script setup>
 import { Check, UserRound } from "lucide-vue-next";
 
 import {
@@ -291,47 +169,121 @@ import {
 } from "@/components/ui/dialog";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 
-defineProps({
+const props = defineProps({
     open: { type: Boolean, default: false },
+    members: { type: Array, default: () => [] },
     signers: { type: Array, default: () => [] },
     processing: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:open", "assign"]);
+const emit = defineEmits(["update:open", "select"]);
+
+const search = ref("");
+const sequential = ref(false);
+
+watch(
+    () => props.open,
+    (open) => {
+        if (open) {
+            search.value = "";
+        }
+    },
+);
+
+const hasSigners = computed(() => props.signers.length > 0);
+
+const workflowIsSequential = computed(() =>
+    hasSigners.value ? props.signers[0].signing_order > 0 : sequential.value,
+);
+
+const signerEmails = computed(() => new Set(props.signers.map((s) => s.email)));
+
+const filteredMembers = computed(() => {
+    const term = search.value.trim().toLowerCase();
+
+    if (!term) {
+        return props.members;
+    }
+
+    return props.members.filter(
+        (member) =>
+            member.name.toLowerCase().includes(term) ||
+            member.email.toLowerCase().includes(term),
+    );
+});
+
+function choose(member) {
+    emit("select", member, workflowIsSequential.value);
+}
 </script>
 
 <template>
     <Dialog :open="open" @update:open="emit('update:open', $event)">
         <DialogContent class="sm:max-w-md">
             <DialogHeader>
-                <DialogTitle>Assign Signer</DialogTitle>
+                <DialogTitle>Choose Signer</DialogTitle>
 
                 <DialogDescription>
-                    Choose who must sign in this field.
+                    Pick the member who must sign this field.
                 </DialogDescription>
             </DialogHeader>
 
-            <div class="max-h-[50vh] space-y-2 overflow-y-auto">
+            <!-- Workflow: only editable before the first signer exists -->
+
+            <div v-if="!hasSigners" class="flex items-center gap-3 rounded-xl border p-3">
+                <Checkbox v-model="sequential" />
+
+                <div>
+                    <p class="text-sm font-medium">Sequential Signing</p>
+                    <p class="text-xs text-muted-foreground">Signers must sign in order.</p>
+                </div>
+            </div>
+
+            <p v-else class="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">
+                Workflow: {{ workflowIsSequential ? "Sequential" : "Parallel" }} signing (locked
+                because signers already exist).
+            </p>
+
+            <div class="space-y-2">
+                <Label>Search Member</Label>
+                <Input v-model="search" placeholder="Search by name or email..." />
+            </div>
+
+            <div class="max-h-[40vh] space-y-2 overflow-y-auto">
                 <button
-                    v-for="signer in signers"
-                    :key="signer.id"
+                    v-for="member in filteredMembers"
+                    :key="member.id"
                     type="button"
                     :disabled="processing"
                     class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-50"
-                    @click="emit('assign', signer)"
+                    @click="choose(member)"
                 >
                     <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                         <UserRound class="h-5 w-5" />
                     </div>
 
                     <div class="min-w-0 flex-1">
-                        <p class="truncate text-sm font-medium">{{ signer.name }}</p>
-                        <p class="truncate text-xs text-muted-foreground">{{ signer.email }}</p>
+                        <p class="truncate text-sm font-medium">{{ member.name }}</p>
+                        <p class="truncate text-xs text-muted-foreground">{{ member.email }}</p>
                     </div>
 
-                    <Check class="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span
+                        v-if="signerEmails.has(member.email)"
+                        class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                    >
+                        Signer
+                    </span>
+
+                    <Check v-else class="h-4 w-4 shrink-0 text-muted-foreground" />
                 </button>
+
+                <p v-if="!filteredMembers.length" class="p-4 text-sm text-muted-foreground">
+                    No members found.
+                </p>
             </div>
 
             <DialogFooter class="grid gap-2 sm:flex sm:justify-end">
@@ -344,539 +296,231 @@ const emit = defineEmits(["update:open", "assign"]);
 </template>
 ```
 
-Clicking a signer row assigns immediately (no separate confirm button) — one tap on mobile.
+Then delete `SignerSelector.vue` and `AssignSignerDialog.vue` in the same folder — both are
+replaced by this dialog.
 
-## Step 6 — Frontend: make a field box clickable when it is free
+### Step 5 — `PrepareSidebar.vue`: no dropdown, button always available
 
-`resources/js/Components/documents/prepare/SignatureField.vue`.
-
-Add `"assign"` to the emits:
-
-```js
-const emit = defineEmits(["dragStart", "resizeStart", "delete", "assign"]);
-```
-
-Add a click handler in `<script setup>`:
-
-```js
-function handleClick(event) {
-    // Free (template) fields open the signer picker. Normal fields do nothing on click.
-    if (props.field.free) {
-        event.stopPropagation();
-
-        emit("assign", props.field);
-    }
-}
-```
-
-Change the root `<div>` in the template — replace its opening tag with:
+- Remove the `SignerSelector` import and the `<SignerSelector .../>` element.
+- **Add Signature Field** button: change `:disabled="!editor.selectedSigner"` to
+  `:disabled="editor.placingSignature"`.
+- In the **Placement Mode** box, change the text to show who the field is for:
 
 ```vue
-<div
-    class="absolute select-none rounded-lg border-2 bg-background/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md dark:bg-slate-900/90"
-    :class="{
-        'cursor-move border-primary': editable && !editor.isResizing,
-        'border-primary': !field.free && !editable,
-        'cursor-pointer border-dashed border-amber-500 bg-amber-50/90 dark:bg-amber-950/60':
-            field.free,
-    }"
-    :style="{
-        ...style,
-        touchAction: 'none',
-    }"
-    @pointerdown.stop="handleDragStart"
-    @click.stop="handleClick"
->
+<p class="text-sm text-muted-foreground">
+    Click anywhere on the PDF to place a field for
+    <strong>{{ editor.selectedMember?.name }}</strong>.
+</p>
 ```
 
-(`border-primary` moved from the static class into `:class` so free fields can be amber and
-dashed instead.)
-
-Change the label so free fields say "Unassigned":
+- Instructions block: replace the four numbered lines with:
 
 ```vue
-<span class="truncate text-xs font-semibold text-foreground">
-    {{ field.free ? "Unassigned" : (field.signer?.name ?? "Signature") }}
-</span>
+<p>1. Click <strong>Add Signature Field</strong> and choose a member.</p>
+<p>2. Click on the PDF to place the field.</p>
+<p>3. Drag and resize as needed.</p>
+<p>Or click <strong>Use Template</strong>, then click each field to choose its signer.</p>
 ```
 
-The delete button and resize handle already have `v-if="editable"` and `handleDragStart`
-already returns early when `!editable` — Step 7 passes `:editable="!field.free"`, so free fields
-are locked with no further changes here.
+### Step 6 — `Prepare.vue`: wire the picker and create signers on placement
 
-**Why `@click.stop`:** the parent `.pdf-page` div in `PdfCanvas.vue` has `@click` that places a
-new field while in placement mode. Without `.stop`, clicking a free field would also drop a new
-field underneath it.
+All in `resources/js/Pages/Documents/Prepare.vue`.
 
-## Step 7 — Frontend: pass `editable` and forward `assign` through `PdfCanvas.vue`
-
-`resources/js/Components/documents/prepare/PdfCanvas.vue`.
-
-Add `"assignField"` to emits:
+**6a. Props and imports.** Add `members: { type: Array, default: () => [] }` to `defineProps`.
+Replace the `AssignSignerDialog` import with:
 
 ```js
-const emit = defineEmits(["placeField", "dragStart", "resizeStart", "deleteField", "assignField"]);
+import MemberPickerDialog from "@/Components/documents/prepare/MemberPickerDialog.vue";
 ```
 
-Update the `<SignatureField ... />` usage:
-
-```vue
-<SignatureField
-    v-for="field in fields"
-    :key="field.id"
-    :field="field"
-    :editable="!field.free"
-    :canvas-width="canvasWidth"
-    :canvas-height="canvasHeight"
-    :editor="editor"
-    @drag-start="handleDragStart"
-    @resize-start="handleResizeStart"
-    @delete="handleDelete"
-    @assign="emit('assignField', $event)"
-/>
-```
-
-## Step 8 — Frontend: Prepare page wiring
-
-All edits in `resources/js/Pages/Documents/Prepare.vue`.
-
-### 8a. Props
+**6b. Local signer list.** The `document.signers` prop is frozen for the life of the page, but we
+will create signers with axios, so keep a local copy. Add near the `signatureFields` ref:
 
 ```js
-const props = defineProps({
-    document: { type: Object, required: true },
-    templates: { type: Array, default: () => [] },
-});
+const signers = ref([...props.document.signers]);
 ```
 
-### 8b. Imports
-
-Next to the other component imports:
+**6c. Editor state.** In the `reactive({...})` editor object, replace `selectedSigner: null,` with:
 
 ```js
-import UseTemplateDialog from "@/Components/documents/prepare/UseTemplateDialog.vue";
-import AssignSignerDialog from "@/Components/documents/prepare/AssignSignerDialog.vue";
+selectedMember: null,
+sequential: false,
 ```
 
-### 8c. Global page count
-
-Directly under `let pdfDoc = null;` (~line 62):
+**6d. Picker state.** Next to the existing `assignDialogOpen` / `assigningField` refs add:
 
 ```js
-let documentPageCount = 0;
+const memberDialogOpen = ref(false);
+const memberPickerPurpose = ref("place"); // "place" | "assign"
 ```
 
-In `onMounted`, right after `editor.totalPages = pdfDoc.numPages;` (~line 597):
+**6e. Open the picker.** Add these two functions and change the sidebar binding:
 
 ```js
-documentPageCount = pdfDoc.numPages;
-```
-
-(`editor.totalPages` stays — the toolbar uses it. `documentPageCount` is the variable the
-template check reads.)
-
-### 8d. Free fields state + canvas merge
-
-After the `signatureFields` ref (~line 122):
-
-```js
-const freeFields = ref([]);
-```
-
-Replace `pageFields()` (~line 142) with:
-
-```js
-function pageFields() {
-    const page = Number(editor.currentPage);
-
-    return [
-        ...signatureFields.value.filter((field) => Number(field.page) === page),
-        ...freeFields.value.filter((field) => Number(field.page) === page),
-    ];
+function openMemberPickerForPlacement() {
+    memberPickerPurpose.value = "place";
+    memberDialogOpen.value = true;
 }
-```
-
-### 8e. Use-template flow
-
-Add after `deleteField` (~line 323):
-
-```js
-/*
-|--------------------------------------------------------------------------
-| Use Template
-|--------------------------------------------------------------------------
-*/
-
-const templateDialogOpen = ref(false);
-
-const applyingTemplate = ref(false);
-
-const TEMPLATE_PAGES_ERROR =
-    "template signature fields is exceeding the current document pages, please use uploaded document as base for the new template";
-
-async function applyTemplate(template) {
-    if (applyingTemplate.value) {
-        return;
-    }
-
-    const templateFields = template.signature_fields ?? [];
-
-    const maxPage = templateFields.length
-        ? Math.max(...templateFields.map((field) => Number(field.page)))
-        : 0;
-
-    if (maxPage > documentPageCount) {
-        templateDialogOpen.value = false;
-
-        showError(TEMPLATE_PAGES_ERROR, "Template Not Applicable");
-
-        return;
-    }
-
-    applyingTemplate.value = true;
-
-    showLoading("Applying template...");
-
-    try {
-        await axios.delete(
-            route("documents.signature-fields.destroy-all", props.document.id),
-        );
-
-        signatureFields.value = [];
-
-        freeFields.value = templateFields.map((field) => ({
-            id: `free-${field.id}`,
-            free: true,
-            signer: null,
-            page: Number(field.page),
-            x: Number(field.x),
-            y: Number(field.y),
-            width: Number(field.width),
-            height: Number(field.height),
-        }));
-
-        editor.placingSignature = false;
-
-        templateDialogOpen.value = false;
-    } catch (error) {
-        console.error(error);
-
-        templateDialogOpen.value = false;
-
-        showError(
-            error.response?.data?.message ??
-                "The template could not be applied. Please try again.",
-            "Template Not Applied",
-        );
-    } finally {
-        hideLoading();
-
-        applyingTemplate.value = false;
-    }
-}
-
-function discardFreeFields() {
-    freeFields.value = [];
-}
-
-/*
-|--------------------------------------------------------------------------
-| Assign Free Field
-|--------------------------------------------------------------------------
-*/
-
-const assignDialogOpen = ref(false);
-
-const assigningField = ref(null);
-
-const assigning = ref(false);
 
 function openAssignDialog(field) {
     assigningField.value = field;
-
-    assignDialogOpen.value = true;
-}
-
-async function assignFreeField(signer) {
-    const field = assigningField.value;
-
-    if (!field || assigning.value) {
-        return;
-    }
-
-    assigning.value = true;
-
-    showLoading("Assigning signer...");
-
-    try {
-        const response = await axios.post(
-            route("documents.signature-fields.store", props.document.id),
-            {
-                signer_id: signer.id,
-                page: field.page,
-                x: field.x,
-                y: field.y,
-                width: field.width,
-                height: field.height,
-            },
-        );
-
-        signatureFields.value.push({
-            ...response.data.field,
-            x: Number(response.data.field.x),
-            y: Number(response.data.field.y),
-            width: Number(response.data.field.width),
-            height: Number(response.data.field.height),
-        });
-
-        freeFields.value = freeFields.value.filter((f) => f.id !== field.id);
-
-        assignDialogOpen.value = false;
-
-        assigningField.value = null;
-    } catch (error) {
-        console.error(error);
-
-        showError(
-            error.response?.data?.message ??
-                "The signer could not be assigned. Please try again.",
-            "Assignment Failed",
-        );
-    } finally {
-        hideLoading();
-
-        assigning.value = false;
-    }
+    memberPickerPurpose.value = "assign";
+    memberDialogOpen.value = true;
 }
 ```
 
-### 8f. Block Finish while free fields remain
+(`openAssignDialog` already exists — replace its body; it used to set `assignDialogOpen`.)
 
-At the top of `finishPreparing` (~line 209), after the `if (loading.value) return;` guard:
+In the template, change `@start-placement="editor.placingSignature = true"` on
+`<PrepareSidebar>` to `@start-placement="openMemberPickerForPlacement"`.
+
+**6f. Handle the choice.** Add:
 
 ```js
-if (freeFields.value.length > 0) {
-    showError(
-        `${freeFields.value.length} template field(s) still have no signer. Click each unassigned field to assign a signer, or discard them from the sidebar.`,
-        "Unassigned Fields",
-    );
+function handleMemberSelected(member, sequential) {
+    editor.selectedMember = member;
+    editor.sequential = sequential;
+    memberDialogOpen.value = false;
 
+    if (memberPickerPurpose.value === "assign") {
+        assignFreeField(member);
+        return;
+    }
+
+    editor.placingSignature = true;
+}
+```
+
+**6g. Create-or-reuse the signer.** Add:
+
+```js
+async function ensureSigner(member) {
+    const existing = signers.value.find((signer) => signer.email === member.email);
+
+    if (existing) {
+        return existing;
+    }
+
+    const response = await axios.post(route("documents.signers.store", props.document.id), {
+        member_id: member.id,
+        signing_order: editor.sequential ? 1 : 0,
+    });
+
+    signers.value.push(response.data.signer);
+
+    return response.data.signer;
+}
+```
+
+**6h. `placeField()`.** Change the guard and the request:
+
+```js
+// before
+if (!editor.selectedSigner) {
     return;
 }
 ```
 
-### 8g. Template markup
-
-Sidebar (~line 664) — pass the new data and events:
-
-```vue
-<PrepareSidebar
-    :document="document"
-    :editor="editor"
-    :signature-fields="signatureFields"
-    :free-fields="freeFields"
-    @start-placement="editor.placingSignature = true"
-    @use-template="templateDialogOpen = true"
-    @discard-free-fields="discardFreeFields"
-/>
+```js
+// after
+if (!editor.selectedMember) {
+    return;
+}
 ```
 
-Canvas (~line 687) — add the assign event:
+and inside the `try`, **before** the `axios.post(... signature-fields.store ...)` call:
 
-```vue
-<PdfCanvas
-    ...existing props/events...
-    @assign-field="openAssignDialog"
->
+```js
+const signer = await ensureSigner(editor.selectedMember);
 ```
 
-Dialogs — next to the existing `<FeedbackDialog>` at the bottom:
+then in that post body change `signer_id: editor.selectedSigner.id,` to `signer_id: signer.id,`.
+The rest of the function stays: the backend returns the field with its `signer` relation loaded,
+so the label shows the name immediately.
+
+**6i. `assignFreeField()`.** It currently receives a *signer*; it now receives a *member*. Rename
+the parameter to `member` and, inside the `try` before the post, add
+`const signer = await ensureSigner(member);` then use `signer_id: signer.id`.
+
+**6j. Template.** Replace the `<AssignSignerDialog ...>` element with:
 
 ```vue
-<UseTemplateDialog
-    v-model:open="templateDialogOpen"
-    :templates="templates"
-    :processing="applyingTemplate"
-    @use="applyTemplate"
-/>
-
-<AssignSignerDialog
-    v-model:open="assignDialogOpen"
-    :signers="document.signers"
+<MemberPickerDialog
+    v-model:open="memberDialogOpen"
+    :members="members"
+    :signers="signers"
     :processing="assigning"
-    @assign="assignFreeField"
+    @select="handleMemberSelected"
 />
 ```
 
-### 8h. Do not show a success dialog
+Search the file for any remaining `selectedSigner`, `assignDialogOpen`, `AssignSignerDialog`,
+`document.signers` — each one must be gone or switched to the new names (`signers` for the
+sidebar's `:document` is fine to leave; the sidebar only reads `document.name`).
 
-`handleFeedbackClose` redirects to the document page when the feedback type is `success`. Never
-call `showSuccess` in `applyTemplate` or `assignFreeField` — the fields changing on the canvas
-is the confirmation.
-
-## Step 9 — Frontend: sidebar button + unassigned notice
-
-`resources/js/Components/documents/prepare/PrepareSidebar.vue`.
-
-Icons (line 2):
-
-```js
-import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle } from "lucide-vue-next";
-```
-
-Props — add:
-
-```js
-freeFields: {
-    type: Array,
-    default: () => [],
-},
-```
-
-Emits:
-
-```js
-const emit = defineEmits(["start-placement", "use-template", "discard-free-fields"]);
-```
-
-Summary block — show the unassigned count under the field count:
-
-```vue
-<p class="mt-2 text-sm text-muted-foreground">
-    {{ signatureFields.length }}
-    {{ signatureFields.length === 1 ? "Field" : "Fields" }}
-    <span v-if="freeFields.length" class="text-amber-600 dark:text-amber-400">
-        · {{ freeFields.length }} unassigned
-    </span>
-</p>
-```
-
-Tools block — under **Add Signature Field** add the new button. **It does not need a signer
-selected**, because ownership is chosen per field afterwards:
-
-```vue
-<Button
-    variant="outline"
-    class="w-full"
-    @click="emit('use-template')"
->
-    <LayoutTemplate class="mr-2 h-4 w-4" />
-
-    Use Template
-</Button>
-```
-
-Unassigned notice — add after the **Placement Mode** transition block:
-
-```vue
-<div
-    v-if="freeFields.length"
-    class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
->
-    <div class="flex gap-3">
-        <AlertTriangle class="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
-
-        <div class="space-y-2">
-            <p class="text-sm font-medium">
-                {{ freeFields.length }} unassigned
-                {{ freeFields.length === 1 ? "field" : "fields" }}
-            </p>
-
-            <p class="text-sm text-muted-foreground">
-                Click each dashed field on the PDF to choose its signer.
-                Unassigned fields are not saved.
-            </p>
-
-            <Button variant="ghost" size="sm" @click="emit('discard-free-fields')">
-                Discard unassigned
-            </Button>
-        </div>
-    </div>
-</div>
-```
-
-Instructions block — add a line:
-
-```vue
-<p>Or click <strong>Use Template</strong>, then click each field to assign a signer.</p>
-```
-
----
-
-## Step 10 — Test
-
-Setup: `docker compose up -d && npm run dev`. In one org create:
-
-- Template **A**: 2 fields on page 1.
-- Template **B**: at least one field on page 3 (upload a 3+ page PDF as the template, place a
-  field on page 3 in `/templates/{id}/prepare`).
-- Document **D1**: 1-page PDF with two signers.
-- Document **D2**: 3-page PDF with one signer.
-
-On `/documents/{id}/prepare`:
-
-| # | Steps | Expect |
-|---|---|---|
-| 1 | Open D1, no signer selected, click **Use Template** | Dialog opens (button works without a signer) |
-| 2 | Dialog lists A and B | Field counts and "up to page N" shown; **Use** disabled until a row is picked |
-| 3 | Pick B, **Use** | Template dialog closes, error dialog with the exact "exceeding" message, canvas unchanged |
-| 4 | Pick A, **Use** | Two dashed amber "Unassigned" boxes on page 1; sidebar shows "2 unassigned" notice |
-| 5 | Try to drag, resize, or find a delete button on a free field | Nothing moves/resizes; no X button |
-| 6 | Reload the page | Free fields are gone (never saved); no rows in `document_signature_fields` |
-| 7 | Use A again, click one free field | Signer picker opens listing both signers |
-| 8 | Pick a signer | Loading, dialog closes, that box becomes a normal solid field with the signer's name, same position and size; sidebar shows "1 unassigned" |
-| 9 | Drag / resize / delete the assigned field | Works like a normally placed field |
-| 10 | Click **Finish Preparing** with 1 free field left | Error dialog "Unassigned Fields", no request sent |
-| 11 | **Discard unassigned** | Free field disappears; Finish now works |
-| 12 | Manually place 2 fields, then use A again | The 2 manual fields are deleted (server + canvas), A's free fields appear |
-| 13 | Open D2, use B, go to page 3 | Free field visible on page 3; assign it; reload → still there |
-| 14 | Placement mode on, click a free field | Signer picker opens, **no** new field placed underneath |
-| 15 | Org with zero templates | Dialog shows "No templates yet" |
-| 16 | 375px width | Both dialogs fit; footer buttons full-width |
-
-Finally:
+### Step 7 — Build and format
 
 ```bash
 npm run build
+docker exec esign-app ./vendor/bin/pint app/Http/Controllers/DocumentController.php app/Http/Controllers/DocumentSignerController.php
 ```
 
----
+## Test
+
+Use two members in the organization (invite a second one on the Members page if needed).
+
+1. **Document page:** open a draft. No **Add Signer** button. Empty state links to Prepare.
+2. **Prepare — first field:** click **Add Signature Field** → member modal opens with the
+   *Sequential Signing* checkbox (no signers yet). Tick it, pick member A, click on the PDF.
+   Expect: field appears labelled with A's name. Back on the document page: A is listed as a
+   signer with **Order 1** and 1 signature field.
+3. **Cancel does not create a signer:** click **Add Signature Field**, pick member B, then do
+   **not** click the PDF — navigate back to the document page. Expect: B is **not** a signer.
+4. **Second field, new member:** pick B, place a field. Document page shows B as **Order 2**.
+   Modal now shows the workflow as locked and A/B with a "Signer" badge.
+5. **Existing signer reused:** pick A again, place another field. Expect: no duplicate A row,
+   A now has 2 fields. Check the network tab: no request to `/signers` was made.
+6. **Parallel workflow:** new document, leave the checkbox unticked, add fields for A and B.
+   Both show **Parallel**.
+7. **Use Template on a fresh document:** apply a template → dashed fields; click one → member
+   modal → pick B. Expect: field becomes B's, signer B created. Pick A for another one.
+8. **Signer manager still edits:** on the document page, **Edit Order** drag & drop still works
+   and saves; remove-signer still works and deletes their fields (as before this change).
+9. **Send for Signature** works end-to-end for a document prepared entirely through the new flow.
 
 ## Gotchas
 
-- Free fields need a **unique `id`** for `v-for` keys and for removal after assignment — that
-  is why they use `free-${templateFieldId}`. Never send that id to the server.
-- Keep the `free: true` flag on the object; `SignatureField.vue`, `PdfCanvas.vue` and
-  `pageFields()` all rely on it.
-- `store()` must accept `width`/`height` (Step 3) or every assigned field snaps to the default
-  0.25 × 0.06 size and the template layout is lost.
-- `@click.stop` on the field root (Step 6) is required; see the note there.
-- Do not call `showSuccess` anywhere in the new code (Step 8h).
-- Do not add `editable="false"` tests based on `signer` being null — normal fields always have a
-  signer; use the `free` flag.
-- Nothing about signing (`SigningController`) changes: only real, signer-owned rows exist in the
-  database.
+- `document.signers` in `Prepare.vue` is a page prop; it does **not** update after axios calls.
+  Always read/write the local `signers` ref, otherwise the second field for the same member
+  creates a duplicate signer.
+- Keep `store()`'s `signing_order` logic; only the *response* and the *duplicate handling*
+  change. The frontend still sends `signing_order` as `1`/`0` and the backend only honours it for
+  the first signer.
+- The dialog emits `select(member, sequential)` — the second argument is the checkbox state,
+  which only matters for the first signer. Store it on `editor` because the signer is created
+  later, when the field is placed.
+- `ensureSigner()` is `async`; every caller must `await` it, inside the existing `try` so the
+  existing `showError` handling covers a failed signer creation too.
+- Do not delete `SignersManager.vue` — reorder and remove stay exactly as they are.
+- After deleting `AddSignerDialog.vue`, `SignerSelector.vue` and `AssignSignerDialog.vue`, run
+  `npm run build`; Vite fails loudly if any import of them was missed.
 
 ## Definition of done
 
-- [ ] `DocumentController::prepare` passes `templates` with their `signature_fields`
-- [ ] `DELETE /documents/{document}/signature-fields` clears all fields (org-checked)
-- [ ] `store` accepts optional `width`/`height` and checks the signer belongs to the document
-- [ ] `documentPageCount` set once on mount and used for the page check; no page data sent to the server
-- [ ] `UseTemplateDialog.vue` and `AssignSignerDialog.vue` created
-- [ ] Free fields: locked, dashed/amber, labeled "Unassigned", click opens signer picker
-- [ ] Assigning creates the row via `documents.signature-fields.store` with the template's exact geometry and swaps the free field for the real one
-- [ ] Sidebar: **Use Template** button (no signer required), unassigned count + notice + **Discard unassigned**
-- [ ] **Finish Preparing** blocked while free fields remain
-- [ ] All 16 test rows pass, `npm run build` passes
-- [ ] One commit on branch `feature/prepare-use-template`:
+- [ ] `prepare()` passes `members`; `show()` no longer does
+- [ ] `DocumentSignerController::store()` returns `{ signer }` JSON (201 created / 200 existing), no `withErrors`
+- [ ] `AddSignerDialog.vue`, `SignerSelector.vue`, `AssignSignerDialog.vue` deleted; `MemberPickerDialog.vue` added
+- [ ] Document page: no Add Signer button; reorder/remove unchanged; empty state links to Prepare
+- [ ] Prepare: **Add Signature Field** always enabled; opens member picker; signer created only when a field is placed; existing signers reused
+- [ ] Template free fields assign through the same picker
+- [ ] Tests 1–9 pass; `npm run build` and `pint` pass
+- [ ] Branch `feature/prepare-member-picker`, PR to `main`. Suggested commit message:
 
 ```
-feat: apply template layouts as free signature fields on the prepare page
+feat: choose signers from the member list while placing fields
 
-Adds a Use Template action that shows a template's fields as locked,
-unassigned fields on the document. Clicking a free field opens a signer
-picker; only then is the document signature field created. Existing
-fields are cleared when a template is applied, and the page-count check
-runs in the browser against the count taken when the PDF is loaded.
+Signers were added on the document page and then re-selected on the
+prepare page. Now Add Signature Field opens the organization member
+list, and the signer row is created when the field is placed, so the
+signer manager only needs to reorder and remove.
 ```

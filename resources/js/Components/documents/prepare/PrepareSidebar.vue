@@ -1,8 +1,6 @@
 <script setup>
 import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle } from "lucide-vue-next";
 
-import SignerSelector from "./SignerSelector.vue";
-
 import { Button } from "@/components/ui/button";
 
 import {
@@ -65,10 +63,6 @@ const emit = defineEmits(["start-placement", "use-template", "discard-free-field
                 </p>
             </div>
 
-            <!-- Signer -->
-
-            <SignerSelector :signers="document.signers" :editor="editor" />
-
             <!-- Tools -->
 
             <div class="space-y-2">
@@ -80,7 +74,7 @@ const emit = defineEmits(["start-placement", "use-template", "discard-free-field
 
                 <Button
                     class="w-full"
-                    :disabled="!editor.selectedSigner"
+                    :disabled="editor.placingSignature"
                     @click="emit('start-placement')"
                 >
                     <FileSignature class="mr-2 h-4 w-4" />
@@ -124,8 +118,8 @@ const emit = defineEmits(["start-placement", "use-template", "discard-free-field
                             </p>
 
                             <p class="text-sm text-muted-foreground">
-                                Click anywhere on the PDF to place the signature
-                                field.
+                                Click anywhere on the PDF to place a field for
+                                <strong>{{ editor.selectedMember?.name }}</strong>.
                             </p>
                         </div>
                     </div>
@@ -166,18 +160,13 @@ const emit = defineEmits(["start-placement", "use-template", "discard-free-field
                     <Info class="mt-0.5 h-4 w-4 text-muted-foreground" />
 
                     <div class="space-y-2 text-sm text-muted-foreground">
-                        <p>1. Select a signer.</p>
+                        <p>1. Click <strong>Add Signature Field</strong> and choose a member.</p>
 
-                        <p>
-                            2. Click
-                            <strong>Add Signature Field</strong>.
-                        </p>
+                        <p>2. Click on the PDF to place the field.</p>
 
-                        <p>3. Click on the PDF.</p>
+                        <p>3. Drag and resize as needed.</p>
 
-                        <p>4. Drag and resize as needed.</p>
-
-                        <p>Or click <strong>Use Template</strong>, then click each field to assign a signer.</p>
+                        <p>Or click <strong>Use Template</strong>, then click each field to choose its signer.</p>
                     </div>
                 </div>
             </div>

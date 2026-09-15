@@ -24,8 +24,6 @@ import { useFeedback } from "@/Composables/useFeedback";
 const props = defineProps({
     document: Object,
 
-    members: Array,
-
     signerFieldCounts: Object,
 
     canSendForSignature: Boolean,
@@ -196,7 +194,6 @@ function downloadDocument() {
                 >
                     <SignersSection
                         :document="document"
-                        :members="members"
                         :signer-field-counts="signerFieldCounts"
                     />
                 </PageSection>
