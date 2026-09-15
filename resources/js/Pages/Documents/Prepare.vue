@@ -13,7 +13,7 @@ import PrepareSidebar from "@/Components/documents/prepare/PrepareSidebar.vue";
 import PrepareToolbar from "@/Components/documents/prepare/PrepareToolbar.vue";
 import PdfCanvas from "@/Components/documents/prepare/PdfCanvas.vue";
 import UseTemplateDialog from "@/Components/documents/prepare/UseTemplateDialog.vue";
-import AssignSignerDialog from "@/Components/documents/prepare/AssignSignerDialog.vue";
+import MemberPickerDialog from "@/Components/documents/prepare/MemberPickerDialog.vue";
 
 import LoadingOverlay from "@/Components/feedback/LoadingOverlay.vue";
 import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
@@ -34,6 +34,11 @@ const props = defineProps({
     document: {
         type: Object,
         required: true,
+    },
+
+    members: {
+        type: Array,
+        default: () => [],
     },
 
     templates: {
@@ -83,7 +88,9 @@ const editor = reactive({
 
     zoom: window.innerWidth < 768 ? 0.7 : 1.2,
 
-    selectedSigner: null,
+    selectedMember: null,
+
+    sequential: false,
 
     placingSignature: false,
 
@@ -130,6 +137,8 @@ const signatureFields = ref(
     })),
 );
 
+const signers = ref([...props.document.signers]);
+
 const freeFields = ref([]);
 
 /*
@@ -143,6 +152,8 @@ const canvasWidth = ref(0);
 const canvasHeight = ref(0);
 
 const pdfCanvas = ref(null);
+
+const workflowChanging = ref(false);
 
 /*
 |--------------------------------------------------------------------------
@@ -429,19 +440,81 @@ function discardFreeFields() {
 |--------------------------------------------------------------------------
 */
 
-const assignDialogOpen = ref(false);
+const memberDialogOpen = ref(false);
+
+const memberPickerPurpose = ref("place"); // "place" | "assign"
 
 const assigningField = ref(null);
 
 const assigning = ref(false);
 
-function openAssignDialog(field) {
-    assigningField.value = field;
-
-    assignDialogOpen.value = true;
+function openMemberPickerForPlacement() {
+    memberPickerPurpose.value = "place";
+    memberDialogOpen.value = true;
 }
 
-async function assignFreeField(signer) {
+function openAssignDialog(field) {
+    assigningField.value = field;
+    memberPickerPurpose.value = "assign";
+    memberDialogOpen.value = true;
+}
+
+function handleMemberSelected(member, sequential) {
+    editor.selectedMember = member;
+    editor.sequential = sequential;
+    memberDialogOpen.value = false;
+
+    if (memberPickerPurpose.value === "assign") {
+        assignFreeField(member);
+        return;
+    }
+
+    editor.placingSignature = true;
+}
+
+async function ensureSigner(member) {
+    const existing = signers.value.find((signer) => signer.email === member.email);
+
+    if (existing) {
+        return existing;
+    }
+
+    const response = await axios.post(route("documents.signers.store", props.document.id), {
+        member_id: member.id,
+        signing_order: editor.sequential ? 1 : 0,
+    });
+
+    signers.value.push(response.data.signer);
+
+    return response.data.signer;
+}
+
+async function updateSigningWorkflow(sequential) {
+    if (workflowChanging.value || signers.value.length === 0) {
+        return;
+    }
+
+    workflowChanging.value = true;
+
+    try {
+        const response = await axios.post(
+            route("documents.signers.update-workflow", props.document.id),
+            { sequential },
+        );
+
+        signers.value = response.data.signers;
+    } catch (error) {
+        console.error(error);
+        showError(
+            error.response?.data?.message ?? "Failed to update signing workflow.",
+            "Workflow Update Failed",
+        );
+    } finally {
+        workflowChanging.value = false;
+    }
+}
+
+async function assignFreeField(member) {
     const field = assigningField.value;
 
     if (!field || assigning.value) {
@@ -453,6 +526,8 @@ async function assignFreeField(signer) {
     showLoading("Assigning signer...");
 
     try {
+        const signer = await ensureSigner(member);
+
         const response = await axios.post(
             route("documents.signature-fields.store", props.document.id),
             {
@@ -475,7 +550,7 @@ async function assignFreeField(signer) {
 
         freeFields.value = freeFields.value.filter((f) => f.id !== field.id);
 
-        assignDialogOpen.value = false;
+        memberDialogOpen.value = false;
 
         assigningField.value = null;
     } catch (error) {
@@ -504,7 +579,7 @@ async function placeField(pageNumber, event) {
         return;
     }
 
-    if (!editor.selectedSigner) {
+    if (!editor.selectedMember) {
         return;
     }
 
@@ -523,10 +598,12 @@ async function placeField(pageNumber, event) {
     showLoading("Placing signature field...");
 
     try {
+        const signer = await ensureSigner(editor.selectedMember);
+
         const response = await axios.post(
             route("documents.signature-fields.store", props.document.id),
             {
-                signer_id: editor.selectedSigner.id,
+                signer_id: signer.id,
 
                 page: pageNumber,
 
@@ -837,11 +914,14 @@ onUnmounted(() => {
                     <PrepareSidebar
                         :document="document"
                         :editor="editor"
+                        :signers="signers"
                         :signature-fields="signatureFields"
                         :free-fields="freeFields"
-                        @start-placement="editor.placingSignature = true"
+                        :workflow-changing="workflowChanging"
+                        @start-placement="openMemberPickerForPlacement"
                         @use-template="templateDialogOpen = true"
                         @discard-free-fields="discardFreeFields"
+                        @update-workflow="updateSigningWorkflow"
                     />
                 </PageSection>
 
@@ -902,11 +982,12 @@ onUnmounted(() => {
             @use="applyTemplate"
         />
 
-        <AssignSignerDialog
-            v-model:open="assignDialogOpen"
-            :signers="document.signers"
+        <MemberPickerDialog
+            v-model:open="memberDialogOpen"
+            :members="members"
+            :signers="signers"
             :processing="assigning"
-            @assign="assignFreeField"
+            @select="handleMemberSelected"
         />
     </AppLayout>
 </template>
