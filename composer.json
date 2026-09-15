@@ -22,6 +22,7 @@
         "setasign/fpdf": "^1.8",
         "setasign/fpdi": "^2.6",
         "stripe/stripe-php": "^21.3",
+        "tecnickcom/tcpdf": "^6.7",
         "tightenco/ziggy": "^2.0"
     },
     "require-dev": {

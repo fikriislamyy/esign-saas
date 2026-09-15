@@ -2,6 +2,20 @@
 
 /*
 |--------------------------------------------------------------------------
+| TCPDF configuration
+|--------------------------------------------------------------------------
+|
+| K_TCPDF_EXTERNAL_CONFIG makes TCPDF skip its bundled config file, which
+| would otherwise redefine K_TCPDF_THROW_EXCEPTION_ERROR and raise a
+| warning. tcpdf_autoconfig.php fills in every other constant we do not set.
+|
+*/
+
+define('K_TCPDF_EXTERNAL_CONFIG', true);
+define('K_TCPDF_THROW_EXCEPTION_ERROR', true);
+
+/*
+|--------------------------------------------------------------------------
 | Create The Application
 |--------------------------------------------------------------------------
 |

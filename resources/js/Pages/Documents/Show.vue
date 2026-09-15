@@ -90,10 +90,15 @@ function sendDocument() {
         onError: (errors) => {
             console.error(errors);
 
-            showError(
+            const message =
+                errors.wallet ??
                 errors.document ??
-                    "The document could not be sent for signature.",
-                "Unable to Send",
+                Object.values(errors)[0] ??
+                "The document could not be sent for signature.";
+
+            showError(
+                message,
+                errors.wallet ? "Insufficient Balance" : "Unable to Send",
             );
         },
 
