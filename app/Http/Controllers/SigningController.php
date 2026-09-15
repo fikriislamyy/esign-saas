@@ -12,7 +12,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
-use setasign\Fpdi\Tcpdf\Fpdi;
 
 class SigningController extends Controller
 {
@@ -243,272 +242,152 @@ class SigningController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        DB::transaction(function () use (
-            $document,
-            $signer,
-            $validated,
-            $requiredFields,
-            $signaturePlotCount,
-            $requiredUsdCents,
-            $walletService,
-            $pricingService,
-        ) {
-            \Log::info(
-                'SIGNING: wallet debit starting',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
-                    'signature_plot_count' => $signaturePlotCount,
-                    'required_usd_cents' => $requiredUsdCents,
-                ]
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Debit wallet
-            |--------------------------------------------------------------------------
-            */
-
-            $walletTransaction = $walletService->debit(
-                organization: $document->organization,
-                sourceCurrency: 'USD',
-                sourceAmount: $requiredUsdCents / 100,
-                exchangeRate: 1,
-                amountUsdCents: $requiredUsdCents,
-                type: 'signature',
-                description: 'Document signature',
-                reference: $signer,
-                createdBy: null,
-                metadata: [
-                    'document_id' => $document->id,
-                    'document_signer_id' => $signer->id,
-                    'signature_plot_count' => $signaturePlotCount,
-                    'price_per_plot_usd_cents' => $pricingService
-                        ->pricePerSignaturePlot(),
-                ],
-            );
-
-            \Log::info(
-                'SIGNING: wallet debited',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
-                    'wallet_transaction_id' => $walletTransaction->id,
-                    'amount_usd_cents' => $walletTransaction
-                        ->amount_usd_cents,
-                    'balance_after_usd_cents' => $walletTransaction
-                        ->balance_after_usd_cents,
-                ]
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Save signatures
-            |--------------------------------------------------------------------------
-            */
-
-            foreach (
-                $validated['signatures'] as $fieldId => $signature
-            ) {
-                $field = $requiredFields
-                    ->firstWhere('id', $fieldId);
-
-                $field->update([
-                    'signature_image' => $signature['image'],
-                    'signed_at' => now(),
-                ]);
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Mark signer as signed
-            |--------------------------------------------------------------------------
-            */
-
-            $signer->update([
-                'signed_at' => now(),
-                'status' => 'signed',
-            ]);
-
-            \Log::info(
-                'SIGNING: signer marked signed',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
-                ]
-            );
-        });
-
-        /*
-        |--------------------------------------------------------------------------
-        | Notify next signer
-        |--------------------------------------------------------------------------
-        */
-
-        $isSequential = $document->signers()
-            ->where('signing_order', '>', 0)
-            ->exists();
-
-        \Log::info('SIGNING: workflow check', [
-            'document_id' => $document->id,
-            'is_sequential' => $isSequential,
-            'current_signer_id' => $signer->id,
-            'current_signer_name' => $signer->name,
-            'current_signer_email' => $signer->email,
-            'current_signer_order' => $signer->signing_order,
-        ]);
-
-        if ($isSequential) {
-            $allSigners = $document->signers()
-                ->orderBy('signing_order')
-                ->get();
-
-            \Log::info(
-                'SIGNING: all signer states',
-                [
-                    'document_id' => $document->id,
-                    'signers' => $allSigners
-                        ->map(fn ($item) => [
-                            'id' => $item->id,
-                            'name' => $item->name,
-                            'email' => $item->email,
-                            'signing_order' => $item->signing_order,
-                            'status' => $item->status,
-                            'signed_at' => $item->signed_at,
-                            'has_token' => ! empty($item->token),
-                        ])
-                        ->values()
-                        ->toArray(),
-                ]
-            );
-
-            $nextSigner = $document->signers()
-                ->whereNull('signed_at')
-                ->where(
-                    'signing_order',
-                    '>',
-                    $signer->signing_order
-                )
-                ->orderBy('signing_order', 'asc')
-                ->first();
-
-            \Log::info(
-                'SIGNING: next signer lookup',
-                [
-                    'document_id' => $document->id,
-                    'current_signer_id' => $signer->id,
-                    'current_signer_order' => $signer->signing_order,
-                    'next_signer_id' => $nextSigner?->id,
-                    'next_signer_name' => $nextSigner?->name,
-                    'next_signer_email' => $nextSigner?->email,
-                    'next_signer_order' => $nextSigner?->signing_order,
-                ]
-            );
-
-            if ($nextSigner) {
-                try {
-                    if (! $nextSigner->token) {
-                        $nextSigner->update([
-                            'token' => \Illuminate\Support\Str::uuid(),
-                        ]);
-
-                        $nextSigner->refresh();
-                    }
-
-                    $otp = $this->otpService->generate(
-                        $nextSigner
-                    );
-
-                    Mail::to($nextSigner->email)
-                        ->send(
-                            new SignatureRequestMail(
-                                $nextSigner->load(
-                                    'document'
-                                ),
-                                $otp
-                            )
-                        );
-
-                    $nextSigner->update([
-                        'status' => 'email_sent',
-                    ]);
-
-                    \Log::info(
-                        'SIGNING: next signer notified',
-                        [
-                            'document_id' => $document->id,
-                            'signer_id' => $nextSigner->id,
-                            'email' => $nextSigner->email,
-                        ]
-                    );
-                } catch (\Throwable $e) {
-                    \Log::error(
-                        'SIGNING: failed to notify next signer',
-                        [
-                            'document_id' => $document->id,
-                            'current_signer_id' => $signer->id,
-                            'next_signer_id' => $nextSigner->id,
-                            'exception' => get_class($e),
-                            'message' => $e->getMessage(),
-                            'file' => $e->getFile(),
-                            'line' => $e->getLine(),
-                            'trace' => $e->getTraceAsString(),
-                        ]
-                    );
-
-                    throw $e;
-                }
-            }
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Reload latest data
-        |--------------------------------------------------------------------------
-        */
-
-        $document = $document->fresh([
-            'signatureFields',
-        ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Storage configuration
-        |--------------------------------------------------------------------------
-        */
-
-        $documentDisk = env(
-            'DOCUMENTS_DISK',
-            'documents'
-        );
-
-        $tempDirectory = sys_get_temp_dir();
-
-        if (! is_dir($tempDirectory)) {
-            mkdir(
-                $tempDirectory,
-                0755,
-                true
-            );
-        }
-
-        $sourcePath = $tempDirectory.
-            '/'.
-            $document->id.
-            '-source.pdf';
-
-        $temporarySignedPath = $tempDirectory.
-            '/'.
-            $document->id.
-            '-signed.pdf';
-
-        /*
-        |--------------------------------------------------------------------------
-        | Generate signed PDF
-        |--------------------------------------------------------------------------
-        */
+        DB::beginTransaction();
 
         try {
+            DB::transaction(function () use (
+                $document,
+                $signer,
+                $validated,
+                $requiredFields,
+                $signaturePlotCount,
+                $requiredUsdCents,
+                $walletService,
+                $pricingService,
+            ) {
+                \Log::info(
+                    'SIGNING: wallet debit starting',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                        'signature_plot_count' => $signaturePlotCount,
+                        'required_usd_cents' => $requiredUsdCents,
+                    ]
+                );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Debit wallet
+                |--------------------------------------------------------------------------
+                */
+
+                $walletTransaction = $walletService->debit(
+                    organization: $document->organization,
+                    sourceCurrency: 'USD',
+                    sourceAmount: $requiredUsdCents / 100,
+                    exchangeRate: 1,
+                    amountUsdCents: $requiredUsdCents,
+                    type: 'signature',
+                    description: 'Document signature',
+                    reference: $signer,
+                    createdBy: null,
+                    metadata: [
+                        'document_id' => $document->id,
+                        'document_signer_id' => $signer->id,
+                        'signature_plot_count' => $signaturePlotCount,
+                        'price_per_plot_usd_cents' => $pricingService
+                            ->pricePerSignaturePlot(),
+                    ],
+                );
+
+                \Log::info(
+                    'SIGNING: wallet debited',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                        'wallet_transaction_id' => $walletTransaction->id,
+                        'amount_usd_cents' => $walletTransaction
+                            ->amount_usd_cents,
+                        'balance_after_usd_cents' => $walletTransaction
+                            ->balance_after_usd_cents,
+                    ]
+                );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Save signatures
+                |--------------------------------------------------------------------------
+                */
+
+                foreach (
+                    $validated['signatures'] as $fieldId => $signature
+                ) {
+                    $field = $requiredFields
+                        ->firstWhere('id', $fieldId);
+
+                    $field->update([
+                        'signature_image' => $signature['image'],
+                        'signed_at' => now(),
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Mark signer as signed
+                |--------------------------------------------------------------------------
+                */
+
+                $signer->update([
+                    'signed_at' => now(),
+                    'status' => 'signed',
+                ]);
+
+                \Log::info(
+                    'SIGNING: signer marked signed',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                    ]
+                );
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Reload latest data
+            |--------------------------------------------------------------------------
+            */
+
+            $document = $document->fresh([
+                'signatureFields',
+            ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Storage configuration
+            |--------------------------------------------------------------------------
+            */
+
+            $documentDisk = env(
+                'DOCUMENTS_DISK',
+                'documents'
+            );
+
+            $tempDirectory = sys_get_temp_dir();
+
+            if (! is_dir($tempDirectory)) {
+                mkdir(
+                    $tempDirectory,
+                    0755,
+                    true
+                );
+            }
+
+            $sourcePath = $tempDirectory.
+                '/'.
+                $document->id.
+                '-source.pdf';
+
+            $temporarySignedPath = $tempDirectory.
+                '/'.
+                $document->id.
+                '-signed.pdf';
+
+            /*
+            |--------------------------------------------------------------------------
+            | Generate signed PDF
+            |--------------------------------------------------------------------------
+            */
+
             /*
             |--------------------------------------------------------------------------
             | Validate PDF signing certificate
@@ -570,7 +449,7 @@ class SigningController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            $pdf = new Fpdi;
+            $pdf = new \setasign\Fpdi\Tcpdf\Fpdi;
 
             $pdf->setPrintHeader(false);
             $pdf->setPrintFooter(false);
@@ -751,9 +630,11 @@ class SigningController extends Controller
                     : 'sent',
             ]);
 
-            return response()->json([
-                'success' => true,
-            ]);
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
         } finally {
             /*
             |--------------------------------------------------------------------------
@@ -775,6 +656,132 @@ class SigningController extends Controller
                 unlink($temporarySignedPath);
             }
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Notify next signer
+        |--------------------------------------------------------------------------
+        */
+
+        $isSequential = $document->signers()
+            ->where('signing_order', '>', 0)
+            ->exists();
+
+        \Log::info('SIGNING: workflow check', [
+            'document_id' => $document->id,
+            'is_sequential' => $isSequential,
+            'current_signer_id' => $signer->id,
+            'current_signer_name' => $signer->name,
+            'current_signer_email' => $signer->email,
+            'current_signer_order' => $signer->signing_order,
+        ]);
+
+        if ($isSequential) {
+            $allSigners = $document->signers()
+                ->orderBy('signing_order')
+                ->get();
+
+            \Log::info(
+                'SIGNING: all signer states',
+                [
+                    'document_id' => $document->id,
+                    'signers' => $allSigners
+                        ->map(fn ($item) => [
+                            'id' => $item->id,
+                            'name' => $item->name,
+                            'email' => $item->email,
+                            'signing_order' => $item->signing_order,
+                            'status' => $item->status,
+                            'signed_at' => $item->signed_at,
+                            'has_token' => ! empty($item->token),
+                        ])
+                        ->values()
+                        ->toArray(),
+                ]
+            );
+
+            $nextSigner = $document->signers()
+                ->whereNull('signed_at')
+                ->where(
+                    'signing_order',
+                    '>',
+                    $signer->signing_order
+                )
+                ->orderBy('signing_order', 'asc')
+                ->first();
+
+            \Log::info(
+                'SIGNING: next signer lookup',
+                [
+                    'document_id' => $document->id,
+                    'current_signer_id' => $signer->id,
+                    'current_signer_order' => $signer->signing_order,
+                    'next_signer_id' => $nextSigner?->id,
+                    'next_signer_name' => $nextSigner?->name,
+                    'next_signer_email' => $nextSigner?->email,
+                    'next_signer_order' => $nextSigner?->signing_order,
+                ]
+            );
+
+            if ($nextSigner) {
+                try {
+                    if (! $nextSigner->token) {
+                        $nextSigner->update([
+                            'token' => \Illuminate\Support\Str::uuid(),
+                        ]);
+
+                        $nextSigner->refresh();
+                    }
+
+                    $otp = $this->otpService->generate(
+                        $nextSigner
+                    );
+
+                    Mail::to($nextSigner->email)
+                        ->send(
+                            new SignatureRequestMail(
+                                $nextSigner->load(
+                                    'document'
+                                ),
+                                $otp
+                            )
+                        );
+
+                    $nextSigner->update([
+                        'status' => 'email_sent',
+                    ]);
+
+                    \Log::info(
+                        'SIGNING: next signer notified',
+                        [
+                            'document_id' => $document->id,
+                            'signer_id' => $nextSigner->id,
+                            'email' => $nextSigner->email,
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    \Log::error(
+                        'SIGNING: failed to notify next signer',
+                        [
+                            'document_id' => $document->id,
+                            'current_signer_id' => $signer->id,
+                            'next_signer_id' => $nextSigner->id,
+                            'exception' => get_class($e),
+                            'message' => $e->getMessage(),
+                            'file' => $e->getFile(),
+                            'line' => $e->getLine(),
+                            'trace' => $e->getTraceAsString(),
+                        ]
+                    );
+
+                    throw $e;
+                }
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+        ]);
     }
 
     public function verifyOtp(

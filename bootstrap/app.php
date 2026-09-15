@@ -2,6 +2,18 @@
 
 /*
 |--------------------------------------------------------------------------
+| Define TCPDF Exception Handling
+|--------------------------------------------------------------------------
+|
+| Force TCPDF to throw exceptions instead of calling die() on errors.
+| This is defined here before TCPDF is autoloaded so it takes effect.
+|
+*/
+
+define('K_TCPDF_THROW_EXCEPTION_ERROR', true);
+
+/*
+|--------------------------------------------------------------------------
 | Create The Application
 |--------------------------------------------------------------------------
 |
