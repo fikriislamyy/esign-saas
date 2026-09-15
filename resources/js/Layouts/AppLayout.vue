@@ -42,8 +42,8 @@ function toggleSidebar() {
 </script>
 
 <template>
-    <div class="min-h-screen bg-background">
-        <div class="flex">
+    <div class="bg-background">
+        <div class="flex min-h-screen">
             <AppSidebar :collapsed="collapsed" :hide-text="hideSidebarText" />
 
             <div class="flex min-w-0 flex-1 flex-col">
