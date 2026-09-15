@@ -25,9 +25,12 @@ const progress = computed(() => {
 <template>
     <div class="space-y-2">
         <div class="flex items-center justify-between gap-4 text-sm">
-            <span class="font-medium"> Signing progress </span>
+            <div>
+                <span class="font-medium">Signing progress</span>
+                <span class="ml-2 text-muted-foreground">{{ signed }} of {{ total }}</span>
+            </div>
 
-            <span class="text-muted-foreground"> {{ progress }}% </span>
+            <span class="font-semibold text-primary">{{ progress }}%</span>
         </div>
 
         <div class="h-2 overflow-hidden rounded-full bg-muted">

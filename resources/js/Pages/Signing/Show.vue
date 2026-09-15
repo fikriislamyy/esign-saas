@@ -13,7 +13,7 @@ import axios from "axios";
 
 import * as pdfjsLib from "pdfjs-dist";
 
-import { CheckCircle2, Loader2 } from "lucide-vue-next";
+import { CheckCircle2, Loader2, Lock, ShieldCheck } from "lucide-vue-next";
 
 import { Button } from "@/components/ui/button";
 
@@ -202,8 +202,8 @@ async function renderPage() {
     // Use measured workspace width when available.
     // Otherwise use the browser width for the initial render.
     const availableWidth = workspaceWidth.value
-        ? workspaceWidth.value - 48
-        : Math.min(window.innerWidth - 48, 1000);
+        ? workspaceWidth.value - workspacePadding
+        : Math.min(window.innerWidth - workspacePadding, 1000);
 
     const scale = Math.min(
         Math.max(availableWidth, 280) / originalViewport.width,
@@ -478,10 +478,37 @@ onBeforeUnmount(() => {
 <template>
     <Head :title="document.name" />
 
-    <main class="min-h-screen bg-background">
-        <div class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 sm:py-10">
-            <!-- Header -->
+    <main class="flex min-h-screen flex-col bg-muted/30">
+        <!-- Brand bar -->
 
+        <div class="border-b bg-background/80 backdrop-blur">
+            <div
+                class="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6"
+            >
+                <div class="flex items-center gap-2">
+                    <div
+                        class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground"
+                    >
+                        E
+                    </div>
+
+                    <span class="text-sm font-semibold">EZSign</span>
+                </div>
+
+                <div
+                    class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                    <Lock class="h-3.5 w-3.5" />
+                    Secure signing session
+                </div>
+            </div>
+        </div>
+
+        <!-- Content -->
+
+        <div
+            class="mx-auto w-full max-w-7xl flex-1 space-y-4 px-4 py-4 sm:space-y-6 sm:px-6 sm:py-8"
+        >
             <SigningHeader
                 :document="document"
                 :signer="signer"
@@ -489,11 +516,9 @@ onBeforeUnmount(() => {
                 :total-fields="myFields.length"
             />
 
-            <!-- Progress -->
-
             <SigningProgress :signed="signedCount" :total="myFields.length" />
 
-            <!-- Signing Workspace -->
+            <!-- Workspace -->
 
             <div class="overflow-hidden rounded-xl border bg-card shadow-sm">
                 <SigningToolbar
@@ -507,60 +532,66 @@ onBeforeUnmount(() => {
                     @next-signature="nextSignature"
                 />
 
-                <!-- Finish -->
-
-                <div
-                    class="flex flex-col gap-3 rounded-xl border bg-card p-5 sm:flex-row sm:items-center sm:justify-between"
-                >
-                    <div>
-                        <p class="font-medium">
-                            {{
-                                allFieldsSigned
-                                    ? "Document ready to submit"
-                                    : "Complete all signature fields"
-                            }}
-                        </p>
-
-                        <p class="mt-1 text-sm text-muted-foreground">
-                            {{
-                                allFieldsSigned
-                                    ? "Review your signatures, then submit the signed document."
-                                    : `${signedCount} of ${myFields.length} required signatures completed.`
-                            }}
-                        </p>
-                    </div>
-
-                    <Button
-                        size="lg"
-                        class="w-full shrink-0 sm:w-auto"
-                        :disabled="!allFieldsSigned || signing"
-                        @click="finishSigning"
-                    >
-                        <Loader2
-                            v-if="signing"
-                            class="mr-2 h-4 w-4 animate-spin"
-                        />
-
-                        <CheckCircle2 v-else class="mr-2 h-4 w-4" />
-
-                        {{ signing ? "Submitting..." : "Finish Signing" }}
-                    </Button>
-                </div>
-
                 <SigningCanvas
                     :fields="pageFields"
+                    :active-field-id="sortedFields[currentFieldIndex]?.id ?? null"
                     :canvas-width="canvasWidth"
                     :canvas-height="canvasHeight"
                     @sign="openSignatureDialog"
                     @resize="handleWorkspaceResize"
                 >
                     <template #canvas>
-                        <canvas
-                            ref="pdfCanvas"
-                            class="block bg-white shadow-sm"
-                        />
+                        <canvas ref="pdfCanvas" class="block bg-white shadow-sm" />
                     </template>
                 </SigningCanvas>
+            </div>
+
+            <!-- Trust footer -->
+
+            <p
+                class="flex items-center justify-center gap-2 text-center text-xs text-muted-foreground"
+            >
+                <ShieldCheck class="h-3.5 w-3.5" />
+                Signed documents are sealed with a digital certificate.
+            </p>
+        </div>
+
+        <!-- Sticky action bar -->
+
+        <div
+            class="sticky bottom-0 z-20 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+        >
+            <div
+                class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6"
+            >
+                <div class="min-w-0">
+                    <p class="truncate text-sm font-medium">
+                        {{
+                            allFieldsSigned
+                                ? "Ready to submit"
+                                : `${signedCount} of ${myFields.length} signed`
+                        }}
+                    </p>
+
+                    <p class="hidden truncate text-xs text-muted-foreground sm:block">
+                        {{
+                            allFieldsSigned
+                                ? "Review your signatures, then submit."
+                                : "Tap each highlighted field to sign."
+                        }}
+                    </p>
+                </div>
+
+                <Button
+                    size="lg"
+                    class="shrink-0"
+                    :disabled="!allFieldsSigned || signing"
+                    @click="finishSigning"
+                >
+                    <Loader2 v-if="signing" class="mr-2 h-4 w-4 animate-spin" />
+                    <CheckCircle2 v-else class="mr-2 h-4 w-4" />
+                    {{ signing ? "Submitting..." : "Finish Signing" }}
+                </Button>
             </div>
         </div>
     </main>

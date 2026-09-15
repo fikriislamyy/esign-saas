@@ -28,21 +28,21 @@ defineProps({
 
 <template>
     <div
-        class="flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-center sm:justify-between"
+        class="flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-center sm:justify-between sm:pb-6 sm:gap-5"
     >
-        <div class="flex items-start gap-4">
+        <div class="flex items-start gap-3 sm:gap-4">
             <div
-                class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border bg-muted/40"
+                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-muted/40 sm:h-12 sm:w-12 sm:rounded-xl"
             >
-                <FileSignature class="h-6 w-6 text-primary" />
+                <FileSignature class="h-5 w-5 text-primary sm:h-6 sm:w-6" />
             </div>
 
             <div class="min-w-0">
-                <h1 class="truncate text-2xl font-bold tracking-tight">
+                <h1 class="truncate text-xl font-bold tracking-tight sm:text-2xl">
                     {{ document.name }}
                 </h1>
 
-                <p class="mt-1 text-sm text-muted-foreground">
+                <p class="mt-0.5 text-xs text-muted-foreground sm:mt-1 sm:text-sm">
                     Signature requested for
                     <span class="font-medium text-foreground">
                         {{ signer.name }}
@@ -51,10 +51,10 @@ defineProps({
             </div>
         </div>
 
-        <Badge variant="outline" class="w-fit gap-2 px-3 py-1.5">
-            <CheckCircle2 class="h-4 w-4" />
+        <Badge variant="outline" class="w-fit gap-2 px-2.5 py-1 text-xs sm:px-3 sm:py-1.5 sm:text-sm">
+            <CheckCircle2 class="h-3.5 w-3.5 sm:h-4 sm:w-4" />
 
-            {{ signedCount }} of {{ totalFields }} completed
+            <span class="whitespace-nowrap">{{ signedCount }}/{{ totalFields }}</span>
         </Badge>
     </div>
 </template>

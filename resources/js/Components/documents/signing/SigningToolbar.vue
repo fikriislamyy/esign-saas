@@ -35,7 +35,7 @@ const emit = defineEmits([
 
 <template>
     <div
-        class="flex flex-col gap-3 border-b bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+        class="sticky top-0 z-10 flex items-center justify-between gap-2 border-b bg-card/95 p-2 backdrop-blur sm:p-3"
     >
         <!-- Page navigation -->
 
@@ -43,6 +43,7 @@ const emit = defineEmits([
             <Button
                 size="icon"
                 variant="outline"
+                class="h-10 w-10"
                 :disabled="currentPage <= 1"
                 @click="emit('previousPage')"
             >
@@ -50,14 +51,15 @@ const emit = defineEmits([
             </Button>
 
             <div
-                class="flex h-9 min-w-[90px] items-center justify-center rounded-md border bg-background px-3 text-sm font-medium"
+                class="flex h-9 min-w-[72px] items-center justify-center rounded-md border bg-background px-3 text-sm font-medium"
             >
-                Page {{ currentPage }} / {{ totalPages }}
+                <span class="hidden sm:inline">Page&nbsp;</span>{{ currentPage }} / {{ totalPages }}
             </div>
 
             <Button
                 size="icon"
                 variant="outline"
+                class="h-10 w-10"
                 :disabled="currentPage >= totalPages"
                 @click="emit('nextPage')"
             >
@@ -71,6 +73,7 @@ const emit = defineEmits([
             <Button
                 size="icon"
                 variant="outline"
+                class="h-10 w-10"
                 :disabled="currentFieldIndex <= 0"
                 @click="emit('previousSignature')"
             >
@@ -78,7 +81,7 @@ const emit = defineEmits([
             </Button>
 
             <div
-                class="flex h-9 min-w-[120px] items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm"
+                class="flex h-9 min-w-[84px] items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm"
             >
                 <LocateFixed class="h-4 w-4 text-muted-foreground" />
 
@@ -90,6 +93,7 @@ const emit = defineEmits([
             <Button
                 size="icon"
                 variant="outline"
+                class="h-10 w-10"
                 :disabled="currentFieldIndex >= totalFields - 1"
                 @click="emit('nextSignature')"
             >

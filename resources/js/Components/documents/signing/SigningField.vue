@@ -18,6 +18,11 @@ const props = defineProps({
         type: Number,
         required: true,
     },
+
+    isActive: {
+        type: Boolean,
+        default: false,
+    },
 });
 
 const emit = defineEmits(["sign"]);
@@ -36,6 +41,7 @@ const style = computed(() => ({
         class="absolute flex items-center justify-center overflow-hidden rounded-lg border-2 border-slate-500 bg-slate-100 text-slate-900 shadow-sm transition-all duration-200 hover:bg-slate-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
         :class="{
             'border-slate-400 bg-slate-50': field.signature,
+            'animate-pulse border-blue-500': isActive && !field.signature,
         }"
         :style="style"
         @click.stop="emit('sign', field)"
