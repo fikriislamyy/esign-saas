@@ -153,6 +153,8 @@ const canvasHeight = ref(0);
 
 const pdfCanvas = ref(null);
 
+const workflowChanging = ref(false);
+
 /*
 |--------------------------------------------------------------------------
 | Fields
@@ -485,6 +487,31 @@ async function ensureSigner(member) {
     signers.value.push(response.data.signer);
 
     return response.data.signer;
+}
+
+async function updateSigningWorkflow(sequential) {
+    if (workflowChanging.value || signers.value.length === 0) {
+        return;
+    }
+
+    workflowChanging.value = true;
+
+    try {
+        const response = await axios.post(
+            route("documents.signers.update-workflow", props.document.id),
+            { sequential },
+        );
+
+        signers.value = response.data.signers;
+    } catch (error) {
+        console.error(error);
+        showError(
+            error.response?.data?.message ?? "Failed to update signing workflow.",
+            "Workflow Update Failed",
+        );
+    } finally {
+        workflowChanging.value = false;
+    }
 }
 
 async function assignFreeField(member) {
@@ -887,11 +914,14 @@ onUnmounted(() => {
                     <PrepareSidebar
                         :document="document"
                         :editor="editor"
+                        :signers="signers"
                         :signature-fields="signatureFields"
                         :free-fields="freeFields"
+                        :workflow-changing="workflowChanging"
                         @start-placement="openMemberPickerForPlacement"
                         @use-template="templateDialogOpen = true"
                         @discard-free-fields="discardFreeFields"
+                        @update-workflow="updateSigningWorkflow"
                     />
                 </PageSection>
 

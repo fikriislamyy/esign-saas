@@ -1,7 +1,9 @@
 <script setup>
-import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle } from "lucide-vue-next";
+import { FileSignature, MousePointerClick, Info, LayoutTemplate, AlertTriangle, ChevronDown } from "lucide-vue-next";
+import { ref, computed } from "vue";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 import {
     Card,
@@ -22,6 +24,11 @@ const props = defineProps({
         required: true,
     },
 
+    signers: {
+        type: Array,
+        default: () => [],
+    },
+
     signatureFields: {
         type: Array,
         default: () => [],
@@ -31,9 +38,21 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+
+    workflowChanging: {
+        type: Boolean,
+        default: false,
+    },
 });
 
-const emit = defineEmits(["start-placement", "use-template", "discard-free-fields"]);
+const emit = defineEmits(["start-placement", "use-template", "discard-free-fields", "update-workflow"]);
+
+const expandSigners = ref(false);
+
+const isSequential = computed(() => {
+    if (props.signers.length === 0) return false;
+    return props.signers[0].signing_order > 0;
+});
 </script>
 
 <template>
@@ -61,6 +80,52 @@ const emit = defineEmits(["start-placement", "use-template", "discard-free-field
                         · {{ freeFields.length }} unassigned
                     </span>
                 </p>
+            </div>
+
+            <!-- Signers Workflow -->
+
+            <div v-if="signers.length > 0" class="space-y-3">
+                <button
+                    type="button"
+                    @click="expandSigners = !expandSigners"
+                    class="flex w-full items-center justify-between rounded-xl border p-3 text-left hover:bg-muted/50"
+                >
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                            Signers
+                        </p>
+                        <p class="mt-1 text-sm font-medium">
+                            {{ isSequential ? "Sequential" : "Parallel" }} Signing
+                        </p>
+                    </div>
+                    <ChevronDown
+                        class="h-4 w-4 transition-transform"
+                        :class="{ 'rotate-180': expandSigners }"
+                    />
+                </button>
+
+                <div v-if="expandSigners" class="space-y-2 rounded-xl border p-3">
+                    <div class="space-y-2">
+                        <p v-for="signer in signers" :key="signer.id" class="text-xs text-muted-foreground">
+                            <span class="font-medium">{{ signer.name }}</span>
+                            <span v-if="isSequential" class="ml-1 text-primary">
+                                #{{ signer.signing_order }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <div class="border-t pt-2">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            class="w-full text-xs"
+                            :disabled="workflowChanging"
+                            @click="emit('update-workflow', !isSequential)"
+                        >
+                            Switch to {{ isSequential ? "Parallel" : "Sequential" }}
+                        </Button>
+                    </div>
+                </div>
             </div>
 
             <!-- Tools -->

@@ -116,6 +116,45 @@ class DocumentSignerController extends Controller
         return back();
     }
 
+    public function updateWorkflow(
+        Request $request,
+        Document $document
+    ) {
+        abort_unless(
+            $document->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        abort_if(
+            $document->status !== 'draft',
+            403,
+            'Workflow can only be changed while the document is a draft.'
+        );
+
+        $request->validate([
+            'sequential' => ['required', 'boolean'],
+        ]);
+
+        $signers = $document->signers()->orderBy('signing_order')->get();
+
+        if ($signers->isEmpty()) {
+            return response()->json(['message' => 'No signers to update']);
+        }
+
+        $sequential = $request->boolean('sequential');
+
+        foreach ($signers as $index => $signer) {
+            $signer->update([
+                'signing_order' => $sequential ? $index + 1 : 0,
+            ]);
+        }
+
+        return response()->json([
+            'signers' => $signers->fresh(),
+            'sequential' => $sequential,
+        ]);
+    }
+
     public function destroy(DocumentSigner $signer)
     {
         $document = $signer->document;
