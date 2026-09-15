@@ -12,7 +12,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
-use setasign\Fpdi\Tcpdf\Fpdi;
 
 class SigningController extends Controller
 {
@@ -243,101 +242,420 @@ class SigningController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        DB::transaction(function () use (
-            $document,
-            $signer,
-            $validated,
-            $requiredFields,
-            $signaturePlotCount,
-            $requiredUsdCents,
-            $walletService,
-            $pricingService,
-        ) {
-            \Log::info(
-                'SIGNING: wallet debit starting',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
-                    'signature_plot_count' => $signaturePlotCount,
-                    'required_usd_cents' => $requiredUsdCents,
-                ]
-            );
+        DB::beginTransaction();
 
-            /*
-            |--------------------------------------------------------------------------
-            | Debit wallet
-            |--------------------------------------------------------------------------
-            */
-
-            $walletTransaction = $walletService->debit(
-                organization: $document->organization,
-                sourceCurrency: 'USD',
-                sourceAmount: $requiredUsdCents / 100,
-                exchangeRate: 1,
-                amountUsdCents: $requiredUsdCents,
-                type: 'signature',
-                description: 'Document signature',
-                reference: $signer,
-                createdBy: null,
-                metadata: [
-                    'document_id' => $document->id,
-                    'document_signer_id' => $signer->id,
-                    'signature_plot_count' => $signaturePlotCount,
-                    'price_per_plot_usd_cents' => $pricingService
-                        ->pricePerSignaturePlot(),
-                ],
-            );
-
-            \Log::info(
-                'SIGNING: wallet debited',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
-                    'wallet_transaction_id' => $walletTransaction->id,
-                    'amount_usd_cents' => $walletTransaction
-                        ->amount_usd_cents,
-                    'balance_after_usd_cents' => $walletTransaction
-                        ->balance_after_usd_cents,
-                ]
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Save signatures
-            |--------------------------------------------------------------------------
-            */
-
-            foreach (
-                $validated['signatures'] as $fieldId => $signature
+        try {
+            DB::transaction(function () use (
+                $document,
+                $signer,
+                $validated,
+                $requiredFields,
+                $signaturePlotCount,
+                $requiredUsdCents,
+                $walletService,
+                $pricingService,
             ) {
-                $field = $requiredFields
-                    ->firstWhere('id', $fieldId);
+                \Log::info(
+                    'SIGNING: wallet debit starting',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                        'signature_plot_count' => $signaturePlotCount,
+                        'required_usd_cents' => $requiredUsdCents,
+                    ]
+                );
 
-                $field->update([
-                    'signature_image' => $signature['image'],
+                /*
+                |--------------------------------------------------------------------------
+                | Debit wallet
+                |--------------------------------------------------------------------------
+                */
+
+                $walletTransaction = $walletService->debit(
+                    organization: $document->organization,
+                    sourceCurrency: 'USD',
+                    sourceAmount: $requiredUsdCents / 100,
+                    exchangeRate: 1,
+                    amountUsdCents: $requiredUsdCents,
+                    type: 'signature',
+                    description: 'Document signature',
+                    reference: $signer,
+                    createdBy: null,
+                    metadata: [
+                        'document_id' => $document->id,
+                        'document_signer_id' => $signer->id,
+                        'signature_plot_count' => $signaturePlotCount,
+                        'price_per_plot_usd_cents' => $pricingService
+                            ->pricePerSignaturePlot(),
+                    ],
+                );
+
+                \Log::info(
+                    'SIGNING: wallet debited',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                        'wallet_transaction_id' => $walletTransaction->id,
+                        'amount_usd_cents' => $walletTransaction
+                            ->amount_usd_cents,
+                        'balance_after_usd_cents' => $walletTransaction
+                            ->balance_after_usd_cents,
+                    ]
+                );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Save signatures
+                |--------------------------------------------------------------------------
+                */
+
+                foreach (
+                    $validated['signatures'] as $fieldId => $signature
+                ) {
+                    $field = $requiredFields
+                        ->firstWhere('id', $fieldId);
+
+                    $field->update([
+                        'signature_image' => $signature['image'],
+                        'signed_at' => now(),
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Mark signer as signed
+                |--------------------------------------------------------------------------
+                */
+
+                $signer->update([
                     'signed_at' => now(),
+                    'status' => 'signed',
                 ]);
+
+                \Log::info(
+                    'SIGNING: signer marked signed',
+                    [
+                        'document_id' => $document->id,
+                        'signer_id' => $signer->id,
+                    ]
+                );
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Reload latest data
+            |--------------------------------------------------------------------------
+            */
+
+            $document = $document->fresh([
+                'signatureFields',
+            ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Storage configuration
+            |--------------------------------------------------------------------------
+            */
+
+            $documentDisk = env(
+                'DOCUMENTS_DISK',
+                'documents'
+            );
+
+            $tempDirectory = sys_get_temp_dir();
+
+            if (! is_dir($tempDirectory)) {
+                mkdir(
+                    $tempDirectory,
+                    0755,
+                    true
+                );
+            }
+
+            $sourcePath = $tempDirectory.
+                '/'.
+                $document->id.
+                '-source.pdf';
+
+            $temporarySignedPath = $tempDirectory.
+                '/'.
+                $document->id.
+                '-signed.pdf';
+
+            /*
+            |--------------------------------------------------------------------------
+            | Generate signed PDF
+            |--------------------------------------------------------------------------
+            */
+
+            /*
+            |--------------------------------------------------------------------------
+            | Validate PDF signing certificate
+            |--------------------------------------------------------------------------
+            */
+
+            foreach (['certificate', 'private_key'] as $key) {
+                $path = config("signing.$key");
+
+                if (! $path || ! is_readable($path)) {
+                    throw new \RuntimeException(
+                        "PDF signing $key is not configured or not readable: ".($path ?: '(empty)')
+                    );
+                }
             }
 
             /*
             |--------------------------------------------------------------------------
-            | Mark signer as signed
+            | Download original PDF from B2
             |--------------------------------------------------------------------------
             */
 
-            $signer->update([
-                'signed_at' => now(),
-                'status' => 'signed',
-            ]);
+            $sourceStream = Storage::disk(
+                $documentDisk
+            )->readStream(
+                $document->file_path
+            );
 
-            \Log::info(
-                'SIGNING: signer marked signed',
+            if ($sourceStream === false) {
+                throw new \RuntimeException(
+                    'Unable to read the source document from storage.'
+                );
+            }
+
+            $destinationStream = fopen(
+                $sourcePath,
+                'wb'
+            );
+
+            if ($destinationStream === false) {
+                fclose($sourceStream);
+
+                throw new \RuntimeException(
+                    'Unable to create the temporary source PDF.'
+                );
+            }
+
+            stream_copy_to_stream(
+                $sourceStream,
+                $destinationStream
+            );
+
+            fclose($sourceStream);
+            fclose($destinationStream);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Build signed PDF
+            |--------------------------------------------------------------------------
+            */
+
+            $pdf = new \setasign\Fpdi\Tcpdf\Fpdi;
+
+            $pdf->setPrintHeader(false);
+            $pdf->setPrintFooter(false);
+            $pdf->SetMargins(0, 0, 0);
+            $pdf->SetAutoPageBreak(false, 0);
+
+            $signerNames = $document->signers()
+                ->whereNotNull('signed_at')
+                ->orderBy('signing_order')
+                ->pluck('name')
+                ->all();
+
+            $pdf->setSignature(
+                'file://'.config('signing.certificate'),
+                'file://'.config('signing.private_key'),
+                config('signing.password'),
+                '',
+                1,
                 [
-                    'document_id' => $document->id,
-                    'signer_id' => $signer->id,
+                    'Name' => config('app.name'),
+                    'Location' => '',
+                    'Reason' => 'Signed by '.implode(', ', $signerNames),
+                    'ContactInfo' => config('mail.from.address'),
                 ]
             );
-        });
+
+            $pageCount = $pdf->setSourceFile(
+                $sourcePath
+            );
+
+            for (
+                $page = 1;
+                $page <= $pageCount;
+                $page++
+            ) {
+                $template = $pdf->importPage(
+                    $page
+                );
+
+                $size = $pdf->getTemplateSize(
+                    $template
+                );
+
+                $pdf->AddPage(
+                    $size['orientation'],
+                    [
+                        $size['width'],
+                        $size['height'],
+                    ]
+                );
+
+                $pdf->useTemplate(
+                    $template
+                );
+
+                $fields = $document->signatureFields
+                    ->where('page', $page);
+
+                foreach ($fields as $field) {
+                    if (! $field->signature_image) {
+                        continue;
+                    }
+
+                    $tmp = $tempDirectory.
+                        '/'.
+                        $field->id.
+                        '.png';
+
+                    $imageData = preg_replace(
+                        '#^data:image/\w+;base64,#i',
+                        '',
+                        $field->signature_image
+                    );
+
+                    $decodedImage = base64_decode(
+                        $imageData,
+                        true
+                    );
+
+                    if ($decodedImage === false) {
+                        throw new \RuntimeException(
+                            "Unable to decode signature image for field {$field->id}."
+                        );
+                    }
+
+                    file_put_contents(
+                        $tmp,
+                        $decodedImage
+                    );
+
+                    $pdf->Image(
+                        $tmp,
+                        $field->x *
+                            $size['width'],
+                        $field->y *
+                            $size['height'],
+                        $field->width *
+                            $size['width'],
+                        $field->height *
+                            $size['height']
+                    );
+
+                    if (file_exists($tmp)) {
+                        unlink($tmp);
+                    }
+                }
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Save signed PDF temporarily
+            |--------------------------------------------------------------------------
+            */
+
+            $pdf->Output(
+                $temporarySignedPath,
+                'F'
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Upload signed PDF to B2
+            |--------------------------------------------------------------------------
+            */
+
+            $signedPath =
+                'documents/signed/'.
+                $document->id.
+                '.pdf';
+
+            $signedStream = fopen(
+                $temporarySignedPath,
+                'rb'
+            );
+
+            if ($signedStream === false) {
+                throw new \RuntimeException(
+                    'Unable to open the generated signed PDF.'
+                );
+            }
+
+            $uploaded = Storage::disk(
+                $documentDisk
+            )->put(
+                $signedPath,
+                $signedStream
+            );
+
+            fclose($signedStream);
+
+            if (! $uploaded) {
+                throw new \RuntimeException(
+                    'Unable to upload the signed PDF to storage.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Determine document completion
+            |--------------------------------------------------------------------------
+            */
+
+            $completed = $document->signatureFields
+                ->every(
+                    fn ($field) => $field->signed_at !== null
+                );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Update document
+            |--------------------------------------------------------------------------
+            */
+
+            $document->update([
+                'signed_path' => $signedPath,
+                'status' => $completed
+                    ? 'completed'
+                    : 'sent',
+            ]);
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
+        } finally {
+            /*
+            |--------------------------------------------------------------------------
+            | Clean up temporary files
+            |--------------------------------------------------------------------------
+            */
+
+            if (
+                isset($sourcePath) &&
+                file_exists($sourcePath)
+            ) {
+                unlink($sourcePath);
+            }
+
+            if (
+                isset($temporarySignedPath) &&
+                file_exists($temporarySignedPath)
+            ) {
+                unlink($temporarySignedPath);
+            }
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -461,320 +779,9 @@ class SigningController extends Controller
             }
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Reload latest data
-        |--------------------------------------------------------------------------
-        */
-
-        $document = $document->fresh([
-            'signatureFields',
+        return response()->json([
+            'success' => true,
         ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Storage configuration
-        |--------------------------------------------------------------------------
-        */
-
-        $documentDisk = env(
-            'DOCUMENTS_DISK',
-            'documents'
-        );
-
-        $tempDirectory = sys_get_temp_dir();
-
-        if (! is_dir($tempDirectory)) {
-            mkdir(
-                $tempDirectory,
-                0755,
-                true
-            );
-        }
-
-        $sourcePath = $tempDirectory.
-            '/'.
-            $document->id.
-            '-source.pdf';
-
-        $temporarySignedPath = $tempDirectory.
-            '/'.
-            $document->id.
-            '-signed.pdf';
-
-        /*
-        |--------------------------------------------------------------------------
-        | Generate signed PDF
-        |--------------------------------------------------------------------------
-        */
-
-        try {
-            /*
-            |--------------------------------------------------------------------------
-            | Validate PDF signing certificate
-            |--------------------------------------------------------------------------
-            */
-
-            foreach (['certificate', 'private_key'] as $key) {
-                $path = config("signing.$key");
-
-                if (! $path || ! is_readable($path)) {
-                    throw new \RuntimeException(
-                        "PDF signing $key is not configured or not readable: ".($path ?: '(empty)')
-                    );
-                }
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Download original PDF from B2
-            |--------------------------------------------------------------------------
-            */
-
-            $sourceStream = Storage::disk(
-                $documentDisk
-            )->readStream(
-                $document->file_path
-            );
-
-            if ($sourceStream === false) {
-                throw new \RuntimeException(
-                    'Unable to read the source document from storage.'
-                );
-            }
-
-            $destinationStream = fopen(
-                $sourcePath,
-                'wb'
-            );
-
-            if ($destinationStream === false) {
-                fclose($sourceStream);
-
-                throw new \RuntimeException(
-                    'Unable to create the temporary source PDF.'
-                );
-            }
-
-            stream_copy_to_stream(
-                $sourceStream,
-                $destinationStream
-            );
-
-            fclose($sourceStream);
-            fclose($destinationStream);
-
-            /*
-            |--------------------------------------------------------------------------
-            | Build signed PDF
-            |--------------------------------------------------------------------------
-            */
-
-            $pdf = new Fpdi;
-
-            $pdf->setPrintHeader(false);
-            $pdf->setPrintFooter(false);
-            $pdf->SetMargins(0, 0, 0);
-            $pdf->SetAutoPageBreak(false, 0);
-
-            $signerNames = $document->signers()
-                ->whereNotNull('signed_at')
-                ->orderBy('signing_order')
-                ->pluck('name')
-                ->all();
-
-            $pdf->setSignature(
-                'file://'.config('signing.certificate'),
-                'file://'.config('signing.private_key'),
-                config('signing.password'),
-                '',
-                1,
-                [
-                    'Name' => config('app.name'),
-                    'Location' => '',
-                    'Reason' => 'Signed by '.implode(', ', $signerNames),
-                    'ContactInfo' => config('mail.from.address'),
-                ]
-            );
-
-            $pageCount = $pdf->setSourceFile(
-                $sourcePath
-            );
-
-            for (
-                $page = 1;
-                $page <= $pageCount;
-                $page++
-            ) {
-                $template = $pdf->importPage(
-                    $page
-                );
-
-                $size = $pdf->getTemplateSize(
-                    $template
-                );
-
-                $pdf->AddPage(
-                    $size['orientation'],
-                    [
-                        $size['width'],
-                        $size['height'],
-                    ]
-                );
-
-                $pdf->useTemplate(
-                    $template
-                );
-
-                $fields = $document->signatureFields
-                    ->where('page', $page);
-
-                foreach ($fields as $field) {
-                    if (! $field->signature_image) {
-                        continue;
-                    }
-
-                    $tmp = $tempDirectory.
-                        '/'.
-                        $field->id.
-                        '.png';
-
-                    $imageData = preg_replace(
-                        '#^data:image/\w+;base64,#i',
-                        '',
-                        $field->signature_image
-                    );
-
-                    $decodedImage = base64_decode(
-                        $imageData,
-                        true
-                    );
-
-                    if ($decodedImage === false) {
-                        throw new \RuntimeException(
-                            "Unable to decode signature image for field {$field->id}."
-                        );
-                    }
-
-                    file_put_contents(
-                        $tmp,
-                        $decodedImage
-                    );
-
-                    $pdf->Image(
-                        $tmp,
-                        $field->x *
-                            $size['width'],
-                        $field->y *
-                            $size['height'],
-                        $field->width *
-                            $size['width'],
-                        $field->height *
-                            $size['height']
-                    );
-
-                    if (file_exists($tmp)) {
-                        unlink($tmp);
-                    }
-                }
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Save signed PDF temporarily
-            |--------------------------------------------------------------------------
-            */
-
-            $pdf->Output(
-                'F',
-                $temporarySignedPath
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Upload signed PDF to B2
-            |--------------------------------------------------------------------------
-            */
-
-            $signedPath =
-                'documents/signed/'.
-                $document->id.
-                '.pdf';
-
-            $signedStream = fopen(
-                $temporarySignedPath,
-                'rb'
-            );
-
-            if ($signedStream === false) {
-                throw new \RuntimeException(
-                    'Unable to open the generated signed PDF.'
-                );
-            }
-
-            $uploaded = Storage::disk(
-                $documentDisk
-            )->put(
-                $signedPath,
-                $signedStream
-            );
-
-            fclose($signedStream);
-
-            if (! $uploaded) {
-                throw new \RuntimeException(
-                    'Unable to upload the signed PDF to storage.'
-                );
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Determine document completion
-            |--------------------------------------------------------------------------
-            */
-
-            $completed = $document->signatureFields
-                ->every(
-                    fn ($field) => $field->signed_at !== null
-                );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Update document
-            |--------------------------------------------------------------------------
-            */
-
-            $document->update([
-                'signed_path' => $signedPath,
-                'status' => $completed
-                    ? 'completed'
-                    : 'sent',
-            ]);
-
-            return response()->json([
-                'success' => true,
-            ]);
-        } finally {
-            /*
-            |--------------------------------------------------------------------------
-            | Clean up temporary files
-            |--------------------------------------------------------------------------
-            */
-
-            if (
-                isset($sourcePath) &&
-                file_exists($sourcePath)
-            ) {
-                unlink($sourcePath);
-            }
-
-            if (
-                isset($temporarySignedPath) &&
-                file_exists($temporarySignedPath)
-            ) {
-                unlink($temporarySignedPath);
-            }
-        }
     }
 
     public function verifyOtp(
