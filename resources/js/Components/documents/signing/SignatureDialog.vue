@@ -74,8 +74,8 @@ watch(
 
         signaturePad = new SignaturePad(canvas.value, {
             penColor: "rgb(15, 23, 42)",
-            minWidth: 0.8,
-            maxWidth: 2.5,
+            minWidth: 1.2,
+            maxWidth: 3.5,
         });
 
         resizeCanvas();
@@ -89,7 +89,7 @@ onBeforeUnmount(() => {
 
 <template>
     <Dialog :open="open" @update:open="emit('update:open', $event)">
-        <DialogContent class="sm:max-w-xl">
+        <DialogContent class="max-w-md sm:max-w-xl">
             <DialogHeader>
                 <DialogTitle class="flex items-center gap-2">
                     <PenLine class="h-5 w-5" />
@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
             </DialogHeader>
 
             <div class="overflow-hidden rounded-xl border bg-white">
-                <canvas ref="canvas" class="h-[220px] w-full touch-none" />
+                <canvas ref="canvas" class="h-[240px] w-full touch-none sm:h-[300px]" />
             </div>
 
             <DialogFooter class="flex-row justify-between gap-2">

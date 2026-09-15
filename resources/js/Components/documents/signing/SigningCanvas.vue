@@ -18,6 +18,11 @@ defineProps({
         type: Number,
         required: true,
     },
+
+    activeFieldId: {
+        type: [String, Number, null],
+        default: null,
+    },
 });
 
 const emit = defineEmits(["sign", "resize"]);
@@ -71,6 +76,7 @@ onBeforeUnmount(() => {
                     :field="field"
                     :canvas-width="canvasWidth"
                     :canvas-height="canvasHeight"
+                    :is-active="field.id === activeFieldId"
                     @sign="(field) => emit('sign', field)"
                 />
             </div>
