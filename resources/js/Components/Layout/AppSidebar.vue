@@ -37,7 +37,7 @@ const organization = computed(() => page.props.auth.organization);
         :class="[
             mobile
                 ? 'flex h-full flex-col bg-card'
-                : 'hidden lg:flex flex-col border-r border-border/50 bg-card',
+                : 'hidden lg:flex flex-col border-r border-border/50 bg-card lg:sticky lg:top-0 lg:h-screen lg:self-start lg:shrink-0',
 
             'transition-all duration-300 ease-in-out',
 
