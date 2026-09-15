@@ -1,7 +1,8 @@
 <script setup>
 import { router, useForm, Link } from "@inertiajs/vue3";
+import axios from "axios";
 
-import { GripVertical, Trash2, Pencil, Save, X } from "lucide-vue-next";
+import { GripVertical, Trash2, Pencil, Save, X, ChevronDown } from "lucide-vue-next";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,13 @@ const fieldCounts = computed(() => props.signerFieldCounts ?? {});
 
 const editingOrder = ref(false);
 const draggedSigner = ref(null);
+const expandWorkflow = ref(false);
+const workflowChanging = ref(false);
+
+const isSequential = computed(() => {
+    if (props.document.signers.length === 0) return false;
+    return props.document.signers[0].signing_order > 0;
+});
 
 const orderForm = useForm({
     signers: [],
@@ -96,6 +104,30 @@ function removeSigner(signer) {
         },
     });
 }
+
+async function updateSigningWorkflow(sequential) {
+    if (workflowChanging.value || props.document.signers.length === 0) {
+        return;
+    }
+
+    workflowChanging.value = true;
+    showLoading("Updating signing workflow...");
+
+    try {
+        await axios.post(
+            route("documents.signers.update-workflow", props.document.id),
+            { sequential },
+        );
+
+        router.reload({ only: ['document'] });
+        expandWorkflow.value = false;
+    } catch (error) {
+        console.error(error);
+    } finally {
+        hideLoading();
+        workflowChanging.value = false;
+    }
+}
 </script>
 
 <template>
@@ -127,6 +159,51 @@ function removeSigner(signer) {
                     Save Order
                 </Button>
             </template>
+        </div>
+
+        <!-- Signing Workflow -->
+
+        <div
+            v-if="document.signers.length > 0 && document.status === 'draft'"
+            class="space-y-3"
+        >
+            <button
+                type="button"
+                @click="expandWorkflow = !expandWorkflow"
+                class="flex w-full items-center justify-between rounded-xl border p-3 text-left hover:bg-muted/50"
+            >
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                        Signing Workflow
+                    </p>
+                    <p class="mt-1 text-sm font-medium">
+                        {{ isSequential ? "Sequential" : "Parallel" }} Signing
+                    </p>
+                </div>
+                <ChevronDown
+                    class="h-4 w-4 transition-transform"
+                    :class="{ 'rotate-180': expandWorkflow }"
+                />
+            </button>
+
+            <div v-if="expandWorkflow" class="rounded-xl border p-3">
+                <p class="mb-3 text-xs text-muted-foreground">
+                    {{
+                        isSequential
+                            ? "Signers must sign in order (1, 2, 3...)"
+                            : "All signers can sign independently"
+                    }}
+                </p>
+
+                <Button
+                    size="sm"
+                    class="w-full"
+                    :disabled="workflowChanging"
+                    @click="updateSigningWorkflow(!isSequential)"
+                >
+                    Switch to {{ isSequential ? "Parallel" : "Sequential" }} Signing
+                </Button>
+            </div>
         </div>
 
         <!-- NORMAL MODE -->
