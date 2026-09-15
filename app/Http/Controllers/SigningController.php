@@ -565,8 +565,8 @@ class SigningController extends Controller
             */
 
             $pdf->Output(
-                'F',
-                $temporarySignedPath
+                $temporarySignedPath,
+                'F'
             );
 
             /*
