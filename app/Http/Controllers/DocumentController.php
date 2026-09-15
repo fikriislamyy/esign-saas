@@ -439,6 +439,12 @@ class DocumentController extends Controller
                     'signers',
                     'signatureFields.signer',
                 ]),
+
+                'templates' => $request->user()->organization
+                    ->templates()
+                    ->with('signatureFields:id,template_id,page,x,y,width,height')
+                    ->latest()
+                    ->get(['id', 'name', 'created_at']),
             ]
         );
     }

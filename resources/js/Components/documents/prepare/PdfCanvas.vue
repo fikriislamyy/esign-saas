@@ -28,6 +28,7 @@ const emit = defineEmits([
     "dragStart",
     "resizeStart",
     "deleteField",
+    "assignField",
 ]);
 
 function handleDragStart(field, event) {
@@ -40,6 +41,10 @@ function handleResizeStart(field, event) {
 
 function handleDelete(fieldId) {
     emit("deleteField", fieldId);
+}
+
+function handleAssign(field) {
+    emit("assignField", field);
 }
 
 function handlePlaceField(event) {
@@ -74,12 +79,14 @@ function handlePlaceField(event) {
                 v-for="field in fields"
                 :key="field.id"
                 :field="field"
+                :editable="!field.free"
                 :canvas-width="canvasWidth"
                 :canvas-height="canvasHeight"
                 :editor="editor"
                 @drag-start="handleDragStart"
                 @resize-start="handleResizeStart"
                 @delete="handleDelete"
+                @assign="handleAssign"
             />
 
             <!-- Placement Banner -->

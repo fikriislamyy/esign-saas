@@ -186,6 +186,11 @@ Route::middleware('auth', 'verified')->group(function () {
         [DocumentSignatureFieldController::class, 'destroy']
     )->name('documents.signature-fields.destroy');
 
+    Route::delete(
+        '/documents/{document}/signature-fields',
+        [DocumentSignatureFieldController::class, 'destroyAll']
+    )->name('documents.signature-fields.destroy-all');
+
     Route::patch(
         '/signature-fields/{signatureField}',
         [DocumentSignatureFieldController::class, 'update']

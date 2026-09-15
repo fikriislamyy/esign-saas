@@ -29,7 +29,14 @@ const props = defineProps({
     },
 });
 
-const emit = defineEmits(["dragStart", "resizeStart", "delete"]);
+const emit = defineEmits(["dragStart", "resizeStart", "delete", "assign"]);
+
+function handleClick(event) {
+    if (props.field.free) {
+        event.stopPropagation();
+        emit("assign", props.field);
+    }
+}
 
 const style = computed(() => ({
     left: `${Number(props.field.x) * props.canvasWidth}px`,
@@ -75,15 +82,19 @@ function handleDelete() {
 
 <template>
     <div
-        class="absolute select-none rounded-lg border-2 border-primary bg-background/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md dark:bg-slate-900/90"
+        class="absolute select-none rounded-lg border-2 bg-background/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md dark:bg-slate-900/90"
         :class="{
-            'cursor-move': editable && !editor.isResizing,
+            'cursor-move border-primary': editable && !editor.isResizing,
+            'border-primary': !field.free && !editable,
+            'cursor-pointer border-dashed border-amber-500 bg-amber-50/90 dark:bg-amber-950/60':
+                field.free,
         }"
         :style="{
             ...style,
             touchAction: 'none',
         }"
         @pointerdown.stop="handleDragStart"
+        @click.stop="handleClick"
     >
         <!-- Label -->
 
@@ -91,7 +102,7 @@ function handleDelete() {
             class="pointer-events-none flex h-full items-center justify-center rounded-md px-2 text-center"
         >
             <span class="truncate text-xs font-semibold text-foreground">
-                {{ field.signer?.name ?? "Signature" }}
+                {{ field.free ? "Unassigned" : (field.signer?.name ?? "Signature") }}
             </span>
         </div>
 
