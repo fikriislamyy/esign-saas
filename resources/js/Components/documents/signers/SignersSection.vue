@@ -1,15 +1,9 @@
 <script setup>
-import AddSignerDialog from "./AddSignerDialog.vue";
 import SignersManager from "./SignersManager.vue";
 
 const props = defineProps({
     document: {
         type: Object,
-        required: true,
-    },
-
-    members: {
-        type: Array,
         required: true,
     },
 
@@ -34,16 +28,8 @@ const props = defineProps({
                 </h3>
 
                 <p class="max-w-full break-words text-sm text-muted-foreground">
-                    Configure recipients who will sign this document.
+                    Signers are added on the Prepare page when you place signature fields.
                 </p>
-            </div>
-
-            <div class="shrink-0">
-                <AddSignerDialog
-                    v-if="document.status === 'draft'"
-                    :document="document"
-                    :members="members"
-                />
             </div>
         </div>
 

@@ -2,22 +2,21 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use Inertia\Inertia;
-use Inertia\Response;
+use App\Mail\SignatureRequestMail;
 use App\Models\Document;
 use App\Models\DocumentSigner;
-use App\Mail\SignatureRequestMail;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
-use Illuminate\Support\Facades\Storage;
 use App\Services\SigningOtpService;
 use App\Services\SigningPricingService;
 use App\Services\WalletService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Inertia\Inertia;
+use Inertia\Response;
 
 class DocumentController extends Controller
 {
-
     public function __construct(
         protected SigningOtpService $otpService
     ) {}
@@ -128,22 +127,9 @@ class DocumentController extends Controller
         return Inertia::render('Documents/Show', [
             'document' => $document,
 
-            'members' => $request
-                ->user()
-                ->organization
-                ->users()
-                ->select(
-                    'id',
-                    'name',
-                    'email'
-                )
-                ->orderBy('name')
-                ->get(),
-
             'signerFieldCounts' => $signerFieldCounts,
 
-            'canSendForSignature' =>
-                $canSendForSignature,
+            'canSendForSignature' => $canSendForSignature,
         ]);
     }
 
@@ -211,8 +197,7 @@ class DocumentController extends Controller
 
         if ($totalSignaturePlots <= 0) {
             return back()->withErrors([
-                'document' =>
-                    'Document has no signature plots assigned to its signers.',
+                'document' => 'Document has no signature plots assigned to its signers.',
             ]);
         }
 
@@ -236,8 +221,7 @@ class DocumentController extends Controller
                 'document_id' => $document->id,
                 'organization_id' => $document->organization_id,
                 'total_signature_plots' => $totalSignaturePlots,
-                'price_per_plot_usd_cents' =>
-                    $pricingService->pricePerSignaturePlot(),
+                'price_per_plot_usd_cents' => $pricingService->pricePerSignaturePlot(),
                 'required_usd_cents' => $requiredUsdCents,
                 'wallet_balance_usd_cents' => $walletBalanceUsdCents,
             ]
@@ -271,7 +255,7 @@ class DocumentController extends Controller
         */
 
         foreach ($signers as $signer) {
-            if (!$signer->token) {
+            if (! $signer->token) {
                 $signer->update([
                     'token' => Str::uuid(),
                 ]);
@@ -296,8 +280,7 @@ class DocumentController extends Controller
 
         $sequentialSigners = $signers
             ->filter(
-                fn ($signer) =>
-                    (int) $signer->signing_order > 0
+                fn ($signer) => (int) $signer->signing_order > 0
             )
             ->sortBy('signing_order')
             ->values();
@@ -440,6 +423,12 @@ class DocumentController extends Controller
                     'signatureFields.signer',
                 ]),
 
+                'members' => $request->user()->organization
+                    ->users()
+                    ->select('id', 'name', 'email')
+                    ->orderBy('name')
+                    ->get(),
+
                 'templates' => $request->user()->organization
                     ->templates()
                     ->with('signatureFields:id,template_id,page,x,y,width,height')
@@ -460,7 +449,7 @@ class DocumentController extends Controller
 
         $filePath = $document->signed_path;
 
-        if (!$filePath) {
+        if (! $filePath) {
             $filePath = $document->file_path;
         }
 
@@ -473,7 +462,7 @@ class DocumentController extends Controller
             env('DOCUMENTS_DISK', 'documents')
         )->response(
             $filePath,
-            $document->name . '.pdf',
+            $document->name.'.pdf',
             [
                 'Content-Disposition' => 'inline',
             ]
@@ -491,7 +480,7 @@ class DocumentController extends Controller
 
         $filePath = $document->signed_path;
 
-        if (!$filePath) {
+        if (! $filePath) {
             $filePath = $document->file_path;
         }
 
@@ -504,7 +493,7 @@ class DocumentController extends Controller
             env('DOCUMENTS_DISK', 'documents')
         )->download(
             $filePath,
-            $document->name . '.pdf'
+            $document->name.'.pdf'
         );
     }
 
@@ -552,5 +541,4 @@ class DocumentController extends Controller
             'message' => 'Document preparation completed.',
         ]);
     }
-
 }
