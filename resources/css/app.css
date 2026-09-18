@@ -209,3 +209,53 @@ body {
     @apply bg-background text-foreground;
     }
 }
+
+/* Rendered Markdown (terms modal). Tailwind's preflight removes heading and list
+   defaults, so these have to be restored explicitly. */
+.markdown-body h1 {
+    font-size: 1.25rem;
+    font-weight: 590;
+    margin-bottom: 0.75rem;
+}
+
+.markdown-body h2 {
+    font-size: 1rem;
+    font-weight: 590;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.markdown-body p {
+    margin-bottom: 0.75rem;
+    line-height: 1.6;
+    color: hsl(var(--muted-foreground));
+}
+
+.markdown-body ul,
+.markdown-body ol {
+    margin-bottom: 0.75rem;
+    padding-left: 1.25rem;
+    color: hsl(var(--muted-foreground));
+}
+
+.markdown-body ul {
+    list-style: disc;
+}
+
+.markdown-body ol {
+    list-style: decimal;
+}
+
+.markdown-body li {
+    margin-bottom: 0.25rem;
+}
+
+.markdown-body a {
+    color: hsl(var(--accent-ink));
+    text-decoration: underline;
+}
+
+.markdown-body em {
+    color: hsl(var(--muted-foreground));
+    font-style: italic;
+}
