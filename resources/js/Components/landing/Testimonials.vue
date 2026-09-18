@@ -30,7 +30,7 @@ const testimonials = [
                 <Card>
                     <CardContent class="pt-6">
                         <div class="mb-4 flex gap-1">
-                            <Star v-for="i in 5" :key="i" class="h-4 w-4 fill-amber-400 text-amber-400" />
+                            <Star v-for="i in 5" :key="i" class="h-4 w-4 fill-amber-400 text-signal-teal" />
                         </div>
                         <p class="mb-4 text-muted-foreground">
                             "{{ testimonial.quote }}"

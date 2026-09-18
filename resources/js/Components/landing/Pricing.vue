@@ -52,7 +52,7 @@ const plans = [
                     <CardContent>
                         <ul class="mb-6 space-y-2">
                             <li v-for="bullet in plan.bullets" :key="bullet" class="flex items-start gap-2 text-sm">
-                                <CheckCircle2 class="h-4 w-4 shrink-0 text-emerald-500" />
+                                <CheckCircle2 class="h-4 w-4 shrink-0 text-pulse-green" />
                                 {{ bullet }}
                             </li>
                         </ul>

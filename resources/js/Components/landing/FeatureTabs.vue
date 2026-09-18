@@ -52,7 +52,7 @@ const features = {
                         <h3 class="mb-4 text-2xl font-bold">{{ content.title }}</h3>
                         <ul class="space-y-3">
                             <li v-for="bullet in content.bullets" :key="bullet" class="flex items-start gap-3">
-                                <CheckCircle2 class="h-5 w-5 shrink-0 text-emerald-500" />
+                                <CheckCircle2 class="h-5 w-5 shrink-0 text-pulse-green" />
                                 <span>{{ bullet }}</span>
                             </li>
                         </ul>

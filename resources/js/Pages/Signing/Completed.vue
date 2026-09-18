@@ -22,7 +22,7 @@ import FadeIn from "@/Components/animations/FadeIn.vue";
                     <!-- Success Icon -->
 
                     <div
-                        class="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border bg-green-500/10 text-green-600 dark:text-green-400"
+                        class="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border bg-pulse-green/15/10 text-pulse-green dark:text-pulse-green"
                     >
                         <CheckCircle2 class="h-10 w-10" />
                     </div>

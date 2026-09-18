@@ -146,7 +146,7 @@ onUnmounted(() => {
                         <div
                             class="mb-6 inline-flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-sm"
                         >
-                            <CheckCircle2 class="h-4 w-4 text-emerald-500" />
+                            <CheckCircle2 class="h-4 w-4 text-pulse-green" />
 
                             Legally Binding Digital Signatures
                         </div>
@@ -192,28 +192,28 @@ onUnmounted(() => {
                         >
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Secure
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Paperless
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Team Ready
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Fast Signing
                             </div>

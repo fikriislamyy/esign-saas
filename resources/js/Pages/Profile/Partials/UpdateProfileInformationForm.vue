@@ -73,7 +73,7 @@ const form = useForm({
 
             <p
                 v-if="status === 'verification-link-sent'"
-                class="text-sm text-green-600"
+                class="text-sm text-pulse-green"
             >
                 A new verification link has been sent to your email address.
             </p>

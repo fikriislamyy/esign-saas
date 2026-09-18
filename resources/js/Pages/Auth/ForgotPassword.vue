@@ -60,7 +60,7 @@ const submit = () => {
             <CardContent class="space-y-6">
                 <div
                     v-if="status"
-                    class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"
+                    class="rounded-lg border border-emerald-200 bg-pulse-green/15 p-4 text-sm text-pulse-green"
                 >
                     {{ status }}
                 </div>

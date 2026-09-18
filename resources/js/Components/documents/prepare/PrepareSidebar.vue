@@ -76,7 +76,7 @@ const isSequential = computed(() => {
                 <p class="mt-2 text-sm text-muted-foreground">
                     {{ signatureFields.length }}
                     {{ signatureFields.length === 1 ? "Field" : "Fields" }}
-                    <span v-if="freeFields.length" class="text-amber-600 dark:text-amber-400">
+                    <span v-if="freeFields.length" class="text-signal-teal dark:text-signal-teal">
                         · {{ freeFields.length }} unassigned
                     </span>
                 </p>
@@ -195,10 +195,10 @@ const isSequential = computed(() => {
 
             <div
                 v-if="freeFields.length"
-                class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+                class="rounded-xl border border-amber-500/30 bg-signal-teal/15/10 p-4"
             >
                 <div class="flex gap-3">
-                    <AlertTriangle class="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <AlertTriangle class="mt-0.5 h-4 w-4 text-signal-teal dark:text-signal-teal" />
 
                     <div class="space-y-2">
                         <p class="text-sm font-medium">
