@@ -10,6 +10,7 @@ use App\Http\Controllers\InvitationAcceptController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\MembersController;
 use App\Http\Controllers\OrganizationSettingsController;
+use App\Http\Controllers\PakasirWebhookController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SigningController;
 use App\Http\Controllers\StripeWebhookController;
@@ -55,6 +56,11 @@ Route::post('/stripe/webhook', [
     StripeWebhookController::class,
     'handle',
 ])->name('stripe.webhook');
+
+Route::post('/pakasir/webhook', [
+    PakasirWebhookController::class,
+    'handle',
+])->name('pakasir.webhook');
 
 Route::get(
     '/sign/{token}',
