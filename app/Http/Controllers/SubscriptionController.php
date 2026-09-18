@@ -10,6 +10,7 @@ use App\Services\PlanService;
 use App\Services\StripeService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 
@@ -84,7 +85,18 @@ class SubscriptionController extends Controller
         $subscription = app(PlanService::class)->subscriptionFor($organization);
         $planConfig = config('plans.'.$validated['plan']);
 
-        abort_unless($planConfig['stripe_price_id'], 500, 'Stripe price is not configured.');
+        // abort() raises an HttpException, which Laravel never reports, so a
+        // missing price id used to surface as a 500 with no log line at all.
+        if (! $planConfig['stripe_price_id']) {
+            Log::error('Subscription blocked: no Stripe price configured', [
+                'plan' => $validated['plan'],
+                'env_key' => 'STRIPE_PRICE_PRO',
+            ]);
+
+            return back()->withErrors([
+                'plan' => 'This plan cannot be purchased yet because billing is not fully configured. Please contact support.',
+            ]);
+        }
 
         $client = $stripe->client();
 
@@ -127,8 +139,11 @@ class SubscriptionController extends Controller
             'provider' => 'stripe',
             'stripe_subscription_id' => $stripeSubscription->id,
             'subscribed_at' => now(),
+            // Stripe moved current_period_end off the subscription and onto
+            // its items. Reading the old path yields null, and an epoch-0
+            // expiry makes effectivePlan() fall straight back to free.
             'expired_at' => Carbon::createFromTimestamp(
-                $stripeSubscription->current_period_end
+                $stripeSubscription->items->data[0]->current_period_end
             ),
         ]);
 

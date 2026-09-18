@@ -99,6 +99,9 @@ class StripeWebhookController extends Controller
             case 'checkout.session.completed':
                 return $this->handleCheckoutCompleted($event->data->object);
 
+            case 'payment_intent.succeeded':
+                return $this->handlePaymentIntentSucceeded($event->data->object);
+
             case 'invoice.paid':
                 return $this->handleInvoicePaid($event->data->object);
 
@@ -285,9 +288,79 @@ class StripeWebhookController extends Controller
         ]);
     }
 
+    protected function handlePaymentIntentSucceeded($intent)
+    {
+        $topupId = $intent->metadata->wallet_topup_id ?? null;
+
+        // Subscription invoices also produce PaymentIntents. Those carry no
+        // wallet_topup_id and are handled by invoice.paid instead.
+        if (! $topupId) {
+            return response()->json(['received' => true]);
+        }
+
+        DB::transaction(function () use ($topupId, $intent) {
+            $topup = WalletTopup::query()
+                ->lockForUpdate()
+                ->find($topupId);
+
+            if (! $topup) {
+                Log::warning('PaymentIntent for unknown top-up', [
+                    'topup_id' => $topupId,
+                    'payment_intent' => $intent->id,
+                ]);
+
+                return;
+            }
+
+            // Idempotency: Stripe retries, and the client may also have
+            // triggered a reload. Credit once (trap 2).
+            if ($topup->status === 'paid') {
+                return;
+            }
+
+            app(WalletService::class)->credit(
+                organization: $topup->organization,
+                sourceCurrency: $topup->currency,
+                sourceAmount: (float) $topup->amount,
+                exchangeRate: (float) $topup->exchange_rate,
+                amountUsdCents: (int) $topup->wallet_amount_usd_cents,
+                type: 'topup',
+                description: 'Wallet top-up via card',
+                reference: $topup,
+                createdBy: $topup->created_by,
+                metadata: ['stripe_payment_intent_id' => $intent->id],
+            );
+
+            $topup->update([
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+
+            Log::info('Wallet credited from PaymentIntent', [
+                'topup_id' => $topup->id,
+                'payment_intent' => $intent->id,
+            ]);
+        });
+
+        return response()->json(['received' => true]);
+    }
+
+    /**
+     * Newer Stripe API versions nest the subscription under the invoice's
+     * parent instead of exposing invoice.subscription. Webhook payloads are
+     * serialised with whatever version the endpoint is pinned to, so accept
+     * either shape.
+     */
+    protected function subscriptionIdFromInvoice($invoice): ?string
+    {
+        return $invoice->parent->subscription_details->subscription
+            ?? $invoice->subscription
+            ?? null;
+    }
+
     protected function handleInvoicePaid($invoice)
     {
-        $stripeSubscriptionId = $invoice->subscription ?? null;
+        $stripeSubscriptionId = $this->subscriptionIdFromInvoice($invoice);
 
         if (! $stripeSubscriptionId) {
             return response()->json(['received' => true]);
@@ -307,9 +380,16 @@ class StripeWebhookController extends Controller
                 return;
             }
 
+            // invoice.period_end is the moment the invoice was cut, not the
+            // end of the period it paid for. Taking it would expire the
+            // subscription the instant it renewed.
+            $periodEnd = $invoice->lines->data[0]->period->end ?? null;
+
             $subscription->update([
                 'status' => 'active',
-                'expired_at' => \Carbon\Carbon::createFromTimestamp($invoice->period_end),
+                'expired_at' => $periodEnd
+                    ? \Carbon\Carbon::createFromTimestamp($periodEnd)
+                    : $subscription->expired_at,
             ]);
 
             \App\Models\SubscriptionPayment::where('stripe_invoice_id', $invoice->id)
@@ -321,7 +401,7 @@ class StripeWebhookController extends Controller
 
     protected function handleInvoiceFailed($invoice)
     {
-        $stripeSubscriptionId = $invoice->subscription ?? null;
+        $stripeSubscriptionId = $this->subscriptionIdFromInvoice($invoice);
 
         if (! $stripeSubscriptionId) {
             return response()->json(['received' => true]);

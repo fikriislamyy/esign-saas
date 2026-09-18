@@ -5,7 +5,7 @@ import { CreditCard, Plus, WalletCards } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-import TopUpDialog from "@/Components/billing/TopUpDialog.vue";
+import PaymentDialog from "@/Components/payment/PaymentDialog.vue";
 
 const props = defineProps({
     wallet: {
@@ -101,14 +101,14 @@ const formattedRate = computed(() => {
 
             <!-- Actions -->
             <div class="flex w-full flex-col gap-2 sm:w-auto">
-                <TopUpDialog :wallet="wallet">
+                <PaymentDialog mode="topup">
                     <template #trigger>
                         <Button class="w-full sm:min-w-40">
                             <Plus class="mr-2 h-4 w-4" />
                             Top Up Wallet
                         </Button>
                     </template>
-                </TopUpDialog>
+                </PaymentDialog>
 
                 <div
                     class="flex items-center justify-center gap-2 text-xs text-muted-foreground"

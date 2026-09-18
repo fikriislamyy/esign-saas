@@ -32,8 +32,8 @@ import {
     TableRow,
 } from "@/components/ui/table";
 
-import CardPaymentDialog from "@/Components/plan/CardPaymentDialog.vue";
-import QrPaymentDialog from "@/Components/plan/QrPaymentDialog.vue";
+import PaymentDialog from "@/Components/payment/PaymentDialog.vue";
+import PlanPickerDialog from "@/Components/plan/PlanPickerDialog.vue";
 
 const props = defineProps({
     subscription: {
@@ -63,6 +63,9 @@ const props = defineProps({
 });
 
 const downgrading = ref(false);
+const pickerOpen = ref(false);
+const paymentOpen = ref(false);
+const selectedPlanKey = ref(null);
 
 const planConfig = computed(() => props.plans?.[props.subscription.plan]);
 
@@ -221,12 +224,26 @@ function downgrade() {
         },
     );
 }
+
+function handlePlanSelected(planKey) {
+    selectedPlanKey.value = planKey;
+    pickerOpen.value = false;
+    paymentOpen.value = true;
+}
 </script>
 
 <template>
     <Head title="Plan" />
 
     <AppLayout>
+        <!-- Outside the plan-conditional markup below: a successful subscribe
+             flips subscription.plan, which would unmount the success view. -->
+        <PaymentDialog
+            v-model:open="paymentOpen"
+            mode="plan"
+            :plan-key="selectedPlanKey"
+        />
+
         <div class="space-y-8">
             <FadeIn :delay="100" type="fade">
                 <PageHeader
@@ -286,26 +303,18 @@ function downgrade() {
                         <!-- Actions -->
                         <div class="flex w-full flex-col gap-2 sm:w-auto">
                             <template v-if="subscription.plan === 'free'">
-                                <CardPaymentDialog>
+                                <PlanPickerDialog
+                                    v-model:open="pickerOpen"
+                                    :current-plan="subscription.plan"
+                                    @select="handlePlanSelected"
+                                >
                                     <template #trigger>
                                         <Button class="w-full gap-2 sm:min-w-48">
                                             <CreditCard class="h-4 w-4" />
-                                            Upgrade to Pro
+                                            Upgrade Plan
                                         </Button>
                                     </template>
-                                </CardPaymentDialog>
-
-                                <QrPaymentDialog>
-                                    <template #trigger>
-                                        <Button
-                                            variant="outline"
-                                            class="w-full gap-2 sm:min-w-48"
-                                        >
-                                            <QrCode class="h-4 w-4" />
-                                            Pay with QRIS
-                                        </Button>
-                                    </template>
-                                </QrPaymentDialog>
+                                </PlanPickerDialog>
                             </template>
 
                             <template v-else-if="subscription.plan === 'pro'">

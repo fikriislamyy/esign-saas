@@ -45,6 +45,7 @@ class BillingTopupController extends Controller
                 'required',
                 'numeric',
                 'gt:0',
+                'min:0.5',
             ],
         ]);
 
@@ -208,80 +209,37 @@ class BillingTopupController extends Controller
                 ]
             );
 
-            $session = $stripe->checkout->sessions->create([
-                'mode' => 'payment',
+            $intent = $stripe->paymentIntents->create([
+                'amount' => $stripeAmount,
+                'currency' => strtolower($currency),
 
-                'success_url' => route('billing.index', [
-                    'topup' => 'success',
-                ]),
+                // Card only for now. QRIS will add its own method later.
+                'payment_method_types' => ['card'],
 
-                'cancel_url' => route('billing.index', [
-                    'topup' => 'cancelled',
-                ]),
-
-                'customer_email' => $user->email,
-
-                'line_items' => [
-                    [
-                        'price_data' => [
-                            'currency' => strtolower($currency),
-
-                            'product_data' => [
-                                'name' =>
-                                    'ESignSaaS Wallet Top Up',
-                            ],
-
-                            'unit_amount' => $stripeAmount,
-                        ],
-
-                        'quantity' => 1,
-                    ],
-                ],
-
+                // The webhook finds the top-up by this. Without it the payment
+                // succeeds and the wallet never moves (trap 1).
                 'metadata' => [
                     'wallet_topup_id' => (string) $topup->id,
                     'organization_id' => (string) $organization->id,
                 ],
             ]);
 
-            Log::info(
-                'BillingTopupController@store STRIPE SESSION CREATED',
-                [
-                    'topup_id' => $topup->id,
-                    'session_id' => $session->id,
-                    'session_status' => $session->status,
-                    'payment_status' => $session->payment_status,
-                    'payment_intent' => $session->payment_intent,
-                    'session_url_exists' => !empty($session->url),
-                    'metadata' => $session->metadata?->toArray(),
-                ]
-            );
-
             $topup->update([
-                'stripe_checkout_session_id' => $session->id,
+                'stripe_payment_intent_id' => $intent->id,
             ]);
 
-            Log::info(
-                'BillingTopupController@store TOPUP UPDATED WITH SESSION',
-                [
-                    'topup_id' => $topup->id,
-                    'stripe_checkout_session_id' =>
-                        $topup->stripe_checkout_session_id,
-                ]
-            );
+            Log::info('BillingTopupController@store PAYMENT INTENT CREATED', [
+                'topup_id' => $topup->id,
+                'payment_intent' => $intent->id,
+                'amount' => $stripeAmount,
+                'currency' => $currency,
+            ]);
 
-            Log::info(
-                'BillingTopupController@store REDIRECTING TO STRIPE',
-                [
-                    'topup_id' => $topup->id,
-                    'session_id' => $session->id,
-                    'url' => $session->url,
-                ]
-            );
-
-            return \Inertia\Inertia::location(
-                $session->url
-            );
+            // JSON, not a redirect — the browser stays on our page.
+            return response()->json([
+                'clientSecret' => $intent->client_secret,
+                'topupId' => $topup->id,
+            ]);
         } catch (\Throwable $e) {
             Log::error(
                 'BillingTopupController@store STRIPE ERROR',
