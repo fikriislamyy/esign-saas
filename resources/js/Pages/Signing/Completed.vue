@@ -51,7 +51,7 @@ import FadeIn from "@/Components/animations/FadeIn.vue";
                         <div
                             class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border bg-background"
                         >
-                            <FileCheck2 class="h-5 w-5 text-primary" />
+                            <FileCheck2 class="h-5 w-5 text-accent-ink" />
                         </div>
 
                         <div class="min-w-0">

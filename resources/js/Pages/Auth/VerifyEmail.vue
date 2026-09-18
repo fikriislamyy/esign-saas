@@ -50,7 +50,7 @@ const codeSent = computed(() => props.status === "verification-code-sent");
         <Card class="w-full max-w-md rounded-2xl border shadow-xl bg-background/95">
             <CardHeader class="items-center text-center space-y-5">
                 <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-                    <MailCheck class="h-10 w-10 text-primary" />
+                    <MailCheck class="h-10 w-10 text-accent-ink" />
                 </div>
 
                 <div>

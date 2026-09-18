@@ -70,14 +70,14 @@ const viewAll = () => {
 
                     <div class="flex min-w-0 flex-1 items-center gap-3">
                         <div
-                            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-200 group-hover:scale-105"
+                            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-accent-ink transition-transform duration-200 group-hover:scale-105"
                         >
                             <FileText class="h-5 w-5" />
                         </div>
 
                         <div class="min-w-0 flex-1">
                             <p
-                                class="truncate font-medium transition-colors group-hover:text-primary"
+                                class="truncate font-medium transition-colors group-hover:text-accent-ink"
                                 :title="document.name"
                             >
                                 {{ document.name }}
@@ -115,7 +115,7 @@ const viewAll = () => {
                         <Button
                             variant="ghost"
                             size="icon"
-                            class="shrink-0 rounded-full transition-all hover:bg-primary/10 hover:text-primary"
+                            class="shrink-0 rounded-full transition-all hover:bg-primary/10 hover:text-accent-ink"
                             @click="viewDocument(document.id)"
                         >
                             <Eye class="h-4 w-4" />

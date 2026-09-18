@@ -55,7 +55,7 @@ function formatSize(bytes) {
                         <div
                             class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10"
                         >
-                            <FileText class="h-5 w-5 text-primary" />
+                            <FileText class="h-5 w-5 text-accent-ink" />
                         </div>
 
                         <div class="min-w-0 flex-1">

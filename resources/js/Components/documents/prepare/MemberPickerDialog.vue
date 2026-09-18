@@ -105,7 +105,7 @@ function choose(member) {
                     class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-50"
                     @click="choose(member)"
                 >
-                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-accent-ink">
                         <UserRound class="h-5 w-5" />
                     </div>
 

@@ -62,7 +62,7 @@ const submit = () => {
                 <div
                     class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10"
                 >
-                    <Building2 class="h-7 w-7 text-primary" />
+                    <Building2 class="h-7 w-7 text-accent-ink" />
                 </div>
 
                 <CardTitle class="text-3xl font-bold">

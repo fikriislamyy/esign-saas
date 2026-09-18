@@ -116,7 +116,7 @@ function confirm() {
                             isSuccess &&
                                 'bg-green-100 text-green-600 dark:bg-green-950 dark:text-green-400',
                             isError && 'bg-destructive/10 text-destructive',
-                            isConfirmation && 'bg-primary/10 text-primary',
+                            isConfirmation && 'bg-primary/10 text-accent-ink',
                         ]"
                     >
                         <component :is="icon" class="h-7 w-7" />

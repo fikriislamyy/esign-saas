@@ -49,8 +49,8 @@ const formatSize = (bytes) => {
             class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all duration-200"
             :class="
                 dragging
-                    ? 'border-primary bg-primary/5'
-                    : 'border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50'
+                    ? 'border-accent-ink bg-primary/5'
+                    : 'border-muted-foreground/25 hover:border-accent-ink/50 hover:bg-muted/50'
             "
         >
             <Upload class="h-10 w-10 mb-3 text-muted-foreground" />

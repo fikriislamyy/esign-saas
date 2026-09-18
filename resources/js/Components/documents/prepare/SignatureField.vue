@@ -84,8 +84,8 @@ function handleDelete() {
     <div
         class="absolute select-none rounded-lg border-2 bg-background/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md dark:bg-slate-900/90"
         :class="{
-            'cursor-move border-primary': editable && !editor.isResizing,
-            'border-primary': !field.free && !editable,
+            'cursor-move border-accent-ink': editable && !editor.isResizing,
+            'border-accent-ink': !field.free && !editable,
             'cursor-pointer border-dashed border-amber-500 bg-amber-50/90 dark:bg-amber-950/60':
                 field.free,
         }"

@@ -60,7 +60,7 @@ const formattedRate = computed(() => {
             <div class="space-y-4">
                 <div class="flex items-center gap-3">
                     <div
-                        class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary"
+                        class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-accent-ink"
                     >
                         <WalletCards class="h-5 w-5" />
                     </div>

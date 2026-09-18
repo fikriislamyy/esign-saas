@@ -42,7 +42,7 @@ const submit = () => {
                 <div
                     class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10"
                 >
-                    <KeyRound class="h-8 w-8 text-primary" />
+                    <KeyRound class="h-8 w-8 text-accent-ink" />
                 </div>
 
                 <div>
@@ -123,7 +123,7 @@ const submit = () => {
                 <div class="text-center">
                     <Link
                         :href="route('login')"
-                        class="inline-flex items-center gap-2 font-semibold text-primary hover:underline"
+                        class="inline-flex items-center gap-2 font-semibold text-accent-ink hover:underline"
                     >
                         <ArrowLeft class="h-4 w-4" />
 

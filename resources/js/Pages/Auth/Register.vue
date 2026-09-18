@@ -284,7 +284,7 @@ const submit = () => {
 
                         <Link
                             :href="route('login')"
-                            class="font-semibold text-primary hover:underline"
+                            class="font-semibold text-accent-ink hover:underline"
                         >
                             Sign In
                         </Link>

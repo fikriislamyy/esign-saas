@@ -86,15 +86,15 @@ const emit = defineEmits(["start-placement"]);
             >
                 <div
                     v-if="editor.placingSignature"
-                    class="rounded-xl border border-primary/20 bg-primary/10 p-4"
+                    class="rounded-xl border border-accent-ink/20 bg-primary/10 p-4"
                 >
                     <div class="flex gap-3">
                         <MousePointerClick
-                            class="mt-0.5 h-4 w-4 text-primary"
+                            class="mt-0.5 h-4 w-4 text-accent-ink"
                         />
 
                         <div class="space-y-1">
-                            <p class="text-sm font-medium text-primary">
+                            <p class="text-sm font-medium text-accent-ink">
                                 Placement Mode
                             </p>
 

@@ -108,7 +108,7 @@ const isSequential = computed(() => {
                     <div class="space-y-2">
                         <p v-for="signer in signers" :key="signer.id" class="text-xs text-muted-foreground">
                             <span class="font-medium">{{ signer.name }}</span>
-                            <span v-if="isSequential" class="ml-1 text-primary">
+                            <span v-if="isSequential" class="ml-1 text-accent-ink">
                                 #{{ signer.signing_order }}
                             </span>
                         </p>
@@ -170,15 +170,15 @@ const isSequential = computed(() => {
             >
                 <div
                     v-if="editor.placingSignature"
-                    class="rounded-xl border border-primary/20 bg-primary/10 p-4"
+                    class="rounded-xl border border-accent-ink/20 bg-primary/10 p-4"
                 >
                     <div class="flex gap-3">
                         <MousePointerClick
-                            class="mt-0.5 h-4 w-4 text-primary"
+                            class="mt-0.5 h-4 w-4 text-accent-ink"
                         />
 
                         <div class="space-y-1">
-                            <p class="text-sm font-medium text-primary">
+                            <p class="text-sm font-medium text-accent-ink">
                                 Placement Mode
                             </p>
 

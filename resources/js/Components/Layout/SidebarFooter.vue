@@ -30,7 +30,7 @@ defineProps({
             <div
                 class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10"
             >
-                <UserCircle2 class="h-6 w-6 text-primary" />
+                <UserCircle2 class="h-6 w-6 text-accent-ink" />
             </div>
 
             <!-- User -->

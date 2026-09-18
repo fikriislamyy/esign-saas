@@ -306,7 +306,7 @@ async function updateSigningWorkflow(sequential) {
                 <Link
                     v-if="document.status === 'draft'"
                     :href="route('documents.prepare', document.id)"
-                    class="text-primary underline"
+                    class="text-accent-ink underline"
                 >
                     Prepare the document
                 </Link>

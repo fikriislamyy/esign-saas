@@ -42,7 +42,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
                             Sign documents
                             <br />
 
-                            <span class="text-primary"> with confidence. </span>
+                            <span class="text-accent-ink"> with confidence. </span>
                         </h1>
 
                         <p class="mt-6 max-w-md text-lg text-muted-foreground">
@@ -61,7 +61,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
                         </div>
 
                         <div class="flex items-center gap-3">
-                            <FileSignature class="h-5 w-5 text-primary" />
+                            <FileSignature class="h-5 w-5 text-accent-ink" />
 
                             <span> Legally binding signatures </span>
                         </div>
