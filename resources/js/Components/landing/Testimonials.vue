@@ -25,12 +25,12 @@ const testimonials = [
 
 <template>
     <LandingSection eyebrow="Testimonials" title="Loved by teams that sign a lot">
-        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid gap-6 sm:grid-cols-3">
             <FadeIn v-for="testimonial in testimonials" :key="testimonial.author" type="fade">
                 <Card>
                     <CardContent class="pt-6">
                         <div class="mb-4 flex gap-1">
-                            <Star v-for="i in 5" :key="i" class="h-4 w-4 fill-amber-400 text-signal-teal" />
+                            <Star v-for="i in 5" :key="i" class="h-4 w-4 fill-accent-ink text-accent-ink" />
                         </div>
                         <p class="mb-4 text-muted-foreground">
                             "{{ testimonial.quote }}"
