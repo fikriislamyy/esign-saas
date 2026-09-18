@@ -21,17 +21,17 @@ const data = computed(() => [
     {
         name: "Draft",
         value: Number(props.stats?.draft ?? 0),
-        color: "#eab308",
+        color: "#02b8cc",
     },
     {
         name: "Sent",
         value: Number(props.stats?.sent ?? 0),
-        color: "#3b82f6",
+        color: "#6366f1",
     },
     {
         name: "Completed",
         value: Number(props.stats?.completed ?? 0),
-        color: "#22c55e",
+        color: "#27a644",
     },
 ]);
 

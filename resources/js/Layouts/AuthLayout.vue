@@ -55,7 +55,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
 
                     <div class="mt-10 space-y-5">
                         <div class="flex items-center gap-3">
-                            <ShieldCheck class="h-5 w-5 text-emerald-500" />
+                            <ShieldCheck class="h-5 w-5 text-pulse-green" />
 
                             <span> Bank-level security </span>
                         </div>
@@ -67,7 +67,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
                         </div>
 
                         <div class="flex items-center gap-3">
-                            <Users class="h-5 w-5 text-orange-500" />
+                            <Users class="h-5 w-5 text-signal-teal" />
 
                             <span> Built for teams </span>
                         </div>

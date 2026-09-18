@@ -18,13 +18,13 @@ const props = defineProps({
 const badgeVariant = (status) => {
     switch (status) {
         case "draft":
-            return "secondary";
+            return "warning";
 
         case "sent":
-            return "default";
+            return "info";
 
         case "completed":
-            return "outline";
+            return "success";
 
         default:
             return "secondary";
@@ -95,16 +95,6 @@ const viewAll = () => {
                         <Badge
                             :variant="badgeVariant(document.status)"
                             class="shrink-0"
-                            :class="{
-                                'bg-yellow-100 text-yellow-600':
-                                    document.status === 'draft',
-
-                                'bg-blue-100 text-blue-600':
-                                    document.status === 'sent',
-
-                                'bg-green-100 text-green-700':
-                                    document.status === 'completed',
-                            }"
                         >
                             {{
                                 document.status.charAt(0).toUpperCase() +
