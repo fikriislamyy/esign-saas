@@ -236,6 +236,14 @@ function handlePlanSelected(planKey) {
     <Head title="Plan" />
 
     <AppLayout>
+        <!-- Outside the plan-conditional markup below: a successful subscribe
+             flips subscription.plan, which would unmount the success view. -->
+        <PaymentDialog
+            v-model:open="paymentOpen"
+            mode="plan"
+            :plan-key="selectedPlanKey"
+        />
+
         <div class="space-y-8">
             <FadeIn :delay="100" type="fade">
                 <PageHeader
@@ -307,12 +315,6 @@ function handlePlanSelected(planKey) {
                                         </Button>
                                     </template>
                                 </PlanPickerDialog>
-
-                                <PaymentDialog
-                                    v-model:open="paymentOpen"
-                                    mode="plan"
-                                    :plan-key="selectedPlanKey"
-                                />
                             </template>
 
                             <template v-else-if="subscription.plan === 'pro'">
