@@ -70,29 +70,46 @@ const formattedPrice = computed(() => {
     return null;
 });
 
+// Stripe's style validator rejects space-separated hsl(), which is how the
+// theme tokens are stored. Let the browser resolve them to rgb() instead.
+function resolveToken(name, fallback) {
+    const raw = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+
+    if (!raw) {
+        return fallback;
+    }
+
+    const probe = document.createElement("span");
+    probe.style.color = /^(#|rgb|hsl)/.test(raw) ? raw : `hsl(${raw})`;
+    probe.style.display = "none";
+
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+
+    return resolved || fallback;
+}
+
 function elementStyles() {
-    const styles = getComputedStyle(document.documentElement);
-    const token = (name) => {
-        const value = styles.getPropertyValue(name).trim();
-        if (!value) return "#000";
-        return value.startsWith("hsl") ? value : `hsl(${value})`;
-    };
+    const destructive = resolveToken("--destructive", "rgb(220, 38, 38)");
 
     return {
         base: {
-            color: token("--card-foreground"),
+            color: resolveToken("--card-foreground", "rgb(10, 10, 10)"),
             fontFamily:
                 'Inter Variable, ui-sans-serif, system-ui, -apple-system, sans-serif',
             fontSize: "14px",
             fontSmoothing: "antialiased",
             "::placeholder": {
-                color: token("--muted-foreground"),
+                color: resolveToken("--muted-foreground", "rgb(115, 115, 115)"),
             },
         },
 
         invalid: {
-            color: token("--destructive"),
-            iconColor: token("--destructive"),
+            color: destructive,
+            iconColor: destructive,
         },
     };
 }
