@@ -47,6 +47,8 @@ class PlanService
     {
         return (int) Document::query()
             ->where('organization_id', $organization->id)
+            // Expired documents have no files on S3, so they occupy no quota.
+            ->where('status', '!=', 'expired')
             ->sum('file_size');
     }
 
