@@ -1,5 +1,5 @@
 
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 
 @import "tailwindcss";
 
@@ -8,7 +8,74 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-    --font-sans: "Figtree", sans-serif;
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    /* DESIGN.md palette — prefer semantic tokens; reach for these only for
+       the specific accent roles the spec names. */
+    --color-void: hsl(210 11% 3.5%);
+    --color-carbon: hsl(210 6% 6.3%);
+    --color-obsidian: hsl(210 4.3% 9%);
+    --color-graphite: hsl(223 9% 15%);
+    --color-smoke: hsl(214 6% 23%);
+    --color-ash: hsl(218 5.3% 41%);
+    --color-fog: hsl(219 6.4% 57%);
+    --color-mist: hsl(218 20.5% 85%);
+    --color-bone: hsl(240 2% 90%);
+    --color-paper: hsl(0 0% 100%);
+    --color-acid-lime: hsl(64 89% 54%);
+    --color-lime-edge: hsl(64 100% 42%);
+    --color-lime-shade: hsl(64 100% 24%);
+    --color-pulse-green: hsl(134 62% 40%);
+    --color-coral-red: hsl(0 79% 63%);
+    --color-signal-teal: hsl(186 98% 40%);
+    --color-iris-violet: hsl(239 84% 67%);
+    --color-lavender: hsl(258 90% 66%);
+
+    /* Accent ink — resolves per theme to prevent disappearing UI on light surfaces */
+    --color-accent-ink: hsl(var(--accent-ink));
+
+    /* Font weight remap — see decision 4.2 */
+    --font-weight-medium: 510;
+    --font-weight-semibold: 590;
+    --font-weight-bold: 590;
+    --font-weight-extrabold: 590;
+
+    /* Type scale — tracking values from DESIGN.md */
+    --text-caption: 13px;
+    --text-caption--line-height: 1.2;
+
+    --text-body-sm: 15px;
+    --text-body-sm--line-height: 1.6;
+    --text-body-sm--letter-spacing: -0.011em;
+
+    --text-body-lg: 20px;
+    --text-body-lg--line-height: 1.33;
+    --text-body-lg--letter-spacing: -0.012em;
+
+    --text-subheading: 24px;
+    --text-subheading--line-height: 1.33;
+    --text-subheading--letter-spacing: -0.012em;
+
+    --text-heading-sm: 32px;
+    --text-heading-sm--line-height: 1.13;
+    --text-heading-sm--letter-spacing: -0.022em;
+
+    --text-heading: 48px;
+    --text-heading--line-height: 1;
+    --text-heading--letter-spacing: -0.022em;
+
+    --text-heading-lg: 64px;
+    --text-heading-lg--line-height: 1;
+    --text-heading-lg--letter-spacing: -0.022em;
+
+    --text-display: 72px;
+    --text-display--line-height: 1;
+    --text-display--letter-spacing: -0.022em;
+
+    /* Shadows — elevation via borders and inset, one real shadow on CTA */
+    --shadow-subtle: inset 0 0 0 1px rgb(35 37 42);
+    --shadow-sm: 0 2px 4px 0 rgb(0 0 0 / 0.4);
+    --shadow-xl: 0 4px 32px 0 rgb(8 9 10 / 0.6);
 
     --color-background: hsl(var(--background));
     --color-foreground: hsl(var(--foreground));
@@ -46,65 +113,75 @@
 }
 
 :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Canvas + text — Light Theme */
+    --background: 210 14% 97%;        /* Daylight   #f7f8f9 */
+    --foreground: 210 11% 3.5%;       /* Void       #08090a */
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;                /* Paper      #ffffff */
+    --card-foreground: 223 9% 15%;    /* Graphite   #23252a — body ink */
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 223 9% 15%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Filled CTA only — see decision 4.1 */
+    --primary: 64 89% 54%;            /* Acid Lime  #e4f222 */
+    --primary-foreground: 210 11% 3.5%; /* Void — 16.2:1 on lime */
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Accent as ink. NOT the same as --primary in light mode. */
+    --accent-ink: 64 100% 24%;        /* Lime Shade #727a00 — 4.7:1 on white */
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Quiet surfaces */
+    --secondary: 220 12% 95%;         /* Powder     #f1f2f4 */
+    --secondary-foreground: 223 9% 15%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --muted: 220 12% 95%;             /* Powder */
+    --muted-foreground: 218 5.3% 41%; /* Ash        #62666d — 5.8:1 */
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --accent: 220 12% 95%;            /* Powder */
+    --accent-foreground: 223 9% 15%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    /* Destructive — see decision 4.6 */
+    --destructive: 0 58% 48%;         /* #c23434 — darkened twin, AA as text */
+    --destructive-foreground: 0 0% 100%;
 
-    --radius: 0.75rem;
+    /* Structure */
+    --border: 225 9.5% 92%;           /* Chalk      #e8e9ec */
+    --input: 225 9.5% 92%;            /* Chalk */
+    --ring: 64 100% 24%;              /* Lime Shade — a lime ring is invisible here */
+
+    --radius: 0.5rem;                 /* see decision 4.3 — do not change */
 }
 
 .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    --background: 210 11% 3.5%;       /* Void       #08090a */
+    --foreground: 0 0% 100%;          /* Paper      #ffffff */
 
-    --card: 222.2 84% 6%;
-    --card-foreground: 210 40% 98%;
+    --card: 210 6% 6.3%;              /* Carbon     #0f1011 */
+    --card-foreground: 218 20.5% 85%; /* Mist       #d0d6e0 — body ink */
 
-    --popover: 222.2 84% 6%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 210 4.3% 9%;           /* Obsidian   #161718 */
+    --popover-foreground: 218 20.5% 85%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 64 89% 54%;            /* Acid Lime — unchanged across themes */
+    --primary-foreground: 210 11% 3.5%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --accent-ink: 64 89% 54%;         /* On void, lime IS the ink — 16.2:1 */
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --secondary: 223 9% 15%;          /* Graphite   #23252a */
+    --secondary-foreground: 218 20.5% 85%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --muted: 223 9% 15%;              /* Graphite */
+    --muted-foreground: 219 6.4% 57%; /* Fog        #8a8f98 */
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --accent: 223 9% 15%;
+    --accent-foreground: 218 20.5% 85%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --destructive: 0 79% 63%;         /* Coral Red  #eb5757 */
+    --destructive-foreground: 210 11% 3.5%;
+
+    --border: 223 9% 15%;             /* Graphite — the hairline */
+    --input: 223 9% 15%;
+    --ring: 64 89% 54%;               /* Acid Lime */
 }
 
 * {
@@ -121,6 +198,7 @@ body {
     font-family: var(--font-sans);
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv01" on, "ss03" on, "zero" on;
 }
 
 @layer base {

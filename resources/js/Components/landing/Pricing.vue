@@ -37,7 +37,7 @@ const plans = [
     <LandingSection id="pricing" muted eyebrow="Pricing" title="Start free. Scale when you're ready." subtitle="Top up credits and pay only for what you sign.">
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <FadeIn v-for="plan in plans" :key="plan.name" type="scale">
-                <Card :class="plan.popular && 'border-primary shadow-lg'">
+                <Card :class="plan.popular && 'border-accent-ink shadow-lg'">
                     <CardHeader>
                         <div class="flex items-start justify-between">
                             <div>
@@ -52,7 +52,7 @@ const plans = [
                     <CardContent>
                         <ul class="mb-6 space-y-2">
                             <li v-for="bullet in plan.bullets" :key="bullet" class="flex items-start gap-2 text-sm">
-                                <CheckCircle2 class="h-4 w-4 shrink-0 text-emerald-500" />
+                                <CheckCircle2 class="h-4 w-4 shrink-0 text-pulse-green" />
                                 {{ bullet }}
                             </li>
                         </ul>

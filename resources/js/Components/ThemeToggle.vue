@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 
 const mode = useColorMode({
     emitAuto: true,
+    initialValue: "dark",
 });
 
 const toggleTheme = () => {

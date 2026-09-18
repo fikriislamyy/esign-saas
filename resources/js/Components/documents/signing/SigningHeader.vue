@@ -34,7 +34,7 @@ defineProps({
             <div
                 class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-muted/40 sm:h-12 sm:w-12 sm:rounded-xl"
             >
-                <FileSignature class="h-5 w-5 text-primary sm:h-6 sm:w-6" />
+                <FileSignature class="h-5 w-5 text-accent-ink sm:h-6 sm:w-6" />
             </div>
 
             <div class="min-w-0">

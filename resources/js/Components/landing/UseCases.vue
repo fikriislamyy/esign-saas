@@ -40,11 +40,11 @@ const useCases = [
 
 <template>
     <LandingSection muted eyebrow="Use cases" title="One tool for every agreement">
-        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid gap-6 sm:grid-cols-2">
             <FadeIn v-for="(useCase, index) in useCases" :key="useCase.title" type="scale" :delay="index * 100">
                 <Card>
                     <CardHeader>
-                        <component :is="useCase.icon" class="mb-2 h-8 w-8 text-primary" />
+                        <component :is="useCase.icon" class="mb-2 h-8 w-8 text-accent-ink" />
                         <CardTitle class="text-lg">{{ useCase.title }}</CardTitle>
                     </CardHeader>
                     <CardContent class="text-sm text-muted-foreground">

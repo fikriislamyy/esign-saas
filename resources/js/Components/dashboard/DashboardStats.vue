@@ -27,8 +27,8 @@ const cards = computed(() => [
         value: props.stats.total,
         subtitle: "This period",
         icon: FileText,
-        color: "text-slate-700",
-        bg: "bg-slate-100",
+        color: "text-muted-foreground",
+        bg: "bg-muted",
     },
 
     {
@@ -36,8 +36,8 @@ const cards = computed(() => [
         value: props.stats.draft,
         subtitle: "Awaiting Action",
         icon: FilePenLine,
-        color: "text-yellow-500",
-        bg: "bg-yellow-100",
+        color: "text-signal-teal",
+        bg: "bg-signal-teal/15",
     },
 
     {
@@ -45,8 +45,8 @@ const cards = computed(() => [
         value: props.stats.sent,
         subtitle: "Waiting for signature",
         icon: SendHorizonal,
-        color: "text-blue-500",
-        bg: "bg-blue-100",
+        color: "text-iris-violet",
+        bg: "bg-iris-violet/15",
     },
 
     {
@@ -54,8 +54,8 @@ const cards = computed(() => [
         value: props.stats.completed,
         subtitle: "Successfully signed",
         icon: CircleCheckBig,
-        color: "text-green-500",
-        bg: "bg-green-100",
+        color: "text-pulse-green",
+        bg: "bg-pulse-green/15",
     },
 ]);
 </script>

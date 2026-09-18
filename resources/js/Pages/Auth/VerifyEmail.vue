@@ -50,7 +50,7 @@ const codeSent = computed(() => props.status === "verification-code-sent");
         <Card class="w-full max-w-md rounded-2xl border shadow-xl bg-background/95">
             <CardHeader class="items-center text-center space-y-5">
                 <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-                    <MailCheck class="h-10 w-10 text-primary" />
+                    <MailCheck class="h-10 w-10 text-accent-ink" />
                 </div>
 
                 <div>
@@ -67,17 +67,17 @@ const codeSent = computed(() => props.status === "verification-code-sent");
             <CardContent class="space-y-6">
                 <div
                     v-if="codeSent"
-                    class="rounded-xl border border-emerald-200 bg-emerald-50 p-4"
+                    class="rounded-xl border border-emerald-200 bg-pulse-green/15 p-4"
                 >
                     <div class="flex gap-3">
-                        <ShieldCheck class="mt-0.5 h-5 w-5 text-emerald-600" />
+                        <ShieldCheck class="mt-0.5 h-5 w-5 text-pulse-green" />
 
                         <div>
-                            <p class="font-medium text-emerald-700">
+                            <p class="font-medium text-pulse-green">
                                 Verification code sent
                             </p>
 
-                            <p class="mt-1 text-sm text-emerald-600">
+                            <p class="mt-1 text-sm text-pulse-green">
                                 A new code has been sent to your email.
                             </p>
                         </div>

@@ -70,10 +70,10 @@ function use() {
                     :key="template.id"
                     type="button"
                     class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/60"
-                    :class="template.id === selectedId ? 'border-primary bg-primary/5' : 'border-border'"
+                    :class="template.id === selectedId ? 'border-accent-ink bg-primary/5' : 'border-border'"
                     @click="selectedId = template.id"
                 >
-                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-accent-ink">
                         <LayoutTemplate class="h-5 w-5" />
                     </div>
 
@@ -89,7 +89,7 @@ function use() {
                         </p>
                     </div>
 
-                    <Check v-if="template.id === selectedId" class="h-4 w-4 shrink-0 text-primary" />
+                    <Check v-if="template.id === selectedId" class="h-4 w-4 shrink-0 text-accent-ink" />
                 </button>
             </div>
 

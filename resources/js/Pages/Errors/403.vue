@@ -45,7 +45,7 @@ function goBack() {
                             <div
                                 class="flex h-11 w-11 items-center justify-center rounded-xl border bg-muted/50"
                             >
-                                <ShieldCheck class="h-6 w-6 text-primary" />
+                                <ShieldCheck class="h-6 w-6 text-accent-ink" />
                             </div>
 
                             <div>

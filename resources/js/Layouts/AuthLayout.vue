@@ -42,7 +42,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
                             Sign documents
                             <br />
 
-                            <span class="text-primary"> with confidence. </span>
+                            <span class="text-accent-ink"> with confidence. </span>
                         </h1>
 
                         <p class="mt-6 max-w-md text-lg text-muted-foreground">
@@ -55,19 +55,19 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
 
                     <div class="mt-10 space-y-5">
                         <div class="flex items-center gap-3">
-                            <ShieldCheck class="h-5 w-5 text-emerald-500" />
+                            <ShieldCheck class="h-5 w-5 text-pulse-green" />
 
                             <span> Bank-level security </span>
                         </div>
 
                         <div class="flex items-center gap-3">
-                            <FileSignature class="h-5 w-5 text-primary" />
+                            <FileSignature class="h-5 w-5 text-accent-ink" />
 
                             <span> Legally binding signatures </span>
                         </div>
 
                         <div class="flex items-center gap-3">
-                            <Users class="h-5 w-5 text-orange-500" />
+                            <Users class="h-5 w-5 text-signal-teal" />
 
                             <span> Built for teams </span>
                         </div>

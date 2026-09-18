@@ -104,7 +104,7 @@ function handlePlaceField(event) {
                     class="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center px-4"
                 >
                     <div
-                        class="rounded-full border border-primary/30 bg-background/90 px-4 py-2 text-center text-sm font-medium text-primary shadow-lg backdrop-blur"
+                        class="rounded-full border border-accent-ink/30 bg-background/90 px-4 py-2 text-center text-sm font-medium text-accent-ink shadow-lg backdrop-blur"
                     >
                         Click or tap anywhere on the document to place the
                         signature

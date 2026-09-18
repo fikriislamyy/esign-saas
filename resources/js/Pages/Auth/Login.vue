@@ -53,7 +53,7 @@ const submit = () => {
             </CardHeader>
             <div
                 v-if="status"
-                class="mx-6 mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700"
+                class="mx-6 mb-4 rounded-lg border border-green-200 bg-pulse-green/15 p-3 text-sm text-pulse-green"
             >
                 {{ status }}
             </div>
@@ -92,7 +92,7 @@ const submit = () => {
                             <Link
                                 v-if="canResetPassword"
                                 :href="route('password.request')"
-                                class="text-sm font-medium text-primary transition-colors hover:underline"
+                                class="text-sm font-medium text-accent-ink transition-colors hover:underline"
                             >
                                 Forgot password?
                             </Link>
@@ -177,7 +177,7 @@ const submit = () => {
 
                             <Link
                                 :href="route('register')"
-                                class="font-semibold text-primary hover:underline"
+                                class="font-semibold text-accent-ink hover:underline"
                             >
                                 Create one
                             </Link>

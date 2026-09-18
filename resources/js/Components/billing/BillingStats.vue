@@ -58,7 +58,7 @@ const totalSpent = computed(() => {
         <Card class="border-border/60 shadow-sm">
             <div class="flex items-center gap-4 p-5">
                 <div
-                    class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
+                    class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-accent-ink"
                 >
                     <FileSignature class="h-5 w-5" />
                 </div>

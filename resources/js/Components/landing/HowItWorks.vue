@@ -27,15 +27,15 @@ const steps = [
 
 <template>
     <LandingSection id="how-it-works" eyebrow="How it works" title="Sign a document in three steps">
-        <div class="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid gap-8 sm:grid-cols-3">
             <FadeIn v-for="(step, index) in steps" :key="step.number" type="slide" direction="up" :delay="index * 150">
                 <div class="text-center">
                     <div class="mb-6 flex justify-center">
-                        <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
+                        <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-accent-ink">
                             <span class="text-2xl font-bold">{{ step.number }}</span>
                         </div>
                     </div>
-                    <component :is="step.icon" class="mx-auto mb-4 h-8 w-8 text-primary" />
+                    <component :is="step.icon" class="mx-auto mb-4 h-8 w-8 text-accent-ink" />
                     <h3 class="mb-2 text-lg font-semibold">{{ step.title }}</h3>
                     <p class="text-muted-foreground">{{ step.description }}</p>
                 </div>

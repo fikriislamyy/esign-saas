@@ -58,7 +58,7 @@ const submit = () => {
                 <div
                     class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10"
                 >
-                    <ShieldCheck class="h-8 w-8 text-primary" />
+                    <ShieldCheck class="h-8 w-8 text-accent-ink" />
                 </div>
 
                 <div>
@@ -180,7 +180,7 @@ const submit = () => {
                 <div class="text-center">
                     <Link
                         :href="route('login')"
-                        class="font-semibold text-primary hover:underline"
+                        class="font-semibold text-accent-ink hover:underline"
                     >
                         Return to Login
                     </Link>

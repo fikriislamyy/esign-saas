@@ -15,7 +15,7 @@ defineProps({
         <div class="mx-auto max-w-7xl px-4 py-24 lg:px-8">
             <FadeIn type="fade" direction="up">
                 <div class="mx-auto mb-16 max-w-2xl text-center">
-                    <p v-if="eyebrow" class="mb-3 text-sm font-semibold uppercase tracking-wider text-primary">
+                    <p v-if="eyebrow" class="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-ink">
                         {{ eyebrow }}
                     </p>
                     <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">

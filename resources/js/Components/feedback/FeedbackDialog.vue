@@ -114,9 +114,9 @@ function confirm() {
                         :class="[
                             'mb-4 flex h-14 w-14 items-center justify-center rounded-full',
                             isSuccess &&
-                                'bg-green-100 text-green-600 dark:bg-green-950 dark:text-green-400',
+                                'bg-pulse-green/15 text-pulse-green dark:bg-pulse-green/15 dark:text-pulse-green',
                             isError && 'bg-destructive/10 text-destructive',
-                            isConfirmation && 'bg-primary/10 text-primary',
+                            isConfirmation && 'bg-primary/10 text-accent-ink',
                         ]"
                     >
                         <component :is="icon" class="h-7 w-7" />

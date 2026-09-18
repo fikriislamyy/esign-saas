@@ -38,7 +38,7 @@ defineProps({
             <div
                 class="flex min-w-[180px] flex-col items-center gap-3 rounded-xl border bg-card px-6 py-5 shadow-lg"
             >
-                <Loader2 class="h-6 w-6 animate-spin text-primary" />
+                <Loader2 class="h-6 w-6 animate-spin text-accent-ink" />
 
                 <p class="text-sm font-medium text-foreground">
                     {{ text }}

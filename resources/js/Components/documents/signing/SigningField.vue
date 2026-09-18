@@ -38,10 +38,10 @@ const style = computed(() => ({
 <template>
     <button
         type="button"
-        class="absolute flex items-center justify-center overflow-hidden rounded-lg border-2 border-slate-500 bg-slate-100 text-slate-900 shadow-sm transition-all duration-200 hover:bg-slate-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
+        class="absolute flex items-center justify-center overflow-hidden rounded-lg border-2 border-border bg-muted text-muted-foreground shadow-sm transition-all duration-200 hover:bg-muted hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
         :class="{
-            'border-slate-400 bg-slate-50': field.signature,
-            'animate-pulse border-blue-500': isActive && !field.signature,
+            'border-border bg-muted': field.signature,
+            'animate-pulse border-border': isActive && !field.signature,
         }"
         :style="style"
         @click.stop="emit('sign', field)"
@@ -59,9 +59,9 @@ const style = computed(() => ({
 
         <div
             v-else
-            class="pointer-events-none flex items-center justify-center gap-2 px-3 text-center text-sm font-semibold text-slate-900"
+            class="pointer-events-none flex items-center justify-center gap-2 px-3 text-center text-sm font-semibold text-muted-foreground"
         >
-            <PenLine class="h-4 w-4 shrink-0 text-slate-900" />
+            <PenLine class="h-4 w-4 shrink-0 text-muted-foreground" />
 
             <span> Click to Sign </span>
         </div>
@@ -70,9 +70,9 @@ const style = computed(() => ({
 
         <div
             v-if="field.signature"
-            class="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm"
+            class="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-white shadow-sm"
         >
-            <CheckCircle2 class="h-4 w-4 text-green-600" />
+            <CheckCircle2 class="h-4 w-4 text-pulse-green" />
         </div>
     </button>
 </template>

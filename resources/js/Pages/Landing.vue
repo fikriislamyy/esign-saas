@@ -107,7 +107,7 @@ onUnmounted(() => {
                         <div
                             class="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10"
                         >
-                            <FileSignature class="h-6 w-6 text-primary" />
+                            <FileSignature class="h-6 w-6 text-accent-ink" />
                         </div>
 
                         <span class="text-xl font-bold"> EZSign </span>
@@ -146,7 +146,7 @@ onUnmounted(() => {
                         <div
                             class="mb-6 inline-flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-sm"
                         >
-                            <CheckCircle2 class="h-4 w-4 text-emerald-500" />
+                            <CheckCircle2 class="h-4 w-4 text-pulse-green" />
 
                             Legally Binding Digital Signatures
                         </div>
@@ -192,28 +192,28 @@ onUnmounted(() => {
                         >
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Secure
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Paperless
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Team Ready
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <CheckCircle2
-                                    class="h-4 w-4 text-emerald-500"
+                                    class="h-4 w-4 text-pulse-green"
                                 />
                                 Fast Signing
                             </div>
@@ -296,7 +296,7 @@ onUnmounted(() => {
                 <FadeIn :delay="200" :once="false" type="scale">
                     <Card>
                         <CardHeader>
-                            <ShieldCheck class="h-8 w-8 text-primary" />
+                            <ShieldCheck class="h-8 w-8 text-accent-ink" />
 
                             <CardTitle> Secure </CardTitle>
                         </CardHeader>
@@ -311,7 +311,7 @@ onUnmounted(() => {
                 <FadeIn :delay="300" :once="false" type="scale">
                     <Card>
                         <CardHeader>
-                            <Zap class="h-8 w-8 text-primary" />
+                            <Zap class="h-8 w-8 text-accent-ink" />
 
                             <CardTitle> Fast </CardTitle>
                         </CardHeader>
@@ -326,7 +326,7 @@ onUnmounted(() => {
                 <FadeIn :delay="400" :once="false" type="scale">
                     <Card>
                         <CardHeader>
-                            <Users class="h-8 w-8 text-primary" />
+                            <Users class="h-8 w-8 text-accent-ink" />
 
                             <CardTitle> Collaboration </CardTitle>
                         </CardHeader>
@@ -341,7 +341,7 @@ onUnmounted(() => {
                 <FadeIn :delay="500" :once="false" type="scale">
                     <Card>
                         <CardHeader>
-                            <FileCheck2 class="h-8 w-8 text-primary" />
+                            <FileCheck2 class="h-8 w-8 text-accent-ink" />
 
                             <CardTitle> Tracking </CardTitle>
                         </CardHeader>

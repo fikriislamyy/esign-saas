@@ -76,7 +76,7 @@ const emit = defineEmits(["copy", "resend", "revoke"]);
                             <div
                                 class="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10"
                             >
-                                <Mail class="h-5 w-5 text-primary" />
+                                <Mail class="h-5 w-5 text-accent-ink" />
                             </div>
 
                             <div class="min-w-0">

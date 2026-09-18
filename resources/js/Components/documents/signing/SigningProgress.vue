@@ -30,7 +30,7 @@ const progress = computed(() => {
                 <span class="ml-2 text-muted-foreground">{{ signed }} of {{ total }}</span>
             </div>
 
-            <span class="font-semibold text-primary">{{ progress }}%</span>
+            <span class="font-semibold text-accent-ink">{{ progress }}%</span>
         </div>
 
         <div class="h-2 overflow-hidden rounded-full bg-muted">

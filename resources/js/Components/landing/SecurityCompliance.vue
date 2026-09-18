@@ -37,13 +37,13 @@ const badges = ["256-bit encryption", "Audit trail", "OTP verified", "GDPR ready
             <FadeIn v-for="card in cards" :key="card.title" type="scale">
                 <Card>
                     <CardHeader>
-                        <component :is="card.icon" class="mb-2 h-8 w-8 text-primary" />
+                        <component :is="card.icon" class="mb-2 h-8 w-8 text-accent-ink" />
                         <CardTitle>{{ card.title }}</CardTitle>
                     </CardHeader>
                     <CardContent>
                         <ul class="space-y-2">
                             <li v-for="bullet in card.bullets" :key="bullet" class="flex items-start gap-2 text-sm text-muted-foreground">
-                                <ShieldCheck class="h-4 w-4 shrink-0 text-primary" />
+                                <ShieldCheck class="h-4 w-4 shrink-0 text-accent-ink" />
                                 {{ bullet }}
                             </li>
                         </ul>
