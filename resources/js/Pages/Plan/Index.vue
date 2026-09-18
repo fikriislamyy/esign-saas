@@ -1,5 +1,5 @@
 <template>
-  <AuthenticatedLayout>
+  <AppLayout>
     <div class="mx-auto max-w-4xl space-y-8 py-12">
       <!-- Current Plan -->
       <div class="rounded-lg bg-white p-6 shadow">
@@ -185,12 +185,12 @@
 
     <!-- QR Payment Dialog -->
     <QrPaymentDialog :open="qrDialogOpen" @close="qrDialogOpen = false" />
-  </AuthenticatedLayout>
+  </AppLayout>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
+import AppLayout from '@/Layouts/AppLayout.vue'
 import CardPaymentDialog from '@/Components/plan/CardPaymentDialog.vue'
 import QrPaymentDialog from '@/Components/plan/QrPaymentDialog.vue'
 

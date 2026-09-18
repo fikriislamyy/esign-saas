@@ -1,5 +1,5 @@
 <template>
-  <AuthenticatedLayout>
+  <AppLayout>
     <div class="mx-auto max-w-md py-12">
       <div class="rounded-lg bg-white p-6 shadow">
         <h1 class="mb-4 text-2xl font-bold">Pay with QRIS</h1>
@@ -34,14 +34,14 @@
         </div>
       </div>
     </div>
-  </AuthenticatedLayout>
+  </AppLayout>
 </template>
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { Link } from '@inertiajs/vue3'
 import QRCode from 'qrcode'
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
+import AppLayout from '@/Layouts/AppLayout.vue'
 
 const props = defineProps({
   orderId: String,
