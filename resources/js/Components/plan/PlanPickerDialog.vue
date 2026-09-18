@@ -112,7 +112,7 @@ function buttonLabel(key) {
             <slot name="trigger" />
         </DialogTrigger>
 
-        <DialogContent class="sm:max-w-3xl">
+        <DialogContent class="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
                 <DialogTitle>Upgrade Plan</DialogTitle>
                 <DialogDescription>Choose the plan that fits your needs.</DialogDescription>

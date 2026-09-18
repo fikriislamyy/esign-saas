@@ -72,7 +72,11 @@ const formattedPrice = computed(() => {
 
 function elementStyles() {
     const styles = getComputedStyle(document.documentElement);
-    const token = (name) => `hsl(${styles.getPropertyValue(name).trim()})`;
+    const token = (name) => {
+        const value = styles.getPropertyValue(name).trim();
+        if (!value) return "#000";
+        return value.startsWith("hsl") ? value : `hsl(${value})`;
+    };
 
     return {
         base: {
