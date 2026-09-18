@@ -3,14 +3,14 @@ import { cva } from "class-variance-authority";
 export { default as Badge } from "./Badge.vue";
 
 export const badgeVariants = cva(
-    "h-6 gap-1 rounded-full border border-transparent px-2.5 py-0.5 text-xs font-medium transition-all has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&>svg]:size-3! group/badge inline-flex w-fit shrink-0 items-center justify-center overflow-hidden whitespace-nowrap focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [&>svg]:pointer-events-none",
+    "h-6 gap-1 rounded-sm border border-transparent px-2.5 py-0.5 text-xs font-medium transition-all has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&>svg]:size-3! group/badge inline-flex w-fit shrink-0 items-center justify-center overflow-hidden whitespace-nowrap focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [&>svg]:pointer-events-none",
     {
         variants: {
             variant: {
                 default:
                     "bg-primary text-primary-foreground hover:bg-primary/90",
 
-                success: "bg-emerald-500 text-white hover:bg-emerald-600",
+                success: "bg-pulse-green/15 text-pulse-green dark:bg-pulse-green/20",
 
                 secondary:
                     "bg-secondary text-secondary-foreground hover:bg-secondary/80",
@@ -22,15 +22,15 @@ export const badgeVariants = cva(
 
                 ghost: "hover:bg-muted hover:text-muted-foreground",
 
-                link: "text-primary underline-offset-4 hover:underline",
+                link: "text-accent-ink underline-offset-4 hover:underline",
 
                 pending:
-                    "border-transparent bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-400",
+                    "bg-lavender/15 text-lavender dark:bg-lavender/20",
 
                 warning:
-                    "border-transparent bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400",
+                    "bg-signal-teal/15 text-signal-teal dark:bg-signal-teal/20",
 
-                info: "border-transparent bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400",
+                info: "bg-iris-violet/15 text-iris-violet dark:bg-iris-violet/20",
             },
         },
 
