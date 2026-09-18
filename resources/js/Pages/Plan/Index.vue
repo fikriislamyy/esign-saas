@@ -259,9 +259,25 @@ const contactSales = () => {
   window.location.href = 'mailto:sales@example.com?subject=Enterprise Plan Inquiry'
 }
 
-const downgrade = () => {
-  if (confirm('Are you sure you want to downgrade to the Free plan?')) {
-    // TODO: Implement downgrade logic
+const downgrade = async () => {
+  if (!confirm('Are you sure you want to downgrade to the Free plan? This will cancel your subscription.')) {
+    return
+  }
+
+  try {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
+    const response = await fetch('/plan/downgrade', {
+      method: 'POST',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+    })
+
+    if (response.ok) {
+      window.location.reload()
+    }
+  } catch (err) {
+    alert('Failed to downgrade: ' + err.message)
   }
 }
 </script>

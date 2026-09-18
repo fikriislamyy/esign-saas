@@ -263,6 +263,9 @@ Route::middleware('auth', 'verified')->group(function () {
 
     Route::post('/plan/qr', [SubscriptionController::class, 'payWithQr'])
         ->name('plan.qr');
+
+    Route::post('/plan/downgrade', [SubscriptionController::class, 'downgrade'])
+        ->name('plan.downgrade');
 });
 
 require __DIR__.'/auth.php';

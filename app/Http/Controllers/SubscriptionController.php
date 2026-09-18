@@ -132,7 +132,43 @@ class SubscriptionController extends Controller
             ),
         ]);
 
+        SubscriptionPayment::create([
+            'organization_id' => $organization->id,
+            'subscription_id' => $subscription->id,
+            'plan' => $validated['plan'],
+            'provider' => 'stripe',
+            'currency' => 'USD',
+            'amount' => $planConfig['price_usd_cents'],
+            'amount_usd_cents' => $planConfig['price_usd_cents'],
+            'exchange_rate' => 1.0,
+            'status' => 'pending',
+            'stripe_invoice_id' => $stripeSubscription->latest_invoice,
+        ]);
+
         return redirect()->route('plan.index');
+    }
+
+    public function downgrade(Request $request, StripeService $stripe)
+    {
+        $user = $request->user();
+        abort_unless($user?->isOwner(), 403);
+
+        $organization = $user->organization;
+        $subscription = app(PlanService::class)->subscriptionFor($organization);
+
+        abort_unless($subscription->provider === 'stripe', 400, 'Only Stripe subscriptions can be downgraded.');
+
+        if ($subscription->stripe_subscription_id) {
+            $stripe->client()->subscriptions->cancel($subscription->stripe_subscription_id);
+        }
+
+        $subscription->update([
+            'plan' => 'free',
+            'status' => 'cancelled',
+            'cancelled_at' => now(),
+        ]);
+
+        return redirect()->route('plan.index')->with('message', 'Downgraded to Free plan.');
     }
 
     public function payWithQr(Request $request, PakasirService $pakasir)
