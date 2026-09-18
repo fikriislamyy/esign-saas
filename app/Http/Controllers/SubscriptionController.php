@@ -139,8 +139,11 @@ class SubscriptionController extends Controller
             'provider' => 'stripe',
             'stripe_subscription_id' => $stripeSubscription->id,
             'subscribed_at' => now(),
+            // Stripe moved current_period_end off the subscription and onto
+            // its items. Reading the old path yields null, and an epoch-0
+            // expiry makes effectivePlan() fall straight back to free.
             'expired_at' => Carbon::createFromTimestamp(
-                $stripeSubscription->current_period_end
+                $stripeSubscription->items->data[0]->current_period_end
             ),
         ]);
 
