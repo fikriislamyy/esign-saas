@@ -99,6 +99,9 @@ class StripeWebhookController extends Controller
             case 'checkout.session.completed':
                 return $this->handleCheckoutCompleted($event->data->object);
 
+            case 'payment_intent.succeeded':
+                return $this->handlePaymentIntentSucceeded($event->data->object);
+
             case 'invoice.paid':
                 return $this->handleInvoicePaid($event->data->object);
 
@@ -283,6 +286,63 @@ class StripeWebhookController extends Controller
         return response()->json([
             'received' => true,
         ]);
+    }
+
+    protected function handlePaymentIntentSucceeded($intent)
+    {
+        $topupId = $intent->metadata->wallet_topup_id ?? null;
+
+        // Subscription invoices also produce PaymentIntents. Those carry no
+        // wallet_topup_id and are handled by invoice.paid instead.
+        if (! $topupId) {
+            return response()->json(['received' => true]);
+        }
+
+        DB::transaction(function () use ($topupId, $intent) {
+            $topup = WalletTopup::query()
+                ->lockForUpdate()
+                ->find($topupId);
+
+            if (! $topup) {
+                Log::warning('PaymentIntent for unknown top-up', [
+                    'topup_id' => $topupId,
+                    'payment_intent' => $intent->id,
+                ]);
+
+                return;
+            }
+
+            // Idempotency: Stripe retries, and the client may also have
+            // triggered a reload. Credit once (trap 2).
+            if ($topup->status === 'paid') {
+                return;
+            }
+
+            app(WalletService::class)->credit(
+                organization: $topup->organization,
+                sourceCurrency: $topup->currency,
+                sourceAmount: (float) $topup->amount,
+                exchangeRate: (float) $topup->exchange_rate,
+                amountUsdCents: (int) $topup->wallet_amount_usd_cents,
+                type: 'topup',
+                description: 'Wallet top-up via card',
+                reference: $topup,
+                createdBy: $topup->created_by,
+                metadata: ['stripe_payment_intent_id' => $intent->id],
+            );
+
+            $topup->update([
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+
+            Log::info('Wallet credited from PaymentIntent', [
+                'topup_id' => $topup->id,
+                'payment_intent' => $intent->id,
+            ]);
+        });
+
+        return response()->json(['received' => true]);
     }
 
     protected function handleInvoicePaid($invoice)
