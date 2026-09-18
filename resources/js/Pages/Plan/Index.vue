@@ -191,8 +191,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
-import CardPaymentDialog from '@/Components/Plan/CardPaymentDialog.vue'
-import QrPaymentDialog from '@/Components/Plan/QrPaymentDialog.vue'
+import CardPaymentDialog from '@/Components/plan/CardPaymentDialog.vue'
+import QrPaymentDialog from '@/Components/plan/QrPaymentDialog.vue'
 
 const props = defineProps({
   subscription: Object,
