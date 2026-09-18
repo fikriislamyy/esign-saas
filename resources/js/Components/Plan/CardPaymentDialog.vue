@@ -54,16 +54,20 @@ onMounted(async () => {
   stripe.value = await loadStripe(props.stripeKey)
   elements.value = stripe.value.elements()
   cardElement.value = elements.value.create('card')
-})
 
-watch(
-  () => props.open,
-  (newOpen) => {
-    if (newOpen && cardElement.value) {
-      setTimeout(() => cardElement.value.mount('#card-element'), 0)
+  watch(
+    () => props.open,
+    (newOpen) => {
+      if (newOpen && cardElement.value && !cardElement.value._isMounted) {
+        setTimeout(() => {
+          if (document.getElementById('card-element')) {
+            cardElement.value.mount('#card-element')
+          }
+        }, 50)
+      }
     }
-  }
-)
+  )
+})
 
 const handleSubmit = async () => {
   if (!stripe.value || !cardElement.value) return
