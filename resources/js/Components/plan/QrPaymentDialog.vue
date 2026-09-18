@@ -1,75 +1,182 @@
-<template>
-  <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-    <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-      <h2 class="mb-4 text-lg font-semibold">Pay with QRIS</h2>
-
-      <form @submit.prevent="handleSubmit" class="space-y-4">
-        <div class="rounded bg-blue-50 p-3 text-sm text-blue-900">
-          <p class="font-semibold">Pro Plan: $10/month (IDR ~150,000)</p>
-          <p class="mt-2 text-xs">
-            ⚠️ This is a one-time payment. You'll need to renew manually after 30 days.
-          </p>
-        </div>
-
-        <div v-if="error" class="rounded bg-red-50 p-3 text-sm text-red-900">{{ error }}</div>
-
-        <div class="flex gap-3">
-          <button
-            type="button"
-            @click="() => $emit('close')"
-            class="flex-1 rounded border border-gray-300 py-2 text-sm font-medium hover:bg-gray-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            :disabled="loading"
-            class="flex-1 rounded bg-green-600 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            {{ loading ? 'Processing...' : 'Generate QR' }}
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-</template>
-
 <script setup>
-import { ref } from 'vue'
+import { computed, ref, watch } from "vue";
+import { router, usePage } from "@inertiajs/vue3";
+import { Loader2, QrCode, TriangleAlert } from "lucide-vue-next";
 
-const emit = defineEmits(['close'])
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog";
 
-const loading = ref(false)
-const error = ref(null)
+import { Button } from "@/components/ui/button";
 
-const handleSubmit = async () => {
-  loading.value = true
-  error.value = null
+const page = usePage();
 
-  try {
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
-    const response = await fetch('/plan/qr', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfToken,
-      },
-      body: JSON.stringify({
-        plan: 'pro',
-      }),
-    })
+const open = ref(false);
+const processing = ref(false);
+const error = ref("");
 
-    if (!response.ok) {
-      const data = await response.json()
-      error.value = data.errors?.plan || 'Failed to generate QR code'
-      loading.value = false
-      return
+const plan = computed(() => page.props.plans?.pro ?? null);
+
+const usdToIdrRate = computed(() => Number(page.props.wallet?.usdToIdrRate || 0));
+
+const formattedPrice = computed(() => {
+    const cents = plan.value?.price_usd_cents ?? 1000;
+
+    return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+    }).format(cents / 100);
+});
+
+const formattedIdr = computed(() => {
+    if (!usdToIdrRate.value) {
+        return null;
     }
 
-    window.location.href = response.url
-  } catch (err) {
-    error.value = err.message || 'An error occurred'
-    loading.value = false
-  }
+    const cents = plan.value?.price_usd_cents ?? 1000;
+
+    return new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+    }).format(Math.round((cents / 100) * usdToIdrRate.value));
+});
+
+watch(open, (isOpen) => {
+    if (!isOpen) {
+        processing.value = false;
+        error.value = "";
+    }
+});
+
+function submit() {
+    processing.value = true;
+    error.value = "";
+
+    router.post(
+        route("plan.qr"),
+        { plan: "pro" },
+        {
+            onError: (serverErrors) => {
+                error.value =
+                    Object.values(serverErrors)[0] ??
+                    "The QR code could not be generated.";
+
+                processing.value = false;
+            },
+        },
+    );
 }
 </script>
+
+<template>
+    <Dialog v-model:open="open">
+        <DialogTrigger as-child>
+            <slot name="trigger">
+                <Button variant="outline" class="gap-2">
+                    <QrCode class="h-4 w-4" />
+                    Pay with QRIS
+                </Button>
+            </slot>
+        </DialogTrigger>
+
+        <DialogContent class="sm:max-w-lg">
+            <DialogHeader>
+                <DialogTitle> Pay with QRIS </DialogTitle>
+
+                <DialogDescription>
+                    Scan a QR code with any Indonesian banking or e-wallet app.
+                </DialogDescription>
+            </DialogHeader>
+
+            <div class="space-y-6 py-2">
+                <!-- Summary -->
+                <div class="rounded-2xl border bg-card p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs text-muted-foreground">Plan</p>
+
+                            <p class="mt-1 text-lg font-semibold">
+                                {{ plan?.label ?? "Pro" }}
+                            </p>
+                        </div>
+
+                        <div class="text-right">
+                            <p class="text-xs text-muted-foreground">
+                                {{ formattedPrice }} for 30 days
+                            </p>
+
+                            <p
+                                v-if="formattedIdr"
+                                class="mt-1 text-lg font-semibold"
+                            >
+                                {{ formattedIdr }}
+                            </p>
+
+                            <p
+                                v-else
+                                class="mt-1 text-sm font-medium text-destructive"
+                            >
+                                Rate unavailable
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Manual renewal warning -->
+                <div class="flex gap-3 rounded-xl border bg-muted/30 p-4">
+                    <TriangleAlert
+                        class="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground"
+                    />
+
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium">
+                            QRIS does not renew automatically
+                        </p>
+
+                        <p class="text-xs leading-5 text-muted-foreground">
+                            This is a one-off payment covering 30 days. You will
+                            need to pay again before it expires, or your
+                            organization drops back to the Free plan.
+                        </p>
+                    </div>
+                </div>
+
+                <p v-if="error" class="text-sm text-destructive">
+                    {{ error }}
+                </p>
+            </div>
+
+            <DialogFooter>
+                <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="processing"
+                    @click="open = false"
+                >
+                    Cancel
+                </Button>
+
+                <Button
+                    type="button"
+                    class="gap-2"
+                    :disabled="processing || !usdToIdrRate"
+                    @click="submit"
+                >
+                    <Loader2 v-if="processing" class="h-4 w-4 animate-spin" />
+
+                    <QrCode v-else class="h-4 w-4" />
+
+                    {{ processing ? "Generating..." : "Generate QR code" }}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+</template>

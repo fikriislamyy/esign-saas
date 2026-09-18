@@ -1,123 +1,264 @@
-<template>
-  <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-    <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-      <h2 class="mb-4 text-lg font-semibold">Subscribe to Pro</h2>
-
-      <form @submit.prevent="handleSubmit" class="space-y-4">
-        <div id="card-element" class="rounded border border-gray-300 p-3"></div>
-        <div id="card-errors" class="text-sm text-red-600"></div>
-
-        <div class="mt-4 rounded bg-blue-50 p-3 text-sm text-blue-900">
-          <p class="font-semibold">Pro Plan: $10/month</p>
-          <p class="mt-1">100 docs/month, 10 members, 10GB storage</p>
-          <p class="mt-2 text-xs text-gray-600">Auto-renewal: Your card will be charged monthly.</p>
-        </div>
-
-        <div class="flex gap-3">
-          <button
-            type="button"
-            @click="() => $emit('close')"
-            class="flex-1 rounded border border-gray-300 py-2 text-sm font-medium hover:bg-gray-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            :disabled="loading"
-            class="flex-1 rounded bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {{ loading ? 'Processing...' : 'Subscribe Now' }}
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-</template>
-
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import { loadStripe } from '@stripe/stripe-js'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { router, usePage } from "@inertiajs/vue3";
+import { loadStripe } from "@stripe/stripe-js";
+import { CreditCard, Loader2, ShieldCheck } from "lucide-vue-next";
 
-const props = defineProps({
-  open: Boolean,
-  stripeKey: String,
-})
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog";
 
-const emit = defineEmits(['close', 'subscribed'])
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 
-const loading = ref(false)
-const stripe = ref(null)
-const elements = ref(null)
-const cardElement = ref(null)
+const page = usePage();
 
-onMounted(async () => {
-  stripe.value = await loadStripe(props.stripeKey)
-  elements.value = stripe.value.elements()
-  cardElement.value = elements.value.create('card')
+const open = ref(false);
+const processing = ref(false);
+const error = ref("");
+const cardMount = ref(null);
 
-  watch(
-    () => props.open,
-    (newOpen) => {
-      if (newOpen && cardElement.value && !cardElement.value._isMounted) {
-        setTimeout(() => {
-          if (document.getElementById('card-element')) {
-            cardElement.value.mount('#card-element')
-          }
-        }, 50)
-      }
-    }
-  )
-})
+let stripe = null;
+let cardElement = null;
 
-const handleSubmit = async () => {
-  if (!stripe.value || !cardElement.value) return
+const plan = computed(() => page.props.plans?.pro ?? null);
 
-  loading.value = true
-  const cardErrors = document.getElementById('card-errors')
+const formattedPrice = computed(() => {
+    const cents = plan.value?.price_usd_cents ?? 1000;
 
-  try {
-    // Create setup intent for saving card
-    const setupResponse = await fetch('/plan/checkout', { method: 'POST' })
-    const { clientSecret } = await setupResponse.json()
+    return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+    }).format(cents / 100);
+});
 
-    // Confirm setup intent to create payment method
-    const { setupIntent, error } = await stripe.value.confirmCardSetup(clientSecret, {
-      payment_method: {
-        card: cardElement.value,
-      },
-    })
+// Elements renders in an iframe, so it cannot inherit the page's CSS. Read the
+// resolved theme tokens and hand Stripe matching literal colours instead.
+function elementStyles() {
+    const styles = getComputedStyle(document.documentElement);
+    const token = (name) => `hsl(${styles.getPropertyValue(name).trim()})`;
 
-    if (error) {
-      cardErrors.textContent = error.message
-      loading.value = false
-      return
-    }
+    return {
+        base: {
+            color: token("--card-foreground"),
+            fontFamily:
+                'Inter Variable, ui-sans-serif, system-ui, -apple-system, sans-serif',
+            fontSize: "14px",
+            fontSmoothing: "antialiased",
+            "::placeholder": {
+                color: token("--muted-foreground"),
+            },
+        },
 
-    // Subscribe with the confirmed payment method
-    const response = await fetch('/plan/subscribe', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content,
-      },
-      body: JSON.stringify({
-        plan: 'pro',
-        payment_method: setupIntent.payment_method,
-      }),
-    })
+        invalid: {
+            color: token("--destructive"),
+            iconColor: token("--destructive"),
+        },
+    };
+}
 
-    if (!response.ok) {
-      const data = await response.json()
-      cardErrors.textContent = data.message || 'Subscription failed'
-      loading.value = false
-      return
+async function mountCard() {
+    if (!stripe) {
+        stripe = await loadStripe(page.props.stripeKey);
     }
 
-    emit('subscribed')
-    window.location.href = '/plan'
-  } catch (err) {
-    cardErrors.textContent = err.message || 'An error occurred'
-    loading.value = false
-  }
+    await nextTick();
+
+    if (!stripe || !cardMount.value) {
+        return;
+    }
+
+    cardElement = stripe.elements().create("card", {
+        style: elementStyles(),
+        hidePostalCode: true,
+    });
+
+    cardElement.on("change", (event) => {
+        error.value = event.error?.message ?? "";
+    });
+
+    cardElement.mount(cardMount.value);
+}
+
+function unmountCard() {
+    cardElement?.destroy();
+    cardElement = null;
+}
+
+watch(open, (isOpen) => {
+    if (isOpen) {
+        error.value = "";
+        mountCard();
+
+        return;
+    }
+
+    processing.value = false;
+    unmountCard();
+});
+
+onBeforeUnmount(unmountCard);
+
+async function submit() {
+    if (!stripe || !cardElement || processing.value) {
+        return;
+    }
+
+    processing.value = true;
+    error.value = "";
+
+    try {
+        const { data } = await window.axios.post(route("plan.checkout"));
+
+        const result = await stripe.confirmCardSetup(data.clientSecret, {
+            payment_method: { card: cardElement },
+        });
+
+        if (result.error) {
+            error.value = result.error.message;
+            processing.value = false;
+
+            return;
+        }
+
+        router.post(
+            route("plan.subscribe"),
+            {
+                plan: "pro",
+                payment_method: result.setupIntent.payment_method,
+            },
+            {
+                onError: (serverErrors) => {
+                    error.value =
+                        Object.values(serverErrors)[0] ??
+                        "The subscription could not be created.";
+
+                    processing.value = false;
+                },
+
+                onSuccess: () => {
+                    open.value = false;
+                },
+            },
+        );
+    } catch (requestError) {
+        error.value =
+            requestError.response?.data?.message ??
+            "We could not start the subscription. Please try again.";
+
+        processing.value = false;
+    }
 }
 </script>
+
+<template>
+    <Dialog v-model:open="open">
+        <DialogTrigger as-child>
+            <slot name="trigger">
+                <Button class="gap-2">
+                    <CreditCard class="h-4 w-4" />
+                    Upgrade to Pro
+                </Button>
+            </slot>
+        </DialogTrigger>
+
+        <DialogContent class="sm:max-w-lg">
+            <DialogHeader>
+                <DialogTitle> Upgrade to Pro </DialogTitle>
+
+                <DialogDescription>
+                    Pay by card and your plan renews automatically each month.
+                </DialogDescription>
+            </DialogHeader>
+
+            <div class="space-y-6 py-2">
+                <!-- Summary -->
+                <div class="rounded-2xl border bg-card p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs text-muted-foreground">Plan</p>
+
+                            <p class="mt-1 text-lg font-semibold">
+                                {{ plan?.label ?? "Pro" }}
+                            </p>
+                        </div>
+
+                        <div class="text-right">
+                            <p class="text-xs text-muted-foreground">
+                                Billed monthly
+                            </p>
+
+                            <p class="mt-1 text-lg font-semibold">
+                                {{ formattedPrice }}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card -->
+                <div class="space-y-2">
+                    <Label for="plan-card-element"> Card details </Label>
+
+                    <div
+                        id="plan-card-element"
+                        ref="cardMount"
+                        class="rounded-md border bg-transparent px-3 py-3 transition-colors focus-within:border-ring"
+                    />
+
+                    <p v-if="error" class="text-sm text-destructive">
+                        {{ error }}
+                    </p>
+                </div>
+
+                <!-- Security notice -->
+                <div class="flex gap-3 rounded-xl border bg-muted/30 p-4">
+                    <ShieldCheck
+                        class="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground"
+                    />
+
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium">
+                            Card details never touch our servers
+                        </p>
+
+                        <p class="text-xs leading-5 text-muted-foreground">
+                            The field above is hosted by Stripe. We only store
+                            the brand, last four digits and expiry.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <DialogFooter>
+                <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="processing"
+                    @click="open = false"
+                >
+                    Cancel
+                </Button>
+
+                <Button
+                    type="button"
+                    class="gap-2"
+                    :disabled="processing"
+                    @click="submit"
+                >
+                    <Loader2 v-if="processing" class="h-4 w-4 animate-spin" />
+
+                    <CreditCard v-else class="h-4 w-4" />
+
+                    {{ processing ? "Processing..." : "Subscribe" }}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+</template>
