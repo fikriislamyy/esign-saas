@@ -61,6 +61,16 @@ class HandleInertiaRequests extends Middleware
                     'usdToIdrRate' => $usdToIdrRate,
                 ]
                 : null,
+
+            'plan' => $organization
+                ? [
+                    'key' => $organization->subscription?->effectivePlan() ?? 'free',
+                    'label' => config('plans.'.($organization->subscription?->effectivePlan() ?? 'free').'.label'),
+                    'expiredAt' => $organization->subscription?->expired_at,
+                ]
+                : null,
+
+            'stripeKey' => config('services.stripe.key'),
         ]);
     }
 }
