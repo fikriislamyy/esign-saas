@@ -61,6 +61,23 @@ class DocumentController extends Controller
 
         $file = $request->file('file');
 
+        $organization = $request->user()->organization;
+        $planService = app(\App\Services\PlanService::class);
+
+        if (! $planService->canUploadDocument($organization)) {
+            $limits = $planService->limits($organization)['documents'];
+
+            return back()->withErrors([
+                'file' => "Your plan allows {$limits['limit']} documents per {$limits['period']}. Upgrade to upload more.",
+            ]);
+        }
+
+        if (! $planService->canStore($organization, $file->getSize())) {
+            return back()->withErrors([
+                'file' => 'This upload would exceed your plan\'s storage limit.',
+            ]);
+        }
+
         $documentDisk = env('DOCUMENTS_DISK', 'documents');
 
         $path = $file->store(

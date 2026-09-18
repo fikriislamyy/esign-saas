@@ -73,6 +73,26 @@ class Organization extends Model
         );
     }
 
+    public function subscription(): HasOne
+    {
+        return $this->hasOne(Subscription::class);
+    }
+
+    public function cards()
+    {
+        return $this->hasMany(CardInfo::class);
+    }
+
+    public function subscriptionPayments()
+    {
+        return $this->hasMany(SubscriptionPayment::class);
+    }
+
+    public function invitations()
+    {
+        return $this->hasMany(Invitation::class);
+    }
+
     public function getWalletBalanceUsdCentsAttribute(): int
     {
         return (int) ($this->wallet?->balance_usd_cents ?? 0);

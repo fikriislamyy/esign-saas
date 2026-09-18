@@ -82,6 +82,12 @@ class RegisteredUserController extends Controller
             'owner_id' => $user->id,
         ]);
 
+        $organization->subscription()->create([
+            'plan' => 'free',
+            'status' => 'active',
+            'expired_at' => null,
+        ]);
+
         event(new Registered($user));
 
         Auth::login($user);

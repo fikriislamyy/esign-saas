@@ -18,6 +18,15 @@ class InvitationController extends Controller
             403
         );
 
+        $planService = app(\App\Services\PlanService::class);
+        $organization = $request->user()->organization;
+
+        if (! $planService->canAddMember($organization)) {
+            return back()->withErrors([
+                'email' => 'You have reached the member limit for your plan. Upgrade to invite more people.',
+            ]);
+        }
+
         $request->validate([
             'email' => [
                 'required',

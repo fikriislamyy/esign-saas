@@ -45,4 +45,10 @@ return [
         'key' => env('RESEND_API_KEY'),
     ],
 
+    'pakasir' => [
+        'base_url' => env('PAKASIR_BASE_URL', 'https://app.pakasir.com'),
+        'project' => env('PAKASIR_PROJECT'),
+        'api_key' => env('PAKASIR_API_KEY'),
+    ],
+
 ];

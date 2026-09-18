@@ -10,9 +10,11 @@ use App\Http\Controllers\InvitationAcceptController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\MembersController;
 use App\Http\Controllers\OrganizationSettingsController;
+use App\Http\Controllers\PakasirWebhookController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SigningController;
 use App\Http\Controllers\StripeWebhookController;
+use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\TemplateSignatureFieldController;
 use Illuminate\Foundation\Application;
@@ -55,6 +57,11 @@ Route::post('/stripe/webhook', [
     StripeWebhookController::class,
     'handle',
 ])->name('stripe.webhook');
+
+Route::post('/pakasir/webhook', [
+    PakasirWebhookController::class,
+    'handle',
+])->name('pakasir.webhook');
 
 Route::get(
     '/sign/{token}',
@@ -244,6 +251,21 @@ Route::middleware('auth', 'verified')->group(function () {
         BillingTopupController::class,
         'store',
     ])->name('billing.topups.store');
+
+    Route::get('/plan', [SubscriptionController::class, 'index'])
+        ->name('plan.index');
+
+    Route::post('/plan/checkout', [SubscriptionController::class, 'checkout'])
+        ->name('plan.checkout');
+
+    Route::post('/plan/subscribe', [SubscriptionController::class, 'subscribe'])
+        ->name('plan.subscribe');
+
+    Route::post('/plan/qr', [SubscriptionController::class, 'payWithQr'])
+        ->name('plan.qr');
+
+    Route::post('/plan/downgrade', [SubscriptionController::class, 'downgrade'])
+        ->name('plan.downgrade');
 });
 
 require __DIR__.'/auth.php';

@@ -95,21 +95,28 @@ class StripeWebhookController extends Controller
             ]
         );
 
-        if ($event->type !== 'checkout.session.completed') {
-            Log::info(
-                'StripeWebhookController@handle EVENT IGNORED',
-                [
-                    'event_type' => $event->type,
-                ]
-            );
+        switch ($event->type) {
+            case 'checkout.session.completed':
+                return $this->handleCheckoutCompleted($event->data->object);
 
-            return response()->json([
-                'received' => true,
-            ]);
+            case 'invoice.paid':
+                return $this->handleInvoicePaid($event->data->object);
+
+            case 'invoice.payment_failed':
+                return $this->handleInvoiceFailed($event->data->object);
+
+            case 'customer.subscription.deleted':
+                return $this->handleSubscriptionDeleted($event->data->object);
+
+            default:
+                Log::info('Stripe event ignored', ['type' => $event->type]);
+
+                return response()->json(['received' => true]);
         }
+    }
 
-        $session = $event->data->object;
-
+    protected function handleCheckoutCompleted($session)
+    {
         Log::info(
             'StripeWebhookController@handle CHECKOUT SESSION',
             [
@@ -273,17 +280,84 @@ class StripeWebhookController extends Controller
             );
         });
 
-        Log::info(
-            'StripeWebhookController@handle COMPLETE',
-            [
-                'event_id' => $event->id,
-                'session_id' => $session->id,
-                'topup_id' => $topupId,
-            ]
-        );
-
         return response()->json([
             'received' => true,
         ]);
+    }
+
+    protected function handleInvoicePaid($invoice)
+    {
+        $stripeSubscriptionId = $invoice->subscription ?? null;
+
+        if (! $stripeSubscriptionId) {
+            return response()->json(['received' => true]);
+        }
+
+        DB::transaction(function () use ($invoice, $stripeSubscriptionId) {
+            $subscription = \App\Models\Subscription::query()
+                ->lockForUpdate()
+                ->where('stripe_subscription_id', $stripeSubscriptionId)
+                ->first();
+
+            if (! $subscription) {
+                Log::warning('Stripe invoice for unknown subscription', [
+                    'stripe_subscription_id' => $stripeSubscriptionId,
+                ]);
+
+                return;
+            }
+
+            $subscription->update([
+                'status' => 'active',
+                'expired_at' => \Carbon\Carbon::createFromTimestamp($invoice->period_end),
+            ]);
+
+            \App\Models\SubscriptionPayment::where('stripe_invoice_id', $invoice->id)
+                ->update(['status' => 'paid', 'paid_at' => now()]);
+        });
+
+        return response()->json(['received' => true]);
+    }
+
+    protected function handleInvoiceFailed($invoice)
+    {
+        $stripeSubscriptionId = $invoice->subscription ?? null;
+
+        if (! $stripeSubscriptionId) {
+            return response()->json(['received' => true]);
+        }
+
+        $subscription = \App\Models\Subscription::query()
+            ->where('stripe_subscription_id', $stripeSubscriptionId)
+            ->first();
+
+        if ($subscription) {
+            $subscription->update(['status' => 'past_due']);
+        }
+
+        return response()->json(['received' => true]);
+    }
+
+    protected function handleSubscriptionDeleted($subscription)
+    {
+        $stripeSubscriptionId = $subscription->id ?? null;
+
+        if (! $stripeSubscriptionId) {
+            return response()->json(['received' => true]);
+        }
+
+        $sub = \App\Models\Subscription::query()
+            ->where('stripe_subscription_id', $stripeSubscriptionId)
+            ->first();
+
+        if ($sub) {
+            $sub->update([
+                'plan' => 'free',
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+            ]);
+        }
+
+        return response()->json(['received' => true]);
     }
 }

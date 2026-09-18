@@ -5,6 +5,7 @@ import {
     Users,
     Settings,
     WalletCards,
+    Zap,
 } from "lucide-vue-next";
 
 export const navigation = [
@@ -40,6 +41,13 @@ export const navigation = [
                 title: "Billing",
                 icon: WalletCards,
                 route: "billing.index",
+                ownerOnly: true,
+            },
+
+            {
+                title: "Plan",
+                icon: Zap,
+                route: "plan.index",
                 ownerOnly: true,
             },
         ],
