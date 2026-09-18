@@ -58,3 +58,21 @@ services:
         ports:
             - "1025:1025"
             - "8025:8025"
+
+    scheduler:
+        build:
+            context: .
+            dockerfile: docker/php/Dockerfile
+
+        container_name: esign-scheduler
+
+        volumes:
+            - .:/var/www
+
+        working_dir: /var/www
+
+        command: php artisan schedule:work
+
+        depends_on:
+            - postgres
+            - redis
