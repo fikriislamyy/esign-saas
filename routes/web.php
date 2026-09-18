@@ -14,6 +14,7 @@ use App\Http\Controllers\PakasirWebhookController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SigningController;
 use App\Http\Controllers\StripeWebhookController;
+use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\TemplateSignatureFieldController;
 use Illuminate\Foundation\Application;
@@ -250,6 +251,18 @@ Route::middleware('auth', 'verified')->group(function () {
         BillingTopupController::class,
         'store',
     ])->name('billing.topups.store');
+
+    Route::get('/plan', [SubscriptionController::class, 'index'])
+        ->name('plan.index');
+
+    Route::post('/plan/checkout', [SubscriptionController::class, 'checkout'])
+        ->name('plan.checkout');
+
+    Route::post('/plan/subscribe', [SubscriptionController::class, 'subscribe'])
+        ->name('plan.subscribe');
+
+    Route::post('/plan/qr', [SubscriptionController::class, 'payWithQr'])
+        ->name('plan.qr');
 });
 
 require __DIR__.'/auth.php';
