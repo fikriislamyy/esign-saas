@@ -47,6 +47,12 @@ class BillingTopupController extends Controller
                 'gt:0',
                 'min:0.5',
             ],
+
+            'method' => [
+                'nullable',
+                'string',
+                'in:card,qris',
+            ],
         ]);
 
         Log::info('BillingTopupController@store VALIDATED', [
@@ -57,6 +63,20 @@ class BillingTopupController extends Controller
         $organization = $user->organization;
 
         abort_unless($organization, 403);
+
+        $isQris = ($validated['method'] ?? 'card') === 'qris';
+
+        // Checked before the pending top-up row is created, so a misconfigured
+        // gateway does not leave orphaned rows behind.
+        if ($isQris && ! app(\App\Services\PakasirService::class)->isConfigured()) {
+            Log::error('QRIS blocked: Pakasir is not configured', [
+                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            ]);
+
+            return response()->json([
+                'message' => 'QRIS payments are not available yet. Please pay by card or contact support.',
+            ], 422);
+        }
 
         $currency = strtoupper($validated['currency']);
         $sourceAmount = (float) $validated['amount'];
@@ -187,6 +207,39 @@ class BillingTopupController extends Controller
             'wallet_amount_usd_cents' => $topup->wallet_amount_usd_cents,
             'status' => $topup->status,
         ]);
+
+        if ($isQris) {
+            $rate = $this->exchangeRateService->usdToIdr();
+
+            if (! $rate || $rate <= 0) {
+                return response()->json([
+                    'message' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
+                ], 422);
+            }
+
+            $amountIdr = (int) round(($walletAmountUsdCents / 100) * $rate);
+            $orderId = 'TOP-'.$organization->id.'-'.now()->timestamp;
+
+            $topup->update([
+                'provider' => 'pakasir',
+                'order_id' => $orderId,
+                // The webhook and transactionDetail() both need the exact rupiah figure.
+                // wallet_topups.amount holds USD, so it cannot answer that.
+                'metadata' => array_merge($topup->metadata ?? [], [
+                    'amount_idr' => $amountIdr,
+                ]),
+            ]);
+
+            $result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
+            $payload = $result['payment'] ?? [];
+
+            return response()->json([
+                'orderId' => $orderId,
+                'amountIdr' => $amountIdr,
+                'qrString' => $payload['payment_number'] ?? null,
+                'expiredAt' => $payload['expired_at'] ?? null,
+            ]);
+        }
 
         /*
         |--------------------------------------------------------------------------

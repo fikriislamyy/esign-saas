@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\SubscriptionPayment;
+use App\Models\WalletTopup;
 use App\Services\PakasirService;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -19,26 +21,35 @@ class PakasirWebhookController extends Controller
         }
 
         $payment = SubscriptionPayment::where('order_id', $orderId)->first();
+        $topup = $payment ? null : WalletTopup::where('order_id', $orderId)->first();
 
-        if (! $payment) {
+        $record = $payment ?? $topup;
+
+        if (! $record) {
             Log::warning('Pakasir webhook for unknown order', ['order_id' => $orderId]);
 
             return response()->json(['received' => true]);
         }
 
-        if ($payment->provider !== 'pakasir') {
+        // subscription_payments.amount is already IDR. wallet_topups.amount is USD,
+        // so the rupiah figure lives in metadata (see BillingTopupController).
+        $expectedIdr = $payment
+            ? (int) $payment->amount
+            : (int) ($topup->metadata['amount_idr'] ?? 0);
+
+        if ($record->provider !== 'pakasir') {
             Log::warning('Pakasir webhook for non-Pakasir payment', [
                 'order_id' => $orderId,
-                'provider' => $payment->provider,
+                'provider' => $record->provider,
             ]);
 
             return response()->json(['received' => true]);
         }
 
-        if ((int) $request->input('amount') !== (int) $payment->amount) {
+        if ((int) $request->input('amount') !== $expectedIdr) {
             Log::warning('Pakasir webhook amount mismatch', [
                 'order_id' => $orderId,
-                'expected' => (int) $payment->amount,
+                'expected' => $expectedIdr,
                 'received' => $request->input('amount'),
             ]);
 
@@ -55,7 +66,7 @@ class PakasirWebhookController extends Controller
             return response()->json(['received' => true]);
         }
 
-        $detail = $pakasir->transactionDetail($orderId, (int) $payment->amount);
+        $detail = $pakasir->transactionDetail($orderId, $expectedIdr);
 
         $transaction = $detail['transaction'] ?? [];
         $status = $transaction['status'] ?? null;
@@ -69,22 +80,49 @@ class PakasirWebhookController extends Controller
             return response()->json(['received' => true]);
         }
 
-        DB::transaction(function () use ($payment) {
-            $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
+        if ($payment) {
+            DB::transaction(function () use ($payment) {
+                $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
 
-            if ($payment->status === 'paid') {
+                if ($payment->status === 'paid') {
+                    return;
+                }
+
+                $payment->update(['status' => 'paid', 'paid_at' => now()]);
+
+                $payment->organization->subscription->update([
+                    'plan' => $payment->plan,
+                    'status' => 'active',
+                    'provider' => 'pakasir',
+                    'subscribed_at' => now(),
+                    'expired_at' => now()->addDays(30),
+                ]);
+            });
+
+            return response()->json(['received' => true]);
+        }
+
+        DB::transaction(function () use ($topup, $orderId) {
+            $topup = WalletTopup::lockForUpdate()->find($topup->id);
+
+            if ($topup->status === 'paid') {
                 return;
             }
 
-            $payment->update(['status' => 'paid', 'paid_at' => now()]);
+            app(WalletService::class)->credit(
+                organization: $topup->organization,
+                sourceCurrency: $topup->currency,
+                sourceAmount: (float) $topup->amount,
+                exchangeRate: (float) $topup->exchange_rate,
+                amountUsdCents: (int) $topup->wallet_amount_usd_cents,
+                type: 'topup',
+                description: 'Wallet top-up via QRIS',
+                reference: $topup,
+                createdBy: $topup->created_by,
+                metadata: ['pakasir_order_id' => $orderId],
+            );
 
-            $payment->organization->subscription->update([
-                'plan' => $payment->plan,
-                'status' => 'active',
-                'provider' => 'pakasir',
-                'subscribed_at' => now(),
-                'expired_at' => now()->addDays(30),
-            ]);
+            $topup->update(['status' => 'paid', 'paid_at' => now()]);
         });
 
         return response()->json(['received' => true]);

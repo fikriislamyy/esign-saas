@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\PaymentStatusController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BillingTopupController;
 use App\Http\Controllers\DashboardController;
@@ -266,6 +267,9 @@ Route::middleware('auth', 'verified')->group(function () {
 
     Route::post('/plan/downgrade', [SubscriptionController::class, 'downgrade'])
         ->name('plan.downgrade');
+
+    Route::get('/payments/{orderId}/status', [PaymentStatusController::class, 'show'])
+        ->name('payments.status');
 });
 
 require __DIR__.'/auth.php';

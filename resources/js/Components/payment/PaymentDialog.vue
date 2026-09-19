@@ -2,6 +2,7 @@
 import { computed, defineModel, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { router, usePage } from "@inertiajs/vue3";
 import { loadStripe } from "@stripe/stripe-js";
+import QRCode from "qrcode";
 import { CheckCircle2, CreditCard, Loader2, QrCode, ShieldCheck, TriangleAlert } from "lucide-vue-next";
 
 import {
@@ -35,8 +36,15 @@ const cardReady = ref(false);
 const status = ref("form");
 const resultMessage = ref("");
 
+const qrCanvas = ref(null);
+const qrString = ref("");
+const qrOrderId = ref("");
+const qrAmountIdr = ref(0);
+const qrLoading = ref(false);
+
 let stripe = null;
 let cardElement = null;
+let qrPollTimer = null;
 
 const props = defineProps({
     mode: {
@@ -78,6 +86,14 @@ const formattedAmount = computed(() =>
         style: "currency",
         currency: "USD",
     }).format(numericAmount.value),
+);
+
+const formattedIdr = computed(() =>
+    new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+    }).format(qrAmountIdr.value),
 );
 
 const dialogTitle = computed(() => {
@@ -188,9 +204,14 @@ watch(open, (isOpen) => {
         method.value = "card";
         status.value = "form";
         resultMessage.value = "";
+        qrString.value = "";
+        qrOrderId.value = "";
+        qrAmountIdr.value = 0;
         mountCard();
         return;
     }
+
+    stopQrPolling();
 
     // The webhook credits the wallet a beat after Stripe confirms, so pull
     // fresh balances once the user is done reading the receipt.
@@ -202,7 +223,10 @@ watch(open, (isOpen) => {
     unmountCard();
 });
 
-onBeforeUnmount(unmountCard);
+onBeforeUnmount(() => {
+    unmountCard();
+    stopQrPolling();
+});
 
 function fail(message) {
     resultMessage.value = message ?? "Something went wrong. Please try again.";
@@ -292,6 +316,85 @@ async function submitPlan() {
             },
         },
     );
+}
+
+async function generateQr() {
+    if (qrLoading.value) {
+        return;
+    }
+
+    qrLoading.value = true;
+    error.value = "";
+
+    try {
+        const { data } =
+            props.mode === "topup"
+                ? await window.axios.post(route("billing.topups.store"), {
+                      currency: "USD",
+                      amount: numericAmount.value,
+                      method: "qris",
+                  })
+                : await window.axios.post(route("plan.qr"), {
+                      plan: props.planKey ?? "pro",
+                  });
+
+        if (!data.qrString) {
+            fail("The payment provider did not return a QR code. Please try again.");
+            return;
+        }
+
+        qrString.value = data.qrString;
+        qrOrderId.value = data.orderId;
+        qrAmountIdr.value = data.amountIdr;
+
+        await nextTick();
+
+        // Fixed black-on-white: a QR needs maximum contrast to scan, so it
+        // keeps its own colours rather than following the theme.
+        await QRCode.toCanvas(qrCanvas.value, data.qrString, {
+            width: 240,
+            margin: 1,
+            color: { dark: "#08090a", light: "#ffffff" },
+        });
+
+        startQrPolling();
+    } catch (requestError) {
+        fail(requestError.response?.data?.message);
+    } finally {
+        qrLoading.value = false;
+    }
+}
+
+function startQrPolling() {
+    stopQrPolling();
+    qrPollTimer = window.setInterval(checkQrStatus, 3000);
+}
+
+function stopQrPolling() {
+    if (qrPollTimer) {
+        window.clearInterval(qrPollTimer);
+        qrPollTimer = null;
+    }
+}
+
+async function checkQrStatus() {
+    try {
+        const { data } = await window.axios.get(
+            `/payments/${qrOrderId.value}/status`,
+        );
+
+        if (data.status === "paid") {
+            stopQrPolling();
+
+            succeed(
+                props.mode === "topup"
+                    ? `We received ${formattedIdr.value}. Your balance is updated.`
+                    : `You are now on the ${plan.value?.label ?? "Pro"} plan for the next 30 days.`,
+            );
+        }
+    } catch {
+        // Transient failures are expected while polling; keep waiting.
+    }
 }
 </script>
 
@@ -414,15 +517,81 @@ async function submitPlan() {
                     </div>
                 </div>
 
-                <!-- QRIS Tab (placeholder) -->
-                <div v-show="method === 'qris'" class="flex min-h-[200px] flex-col items-center justify-center rounded-lg border bg-muted/30 p-6 text-center">
-                    <QrCode class="h-8 w-8 text-muted-foreground" />
+                <!-- QRIS Tab -->
+                <div v-show="method === 'qris'" class="space-y-4">
+                    <!-- Before generating -->
+                    <template v-if="!qrString">
+                        <div v-if="mode === 'topup'" class="space-y-2">
+                            <Label for="qris-amount">Amount</Label>
 
-                    <p class="mt-3 text-sm font-medium">QRIS is not available yet</p>
+                            <div class="relative">
+                                <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                                    $
+                                </span>
 
-                    <p class="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">
-                        TODO: wire this tab to the Pakasir QRIS flow. For now, please pay by card.
-                    </p>
+                                <Input
+                                    id="qris-amount"
+                                    v-model="amount"
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="10.00"
+                                    class="pl-8"
+                                    :disabled="qrLoading"
+                                />
+                            </div>
+
+                            <p class="text-xs text-muted-foreground">
+                                You pay in rupiah at today's rate. Your wallet is credited in US dollars.
+                            </p>
+                        </div>
+
+                        <div v-else class="rounded-lg border bg-card p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-xs text-muted-foreground">Plan</p>
+                                    <p class="mt-1 text-lg font-semibold">{{ plan?.label }}</p>
+                                </div>
+
+                                <div class="text-right">
+                                    <p class="text-xs text-muted-foreground">Price</p>
+                                    <p class="mt-1 text-lg font-semibold">{{ formattedPrice }}/month</p>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- After generating -->
+                    <div v-else class="flex flex-col items-center gap-4 py-2">
+                        <div class="text-center">
+                            <p class="text-xs text-muted-foreground">Amount due</p>
+                            <p class="mt-1 text-2xl font-bold tracking-tight">{{ formattedIdr }}</p>
+                        </div>
+
+                        <div class="rounded-xl border bg-white p-4">
+                            <canvas ref="qrCanvas" />
+                        </div>
+
+                        <div class="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Loader2 class="h-4 w-4 animate-spin" />
+                            <span>Waiting for payment</span>
+                        </div>
+                    </div>
+
+                    <!-- Renewal warning, plan mode only -->
+                    <div v-if="mode === 'plan'" class="flex gap-3 rounded-lg border bg-muted/30 p-3">
+                        <TriangleAlert class="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+
+                        <div class="space-y-1">
+                            <p class="text-xs font-medium">QRIS does not renew automatically</p>
+                            <p class="text-xs leading-5 text-muted-foreground">
+                                This one-off payment covers 30 days. You will need to pay again before it
+                                expires, or your organization drops back to the Free plan.
+                            </p>
+                        </div>
+                    </div>
+
+                    <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
                 </div>
             </div>
 
@@ -449,20 +618,35 @@ async function submitPlan() {
                     <Button
                         type="button"
                         variant="outline"
-                        :disabled="processing"
+                        :disabled="processing || qrLoading"
                         @click="open = false"
                     >
                         Cancel
                     </Button>
 
+                    <!-- QRIS -->
                     <Button
+                        v-if="method === 'qris'"
                         type="button"
                         class="gap-2"
-                        :disabled="processing || method === 'qris' || !cardReady"
+                        :disabled="qrLoading || !!qrString || (mode === 'topup' && numericAmount <= 0)"
+                        @click="generateQr"
+                    >
+                        <Loader2 v-if="qrLoading" class="h-4 w-4 animate-spin" />
+                        <QrCode v-else class="h-4 w-4" />
+
+                        {{ qrLoading ? "Generating..." : qrString ? "Waiting for payment" : "Show QR code" }}
+                    </Button>
+
+                    <!-- Card -->
+                    <Button
+                        v-else
+                        type="button"
+                        class="gap-2"
+                        :disabled="processing || !cardReady"
                         @click="submit"
                     >
                         <Loader2 v-if="processing" class="h-4 w-4 animate-spin" />
-
                         <CreditCard v-else class="h-4 w-4" />
 
                         {{ processing ? "Processing..." : "Continue" }}

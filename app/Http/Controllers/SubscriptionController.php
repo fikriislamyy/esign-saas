@@ -195,6 +195,16 @@ class SubscriptionController extends Controller
             'plan' => ['required', Rule::in(['pro'])],
         ]);
 
+        if (! $pakasir->isConfigured()) {
+            Log::error('QRIS blocked: Pakasir is not configured', [
+                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            ]);
+
+            return response()->json([
+                'message' => 'QRIS payments are not available yet. Please pay by card or contact support.',
+            ], 422);
+        }
+
         $organization = $user->organization;
         $subscription = app(PlanService::class)->subscriptionFor($organization);
         $planConfig = config('plans.'.$validated['plan']);
@@ -202,9 +212,9 @@ class SubscriptionController extends Controller
         $rate = app(ExchangeRateService::class)->usdToIdr();
 
         if (! $rate || $rate <= 0) {
-            return back()->withErrors([
-                'plan' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
-            ]);
+            return response()->json([
+                'message' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
+            ], 422);
         }
 
         $amountIdr = (int) round(($planConfig['price_usd_cents'] / 100) * $rate);
@@ -228,7 +238,7 @@ class SubscriptionController extends Controller
 
         $payload = $result['payment'] ?? [];
 
-        return Inertia::render('Plan/Qr', [
+        return response()->json([
             'orderId' => $orderId,
             'amountIdr' => $amountIdr,
             'qrString' => $payload['payment_number'] ?? null,
