@@ -13,6 +13,10 @@
             Ziggy.port = null;
         </script>
 
+        @if (config('services.recaptcha.site_key'))
+            <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+        @endif
+
         @vite(['resources/js/app.js', "resources/js/Pages/{$page['component']}.vue"])
         @inertiaHead
     </head>

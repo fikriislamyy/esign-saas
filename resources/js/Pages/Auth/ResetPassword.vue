@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { Head, Link, useForm } from "@inertiajs/vue3";
 
 import AuthLayout from "@/Layouts/AuthLayout.vue";
+import RecaptchaField from "@/Components/RecaptchaField.vue";
 
 import { Lock, Eye, EyeOff, Loader2, ShieldCheck } from "lucide-vue-next";
 
@@ -32,17 +33,20 @@ const props = defineProps({
 
 const showPassword = ref(false);
 const showConfirmation = ref(false);
+const recaptcha = ref(null);
 
 const form = useForm({
     token: props.token,
     email: props.email,
     password: "",
     password_confirmation: "",
+    recaptcha_token: "",
 });
 
 const submit = () => {
     form.post(route("password.store"), {
         onFinish: () => form.reset("password", "password_confirmation"),
+        onError: () => recaptcha.value?.reset(),
     });
 };
 </script>
@@ -149,6 +153,12 @@ const submit = () => {
                         {{ form.errors.password_confirmation }}
                     </p>
                 </div>
+
+                <RecaptchaField
+                    ref="recaptcha"
+                    v-model="form.recaptcha_token"
+                    :error="form.errors.recaptcha_token"
+                />
 
                 <Button
                     class="h-11 w-full text-base font-semibold"

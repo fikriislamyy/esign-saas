@@ -1,597 +1,745 @@
-# Sandbox auto-pay: complete QRIS payments automatically via `paymentsimulation`
+# reCAPTCHA v2 on login, register and password reset
 
-## 1. Read this before anything else — the request as worded cannot work
+## 1. What we are building, in one paragraph
 
-The task says: *"instead of hitting transactioncreate, hit paymentsimulation."*
+Four guest forms get a Google reCAPTCHA v2 checkbox ("I'm not a robot"): **Login**, **Register**,
+**Forgot password** (the page that asks for your email) and **Reset password** (the page you land on
+from the email link). The browser shows the checkbox; when the user ticks it, Google gives the page
+a token; the form sends that token to our server as an extra field called `recaptcha_token`; the
+server sends that token to Google and Google replies "yes this is a real person" or "no". If Google
+says no, or the token is missing, the form fails validation with a normal error message under the
+checkbox, exactly like a wrong password does.
 
-That literal swap is impossible. It was tested against the live sandbox:
+**The browser check is decoration. The server check is the security.** Anyone can skip the browser
+and POST straight to `/login` with `curl`. That is why every one of the four POST endpoints must
+verify the token on the backend. If you only add the widget to the Vue pages and do not touch PHP,
+the feature is not done.
+
+## 2. Things you must not do
+
+- **Do not** use reCAPTCHA v3 or Enterprise. The task says v2, checkbox. v3 is invisible and scores
+  users; it is a different product with a different API.
+- **Do not** install a Composer or npm package for this. Verification is one HTTP POST; the widget is
+  one `<script>` tag. A package adds an abstraction we would have to learn and maintain for ~40 lines
+  of code.
+- **Do not** put the secret key anywhere the browser can see it. It goes in `.env` and
+  `config/services.php` only. The *site* key is public and is sent to the browser; the *secret* key
+  is never sent to the browser. If you find yourself writing `recaptchaSecret` in a `.vue` file,
+  stop.
+- **Do not** add the check to `ConfirmPassword.vue`, `VerifyEmail.vue`, profile update or any page
+  behind `auth` middleware. Those users are already logged in. The task lists three pages (with
+  "password reset" covering two screens); that is the scope.
+- **Do not** remove the existing rate limiter in `LoginRequest::ensureIsNotRateLimited()`. Captcha
+  and rate limiting protect against different things. Both stay.
+- **Do not** make existing tests pass by deleting them. Section 7 explains how to make them pass
+  properly.
+
+## 3. How the codebase already does the things you will need
+
+Read these before writing anything. Every pattern you need already exists.
+
+| You need to | Look at | What you will see |
+| --- | --- | --- |
+| Read a key from `.env` | [config/services.php](config/services.php) `pakasir` block | `env('PAKASIR_API_KEY')` under a service name, with a `(bool)` cast for flags |
+| Send a public key to every Vue page | [app/Http/Middleware/HandleInertiaRequests.php](app/Http/Middleware/HandleInertiaRequests.php) `share()` | `'stripeKey' => config('services.stripe.key')` — read it in Vue via `usePage().props.stripeKey` |
+| Call an external HTTP API from PHP | [app/Services/PakasirService.php](app/Services/PakasirService.php) | `Http::asJson()->post(...)`, then `->json()` |
+| Fail a form with a message under one field | [app/Http/Requests/Auth/LoginRequest.php](app/Http/Requests/Auth/LoginRequest.php) `authenticate()` | `throw ValidationException::withMessages(['email' => '...'])` |
+| Show a validation error in Vue | [resources/js/Pages/Auth/Login.vue](resources/js/Pages/Auth/Login.vue) | `<p v-if="form.errors.email" class="text-sm text-destructive">` |
+| Know whether dark mode is on | [resources/js/Pages/Landing.vue:57](resources/js/Pages/Landing.vue#L57) | `document.documentElement.classList.contains("dark")` |
+
+The four POST endpoints and where they validate:
+
+| Form | Route (routes/auth.php) | Validates in |
+| --- | --- | --- |
+| Login | `POST /login` | `LoginRequest::rules()` (a FormRequest class) |
+| Register | `POST /register` | `RegisteredUserController::store()`, inline `$request->validate([...])` |
+| Forgot password | `POST /forgot-password` | `PasswordResetLinkController::store()`, inline |
+| Reset password | `POST /reset-password` | `NewPasswordController::store()`, inline |
+
+Login is different from the other three. Keep that in mind in Phase 3.
+
+## 4. Get the keys (do this first, it takes five minutes)
+
+1. Go to the Google reCAPTCHA admin console (search "recaptcha admin console").
+2. Create a site. Type: **reCAPTCHA v2**, sub-type **"I'm not a robot" Checkbox**.
+3. Domains: add `localhost` and the production domain.
+4. You get two strings: a **site key** and a **secret key**.
+5. Put them in `.env`:
 
 ```
-POST /api/paymentsimulation   with an order_id that was never created
-→ 404  {"message":"Transaksi tidak ditemukan"}     ("transaction not found")
+RECAPTCHA_SITE_KEY=6Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+RECAPTCHA_SECRET_KEY=6Lyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 ```
 
-`paymentsimulation` does not create anything. It marks an **existing** transaction as paid. So
-`transactioncreate/qris` must stay exactly where it is. What we are actually building is:
+For local development without real keys, Google publishes test keys that always pass. Search
+"recaptcha test keys" in Google's own FAQ; the site key starts with `6LeIxAcTAAAAAJcZ` and the
+secret with `6LeIxAcTAAAAAGG-`. They render a widget that says "for testing purposes only" and
+always verify as success. Fine for local, never for production.
 
-> **Keep** creating the QR with `transactioncreate/qris`. Then, **when a sandbox flag is on**, also
-> call `paymentsimulation` so the payment completes instantly without anyone scanning anything.
+`.env` is not committed. There is no `.env.example` in this repo, so tell whoever deploys that these
+two variables are now required.
 
-If you find yourself deleting the `createQris()` call, stop. You have misread the task.
+## 5. Phase 1 — config and a service (backend, no UI yet)
 
-### What the user will see when this is done
+### 5.1 `config/services.php`
 
-With the flag on: click **Show QR code** → QR appears → about three seconds later the dialog
-flips to **Payment successful** on its own → wallet balance goes up / plan becomes Pro.
-
-With the flag off: exactly what happens today. QR appears and waits for a real scan.
-
-### Why this is worth building
-
-Testing a QRIS payment today needs: a public tunnel (ngrok) so Pakasir can reach the webhook, a
-dashboard trip to point the webhook at it, and a hand-crafted `curl` to Pakasir with the right
-order id and amount. Every single time. This feature collapses all of that into one click.
-
----
-
-## 2. Already done — do not redo
-
-| Thing | State |
-| --- | --- |
-| `PakasirService::createQris()` and `transactionDetail()` | Work. Verified against the live sandbox. |
-| Response-shape fixes (`payment` / `transaction` wrappers) | Fixed in PR #40. |
-| QRIS wired into `PaymentDialog.vue` for top-up and plan | Done in PR #42. |
-| `WalletTopup::$fillable` missing `provider` and `order_id` | **Fixed in commit `1ee21c8`.** Before that fix, every QRIS top-up silently saved `order_id = null`, so the webhook could never find it. If you see a top-up row with a null `order_id`, it predates the fix — ignore it and make a new one. |
-| Webhook validates provider, amount, project | Done. |
-
-Everything in this document is additive on top of the above.
-
----
-
-## 3. The design in one picture
-
-Today the only thing that can mark a QRIS order paid is the webhook:
-
-```
-Pakasir ──POST──▶ /pakasir/webhook ──▶ transactionDetail() ──▶ mark paid, credit wallet
-```
-
-Pakasir cannot reach `localhost`, so locally the webhook never fires and the dialog spins forever.
-
-After this change there are two ways in, sharing one fulfilment path:
-
-```
-Pakasir ──POST──▶ /pakasir/webhook ─────────────┐
-                                                 ├──▶ PakasirFulfillmentService::fulfill()
-controller ──▶ simulatePayment() ──(flag on)─────┘        │
-                                                          ├─ transactionDetail() → must say "completed"
-                                                          └─ mark paid + credit wallet / activate plan
-```
-
-The important word is **sharing**. The "mark paid + credit wallet" code currently lives inside the
-webhook controller. It has to move into a service so the auto-pay path can call the *same* code.
-Copy-pasting it into the controllers instead would give you two places to fix every future bug,
-and money-handling code is the last place you want that.
-
-### Safety — this must never run in production
-
-Auto-pay marks an order paid without any money changing hands. Two independent guards:
-
-1. **An explicit env flag**, off by default: `PAKASIR_AUTO_SIMULATE=true`. Nobody sets that by
-   accident on a production box.
-2. **Pakasir's own word.** `transactionDetail()` returns `"is_sandbox": true` for sandbox
-   projects. The auto-pay path refuses to fulfil unless that field is literally `true`. So even if
-   someone did flip the flag on production with a live project, nothing gets credited.
-
-Both guards, always. Do not remove either one because "the other one covers it."
-
----
-
-## 4. Files you will touch
-
-| File | Change |
-| --- | --- |
-| `config/services.php` | Add one config key |
-| `.env` | Add one line (not committed) |
-| `app/Services/PakasirService.php` | Add `simulatePayment()` |
-| `app/Services/PakasirFulfillmentService.php` | **New file.** Fulfilment logic moves here. |
-| `app/Http/Controllers/PakasirWebhookController.php` | Shrinks — delegates to the service |
-| `app/Http/Controllers/SubscriptionController.php` | Three lines after `createQris()` |
-| `app/Http/Controllers/BillingTopupController.php` | Three lines after `createQris()` |
-
-Nothing in `resources/js/`. The dialog already polls; it will simply see `paid` sooner.
-
----
-
-## 5. Phase 1 — Config and env
-
-### `config/services.php`
-
-The `pakasir` block is at line 48. Add one key:
+Add a block next to `pakasir`:
 
 ```php
-'pakasir' => [
-    'base_url' => env('PAKASIR_BASE_URL', 'https://app.pakasir.com'),
-    'project' => env('PAKASIR_PROJECT'),
-    'api_key' => env('PAKASIR_API_KEY'),
-    'auto_simulate' => (bool) env('PAKASIR_AUTO_SIMULATE', false),
+'recaptcha' => [
+    'site_key' => env('RECAPTCHA_SITE_KEY'),
+    'secret_key' => env('RECAPTCHA_SECRET_KEY'),
 ],
 ```
 
-The `(bool)` cast matters. Without it, `PAKASIR_AUTO_SIMULATE=false` in `.env` arrives as the
-string `"false"`, which PHP treats as truthy. Laravel's `env()` does convert the literal words
-`true`/`false`, but the cast makes the intent unmissable and protects against `0`/`1`/`""`.
+Nothing else in the app reads `env()` directly and neither should this. Always go through
+`config('services.recaptcha.site_key')`.
 
-### `.env`
-
-```bash
-PAKASIR_AUTO_SIMULATE=true
-```
-
-Then clear config. **This project runs inside Docker** — artisan on your host shell cannot reach
-the database (`could not translate host name "postgres"`). Every artisan command in this document
-is run like this:
-
-```bash
-docker exec esign-app php artisan config:clear
-```
-
----
-
-## 6. Phase 2 — `PakasirService::simulatePayment()`
-
-**File:** `app/Services/PakasirService.php`
-
-Add this method after `transactionDetail()`. It is the same shape as `createQris()` with a
-different path:
-
-```php
-public function simulatePayment(string $orderId, int $amountIdr): array
-{
-    $response = Http::asJson()
-        ->post($this->baseUrl.'/api/paymentsimulation', [
-            'project' => $this->project,
-            'order_id' => $orderId,
-            'amount' => $amountIdr,
-            'api_key' => $this->apiKey,
-        ]);
-
-    $response->throw();
-
-    return $response->json();
-}
-```
-
-On success Pakasir returns `{"success": true}`. On an unknown order it returns 404, and
-`->throw()` turns that into an exception — which is what you want, because it means
-`createQris()` did not run first.
-
-Do not add any sandbox checks here. This class is a thin HTTP client and should stay that way.
-
----
-
-## 7. Phase 3 — `PakasirFulfillmentService` (new file)
-
-**File:** `app/Services/PakasirFulfillmentService.php`
-
-This is the whole file. It is the "mark paid + credit wallet / activate plan" code lifted out of
-the webhook, with the two-table amount lookup folded in so callers cannot get it wrong.
+### 5.2 New file: `app/Services/RecaptchaService.php`
 
 ```php
 <?php
 
 namespace App\Services;
 
-use App\Models\SubscriptionPayment;
-use App\Models\WalletTopup;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-class PakasirFulfillmentService
+class RecaptchaService
 {
-    public function __construct(
-        protected PakasirService $pakasir,
-        protected WalletService $wallet,
-    ) {}
-
-    /**
-     * The rupiah figure Pakasir was asked to charge for this record.
-     *
-     * subscription_payments.amount is already IDR. wallet_topups.amount is the
-     * USD the user typed, so its rupiah figure lives in metadata.
-     */
-    public function amountIdr(SubscriptionPayment|WalletTopup $record): int
+    public function isConfigured(): bool
     {
-        return $record instanceof SubscriptionPayment
-            ? (int) $record->amount
-            : (int) ($record->metadata['amount_idr'] ?? 0);
+        return filled(config('services.recaptcha.site_key'))
+            && filled(config('services.recaptcha.secret_key'));
     }
 
-    /**
-     * Confirm with Pakasir that the order is completed, then mark it paid locally.
-     *
-     * Returns true when the record is (now) paid. Returns false when Pakasir has
-     * not completed it, or when $sandboxOnly is set and Pakasir does not report
-     * the transaction as sandbox. Safe to call twice: a paid record is a no-op.
-     */
-    public function fulfill(SubscriptionPayment|WalletTopup $record, bool $sandboxOnly = false): bool
+    public function verify(?string $token, ?string $ip = null): bool
     {
-        $detail = $this->pakasir->transactionDetail($record->order_id, $this->amountIdr($record));
-        $transaction = $detail['transaction'] ?? [];
+        if (blank($token)) {
+            return false;
+        }
 
-        if (($transaction['status'] ?? null) !== 'completed') {
-            Log::info('Pakasir transaction not completed', [
-                'order_id' => $record->order_id,
-                'status' => $transaction['status'] ?? null,
+        $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+            'secret' => config('services.recaptcha.secret_key'),
+            'response' => $token,
+            'remoteip' => $ip,
+        ]);
+
+        if (! $response->successful()) {
+            Log::warning('reCAPTCHA siteverify request failed', [
+                'status' => $response->status(),
             ]);
 
             return false;
         }
 
-        if ($sandboxOnly && ($transaction['is_sandbox'] ?? false) !== true) {
-            Log::error('Refused to auto-fulfil a non-sandbox Pakasir transaction', [
-                'order_id' => $record->order_id,
-            ]);
+        $body = $response->json();
 
-            return false;
+        if (($body['success'] ?? false) !== true) {
+            Log::info('reCAPTCHA rejected a token', [
+                'error-codes' => $body['error-codes'] ?? [],
+            ]);
         }
 
-        if ($record instanceof SubscriptionPayment) {
-            $this->fulfillSubscription($record);
-        } else {
-            $this->fulfillTopup($record);
-        }
-
-        return true;
-    }
-
-    protected function fulfillSubscription(SubscriptionPayment $payment): void
-    {
-        DB::transaction(function () use ($payment) {
-            $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
-
-            if ($payment->status === 'paid') {
-                return;
-            }
-
-            $payment->update(['status' => 'paid', 'paid_at' => now()]);
-
-            $payment->organization->subscription->update([
-                'plan' => $payment->plan,
-                'status' => 'active',
-                'provider' => 'pakasir',
-                'subscribed_at' => now(),
-                'expired_at' => now()->addDays(30),
-            ]);
-        });
-    }
-
-    protected function fulfillTopup(WalletTopup $topup): void
-    {
-        DB::transaction(function () use ($topup) {
-            $topup = WalletTopup::lockForUpdate()->find($topup->id);
-
-            if ($topup->status === 'paid') {
-                return;
-            }
-
-            $this->wallet->credit(
-                organization: $topup->organization,
-                sourceCurrency: $topup->currency,
-                sourceAmount: (float) $topup->amount,
-                exchangeRate: (float) $topup->exchange_rate,
-                amountUsdCents: (int) $topup->wallet_amount_usd_cents,
-                type: 'topup',
-                description: 'Wallet top-up via QRIS',
-                reference: $topup,
-                createdBy: $topup->created_by,
-                metadata: ['pakasir_order_id' => $topup->order_id],
-            );
-
-            $topup->update(['status' => 'paid', 'paid_at' => now()]);
-        });
+        return ($body['success'] ?? false) === true;
     }
 }
 ```
 
-Three things to notice, because they are the difference between "works" and "works safely":
+Three things to notice:
 
-- **`lockForUpdate()` + the `status === 'paid'` early return** is the idempotency guard. Pakasir
-  retries webhooks, and with auto-pay on, the webhook *and* the controller may both try to fulfil
-  the same order. This guarantees the wallet is credited exactly once.
-- **`$sandboxOnly` is checked against `=== true`**, not truthiness. A missing field or a string
-  `"true"` must not pass. Money.
-- **The two `fulfill*` methods are lifted verbatim** from the current webhook. If you are tempted
-  to "improve" them while moving, don't. Move first, verify, then improve in a separate PR.
+- `asForm()`, not `asJson()`. Google's endpoint wants `application/x-www-form-urlencoded`. This
+  is the opposite of Pakasir. If you copy `PakasirService` and keep `asJson()`, Google will always
+  return `{"success": false, "error-codes": ["missing-input-secret"]}` and you will spend an hour
+  wondering why.
+- A network failure returns `false`, not an exception. If Google is down, the user sees "please
+  complete the captcha" and can retry. We do not want a 500 page on login.
+- The `Log::info` on rejection is deliberate. A rejected token is normal (expired, reused, bot).
+  You want to be able to see the `error-codes` when debugging, and the most common one,
+  `timeout-or-duplicate`, tells you the user waited more than two minutes or the token was sent
+  twice. See section 8.
 
-Laravel resolves the two constructor dependencies automatically — no service-provider registration
-is needed.
+### 5.3 Check it works before touching anything else
 
----
+```bash
+docker exec esign-app php artisan config:clear
+docker exec esign-app php artisan tinker --execute="
+  var_dump(app(App\Services\RecaptchaService::class)->isConfigured());
+  var_dump(app(App\Services\RecaptchaService::class)->verify('garbage'));
+"
+```
 
-## 8. Phase 4 — Webhook delegates to the service
+You want `bool(true)` then `bool(false)`. The second one proves you reached Google and it said no.
+If the first is `false`, your `.env` is wrong. If the second throws, read the error; it is almost
+always a typo in the URL.
 
-**File:** `app/Http/Controllers/PakasirWebhookController.php`
+## 6. Phase 2 — a validation rule the four endpoints can share
 
-The webhook keeps everything about *trusting an inbound request* (order lookup, provider/amount/
-project validation) and hands the *fulfilment* to the service. Replace the file with this:
+We need to say "this field must contain a token Google accepts" in four places. A custom rule
+class does that in one place.
+
+### 6.1 New file: `app/Rules/Recaptcha.php`
+
+There is no `app/Rules` folder yet. Create it.
 
 ```php
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Rules;
 
-use App\Models\SubscriptionPayment;
-use App\Models\WalletTopup;
-use App\Services\PakasirFulfillmentService;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use App\Services\RecaptchaService;
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
 
-class PakasirWebhookController extends Controller
+class Recaptcha implements ValidationRule
 {
-    public function handle(Request $request, PakasirFulfillmentService $fulfillment)
+    public function validate(string $attribute, mixed $value, Closure $fail): void
     {
-        $orderId = $request->input('order_id');
-
-        if (! $orderId) {
-            return response()->json(['error' => 'order_id missing'], 400);
+        if (! app(RecaptchaService::class)->verify($value, request()->ip())) {
+            $fail('Please confirm you are not a robot.');
         }
-
-        $record = SubscriptionPayment::where('order_id', $orderId)->first()
-            ?? WalletTopup::where('order_id', $orderId)->first();
-
-        if (! $record) {
-            Log::warning('Pakasir webhook for unknown order', ['order_id' => $orderId]);
-
-            return response()->json(['received' => true]);
-        }
-
-        if ($record->provider !== 'pakasir') {
-            Log::warning('Pakasir webhook for non-Pakasir payment', [
-                'order_id' => $orderId,
-                'provider' => $record->provider,
-            ]);
-
-            return response()->json(['received' => true]);
-        }
-
-        $expectedIdr = $fulfillment->amountIdr($record);
-
-        if ((int) $request->input('amount') !== $expectedIdr) {
-            Log::warning('Pakasir webhook amount mismatch', [
-                'order_id' => $orderId,
-                'expected' => $expectedIdr,
-                'received' => $request->input('amount'),
-            ]);
-
-            return response()->json(['received' => true]);
-        }
-
-        if ($request->input('project') !== config('services.pakasir.project')) {
-            Log::warning('Pakasir webhook project mismatch', [
-                'order_id' => $orderId,
-                'expected' => config('services.pakasir.project'),
-                'received' => $request->input('project'),
-            ]);
-
-            return response()->json(['received' => true]);
-        }
-
-        $fulfillment->fulfill($record);
-
-        return response()->json(['received' => true]);
     }
 }
 ```
 
-What changed: `use App\Services\PakasirService`, `DB`, and `WalletService` imports are gone; the
-two `DB::transaction` blocks are gone; `transactionDetail()` is no longer called here. The file
-drops from ~130 lines to ~60. The behaviour for real webhooks is **identical** — every guard is
-still there in the same order and still returns `received: true`.
+That is the whole class. Now `'recaptcha_token' => ['required', new Recaptcha]` works anywhere
+`$request->validate()` or `rules()` is used, and the failure lands in `form.errors.recaptcha_token`
+on the Vue side like any other field.
 
-Note the webhook calls `fulfill($record)` with `$sandboxOnly` left at its default `false`. In
-production the webhook fulfils real, non-sandbox transactions. Only the auto-pay path passes
-`true`.
+The message says "confirm you are not a robot", not "invalid token", because the user reading it
+is a person who ticked a box that then expired. Tell them what to do, not what went wrong.
 
----
+## 7. Phase 3 — verify on all four endpoints, and keep the tests green
 
-## 9. Phase 5 — Auto-pay in the two controllers
+### 7.1 The test problem, explained before you hit it
 
-Same three lines in both places, inserted **after** `createQris()` and **before** the
-`return response()->json([...])`.
+`tests/Feature/Auth/` has tests that POST to `/login`, `/register`, `/forgot-password` and
+`/reset-password` with no captcha token. The moment you add the rule, every one of them fails with
+a validation error. There are two wrong fixes and one right one.
 
-### `SubscriptionController::payWithQr()` — after line 237
+Wrong: delete the tests. Wrong: add a real token to the tests (there is no such thing; tokens come
+from a browser session with Google).
+
+Right: the rule is skipped when the app is not configured for reCAPTCHA, and the test environment
+is not configured. Change `Recaptcha::validate()`:
 
 ```php
-$result = $pakasir->createQris($orderId, $amountIdr);
+public function validate(string $attribute, mixed $value, Closure $fail): void
+{
+    $service = app(RecaptchaService::class);
 
-if (config('services.pakasir.auto_simulate')) {
-    $pakasir->simulatePayment($orderId, $amountIdr);
-    app(PakasirFulfillmentService::class)->fulfill($payment, sandboxOnly: true);
+    if (! $service->isConfigured()) {
+        return;
+    }
+
+    if (! $service->verify($value, request()->ip())) {
+        $fail('Please confirm you are not a robot.');
+    }
 }
-
-$payload = $result['payment'] ?? [];
 ```
 
-Add the import at the top of the file:
+and drop `'required'` from the rule list; use `'nullable'` instead, so a missing field is accepted
+when the check is off and rejected by `verify()` (blank → false) when it is on.
 
-```php
-use App\Services\PakasirFulfillmentService;
+Then make sure the test environment really is unconfigured. **Laravel does read `.env` during
+tests**; `phpunit.xml` only overrides the variables it explicitly names. Your `.env` has the real
+keys in it from section 4, so without an override `isConfigured()` returns `true` in tests and
+every existing auth test breaks. Add two lines to the `<php>` block in `phpunit.xml`:
+
+```xml
+<env name="RECAPTCHA_SITE_KEY" value=""/>
+<env name="RECAPTCHA_SECRET_KEY" value=""/>
 ```
 
-`$payment` is the `SubscriptionPayment` created a few lines above. It already has the
-`order_id`, so the service can look it up at Pakasir.
+An empty string is `blank()`, so `isConfigured()` is `false`, the rule is a no-op, and the
+existing tests pass unchanged. This is the same reason `MAIL_MAILER` and `SESSION_DRIVER` are
+overridden there: the test run must not depend on what happens to be in your local `.env`.
 
-### `BillingTopupController::store()` — inside the `if ($isQris)` branch, after line 233
+This also means: **if production is deployed without the keys, the captcha silently turns off.**
+That is a real trade-off. The alternative, failing every login when misconfigured, is worse for a
+document-signing product where locked-out users cannot sign contracts. To make the trade-off
+visible instead of silent, add this to `AuthenticatedSessionController::create()` (the GET that
+renders the login page):
 
 ```php
-$result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
-
-if (config('services.pakasir.auto_simulate')) {
-    app(\App\Services\PakasirService::class)->simulatePayment($orderId, $amountIdr);
-    app(\App\Services\PakasirFulfillmentService::class)->fulfill($topup, sandboxOnly: true);
+if (! app(RecaptchaService::class)->isConfigured() && app()->isProduction()) {
+    Log::error('reCAPTCHA is not configured; auth forms are unprotected', [
+        'env_keys' => ['RECAPTCHA_SITE_KEY', 'RECAPTCHA_SECRET_KEY'],
+    ]);
 }
-
-$payload = $result['payment'] ?? [];
 ```
 
-`$topup` was updated with `provider`, `order_id` and `metadata.amount_idr` just above this, so
-`fulfill()` can find the rupiah figure. That update only works because of the `$fillable` fix in
-section 2 — it is why that fix is a prerequisite.
+It is the same pattern as the `QRIS blocked: Pakasir is not configured` log in
+`SubscriptionController`: a loud line in the log the first time someone opens the page, rather
+than a silent gap.
 
-### Why the order matters
+### 7.2 Login — `app/Http/Requests/Auth/LoginRequest.php`
 
-The QR **must** be created before the simulation (section 1). And fulfilment runs **before** the
-JSON is returned, so by the time the dialog renders the QR and fires its first status poll three
-seconds later, the row already says `paid`. That is what produces the "QR flashes, then success"
-experience.
+```php
+use App\Rules\Recaptcha;
 
----
+public function rules(): array
+{
+    return [
+        'email' => ['required', 'string', 'email'],
+        'password' => ['required', 'string'],
+        'recaptcha_token' => ['nullable', 'string', new Recaptcha],
+    ];
+}
+```
 
-## 10. Verification
+Nothing else in this file changes. `authenticate()` runs after `rules()` pass, so a bot with no
+token never reaches `Auth::attempt()` and never burns a rate-limit slot.
 
-All artisan commands go through Docker. Log tail:
+### 7.3 Register — `app/Http/Controllers/Auth/RegisteredUserController.php`
+
+Add `use App\Rules\Recaptcha;` at the top, then in the `$request->validate([...])` array add:
+
+```php
+'recaptcha_token' => ['nullable', 'string', new Recaptcha],
+```
+
+Put it last, after `'password'`. Order does not affect behaviour, but the array reads top-to-bottom
+as the form does and the captcha is at the bottom of the form.
+
+### 7.4 Forgot password — `app/Http/Controllers/Auth/PasswordResetLinkController.php`
+
+Same `use` line, then:
+
+```php
+$request->validate([
+    'email' => 'required|email',
+    'recaptcha_token' => ['nullable', 'string', new Recaptcha],
+]);
+```
+
+This one matters more than it looks. Without it, `/forgot-password` is an open endpoint that sends
+an email to any address you name, as fast as you can POST. That is a spam vector against
+arbitrary third parties using our sender reputation.
+
+### 7.5 Reset password — `app/Http/Controllers/Auth/NewPasswordController.php`
+
+Same `use` line, then:
+
+```php
+$request->validate([
+    'token' => 'required',
+    'email' => 'required|email',
+    'password' => ['required', 'confirmed', Rules\Password::defaults()],
+    'recaptcha_token' => ['nullable', 'string', new Recaptcha],
+]);
+```
+
+Note this file already imports `Illuminate\Validation\Rules` under the alias `Rules`, so the
+`Rules\Password::defaults()` line stays as-is and your new import is a separate
+`use App\Rules\Recaptcha;`. Two different namespaces that both happen to contain the word "Rules".
+Do not "tidy" one into the other.
+
+### 7.6 Run the tests now, before any Vue
 
 ```bash
-docker exec esign-app tail -f storage/logs/laravel.log
+docker exec esign-app php artisan test tests/Feature/Auth
 ```
 
-### 10.1 Flag on — the feature
+Everything that passed before must still pass. If `RegistrationTest` or `PasswordResetTest` fails
+with a `recaptcha_token` error, `isConfigured()` is returning `true` in the test env, which means
+you skipped the `phpunit.xml` override in 7.1.
 
-1. `.env`: `PAKASIR_AUTO_SIMULATE=true`, then `docker exec esign-app php artisan config:clear`.
-2. Log in as an organization **owner** (both endpoints are owner-only).
-3. Billing → **Top Up Wallet** → **QRIS** → enter `10` → **Show QR code**.
-4. QR appears. Within ~3 seconds the dialog flips to **Payment successful**.
-5. Close. Wallet balance has gone up by ~$10.
-6. Repeat from the Plan page → **Upgrade** → **QRIS**. Plan shows **Pro / active** afterwards.
+## 8. Phase 4 — the widget (frontend)
 
-Database check:
+### 8.1 Share the site key with every page
+
+In `HandleInertiaRequests::share()`, next to `'stripeKey'`:
+
+```php
+'recaptchaSiteKey' => config('services.recaptcha.site_key'),
+```
+
+This is the *site* key. It is meant to be public; Google's own instructions tell you to paste it
+into HTML. The *secret* key is not shared and must never be.
+
+### 8.2 Load Google's script once
+
+In `resources/views/app.blade.php`, inside `<head>`, before `@vite`:
+
+```blade
+@if (config('services.recaptcha.site_key'))
+    <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+@endif
+```
+
+`render=explicit` means "do not auto-render on any element with class `g-recaptcha`; I will call
+`grecaptcha.render()` myself." We want that because Inertia swaps pages without reloading, and the
+auto-render only runs once on initial load. Explicit rendering lets each Vue page mount its own
+widget when it appears.
+
+The `@if` means a dev without keys gets no script tag, no console errors, and forms that work
+because the backend rule is off too.
+
+### 8.3 New component: `resources/js/Components/RecaptchaField.vue`
+
+One component used by all four pages. It renders the widget, hands the token to the parent through
+`v-model`, resets itself when the form fails so the user gets a fresh checkbox, and shows the
+validation error.
+
+```vue
+<script setup>
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { usePage } from "@inertiajs/vue3";
+
+const props = defineProps({
+    modelValue: { type: String, default: "" },
+    error: { type: String, default: "" },
+});
+
+const emit = defineEmits(["update:modelValue"]);
+
+const siteKey = usePage().props.recaptchaSiteKey;
+const container = ref(null);
+let widgetId = null;
+
+const theme = () =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light";
+
+const render = () => {
+    if (!siteKey || !window.grecaptcha?.render || !container.value) return;
+
+    widgetId = window.grecaptcha.render(container.value, {
+        sitekey: siteKey,
+        theme: theme(),
+        callback: (token) => emit("update:modelValue", token),
+        "expired-callback": () => emit("update:modelValue", ""),
+        "error-callback": () => emit("update:modelValue", ""),
+    });
+};
+
+const reset = () => {
+    if (widgetId !== null && window.grecaptcha?.reset) {
+        window.grecaptcha.reset(widgetId);
+    }
+    emit("update:modelValue", "");
+};
+
+defineExpose({ reset });
+
+onMounted(() => {
+    if (!siteKey) return;
+
+    if (window.grecaptcha?.render) {
+        render();
+        return;
+    }
+
+    // Script tag is async; poll briefly until it lands.
+    const timer = setInterval(() => {
+        if (window.grecaptcha?.render) {
+            clearInterval(timer);
+            render();
+        }
+    }, 100);
+
+    onBeforeUnmount(() => clearInterval(timer));
+});
+
+watch(
+    () => props.error,
+    (message) => {
+        if (message) reset();
+    },
+);
+</script>
+
+<template>
+    <div v-if="siteKey" class="space-y-2">
+        <div ref="container" class="flex justify-center"></div>
+
+        <p v-if="error" class="text-center text-sm text-destructive">
+            {{ error }}
+        </p>
+    </div>
+</template>
+```
+
+Why each piece exists:
+
+- **`v-if="siteKey"` on the root.** No key, no widget, no space taken. Matches the backend
+  behaviour where no key means no check. A dev without keys sees exactly the forms they see today.
+- **`grecaptcha.render()` into a `ref`, not `class="g-recaptcha"`.** Explicit render, see 8.2.
+- **`theme()` reads the `.dark` class** on `<html>`, the same check `Landing.vue` makes. The
+  widget does not re-theme after mount if the user toggles the theme while on the login page. That
+  is acceptable; do not add a watcher for it.
+- **Three callbacks.** `callback` fires when the user passes and gives the token.
+  `expired-callback` fires two minutes later if they have not submitted; the token is now useless
+  so we clear it. `error-callback` fires on network trouble. All three keep `modelValue` honest:
+  it holds a token only when there is a live one.
+- **`watch(props.error)` → `reset()`.** Tokens are single-use. If the form fails for *any*
+  reason (wrong password, taken email), the token was already consumed by our server's
+  `siteverify` call. Without a reset the user fixes the password, resubmits, and gets
+  "please confirm you are not a robot" with a still-ticked box. Confusing. With the reset, the box
+  clears and they tick it again. See 8.5 for the one gap this leaves.
+- **`defineExpose({ reset })`.** Lets a parent call `recaptcha.value.reset()` explicitly. Used in
+  8.5.
+- **The poll in `onMounted`.** The `<script async defer>` may not have finished when the Vue page
+  mounts, especially on a cold load straight to `/login`. Polling every 100 ms until `grecaptcha`
+  exists is simpler than the `onload=` callback approach and survives Inertia navigation, where the
+  script is already loaded and the poll exits on its first tick.
+
+### 8.4 Wire it into the four pages
+
+The change is the same shape on each page. Shown for `Login.vue`; repeat for the others.
+
+**Script block.** Add the import, add the field to `useForm`, add a ref, reset on any error:
+
+```js
+import RecaptchaField from "@/Components/RecaptchaField.vue";
+
+const recaptcha = ref(null);
+
+const form = useForm({
+    email: "",
+    password: "",
+    remember: false,
+    recaptcha_token: "",
+});
+
+const submit = () => {
+    form.post(route("login"), {
+        onFinish: () => form.reset("password"),
+        onError: () => recaptcha.value?.reset(),
+    });
+};
+```
+
+**Template.** Place it directly above the submit `<Button>`, inside the `<form>`:
+
+```vue
+<RecaptchaField
+    ref="recaptcha"
+    v-model="form.recaptcha_token"
+    :error="form.errors.recaptcha_token"
+/>
+```
+
+Per page:
+
+| Page | `useForm` gets | `form.post` route | Place it above |
+| --- | --- | --- | --- |
+| `Login.vue` | `recaptcha_token: ""` | `login` | the "Sign In" button |
+| `Register.vue` | `recaptcha_token: ""` | `register` | the "Create workspace" button |
+| `ForgotPassword.vue` | `recaptcha_token: ""` | `password.email` | the send-link button |
+| `ResetPassword.vue` | `recaptcha_token: ""` | `password.store` | the reset button |
+
+`Register.vue` already has an `onFinish` that resets the password fields; add `onError` next to
+it, do not replace it. `ForgotPassword.vue` currently calls `form.post(route("password.email"))`
+with no options object; give it one with just `onError`.
+
+### 8.5 Why `onError` on the page *and* `watch(error)` in the component
+
+The component's watch only fires when `form.errors.recaptcha_token` *changes*. Scenario: user
+submits with a wrong password. Server consumed the token during `siteverify` (success), then
+`Auth::attempt` failed. The error that comes back is on `email`, not `recaptcha_token`, so the
+component's watch does not fire. But the token is spent. The page-level `onError` catches this:
+any error at all → reset the widget.
+
+The watch is still needed for the case where `recaptcha_token` errors on two consecutive submits
+with the same message: `onError` fires both times, but belt-and-braces costs one line.
+
+### 8.6 Do not disable the submit button when the box is unticked
+
+It is tempting to write `:disabled="form.processing || !form.recaptcha_token"`. Do not. Two
+reasons. First, when the site key is absent the field is always `""` and the button would be
+permanently dead. Second, a disabled button gives no feedback; a user who forgot the box clicks,
+nothing happens, and they do not know why. Let them submit, let the server reject, let the error
+appear under the checkbox. That is what every other field on the form does.
+
+### 8.7 Build and look at it
 
 ```bash
-docker exec esign-app php artisan tinker --execute="
-\$t = App\Models\WalletTopup::latest()->first();
-echo 'order_id: '.\$t->order_id.PHP_EOL;
-echo 'provider: '.\$t->provider.PHP_EOL;
-echo 'status:   '.\$t->status.PHP_EOL;
-echo 'balance:  '.\$t->wallet->balance_usd_cents.PHP_EOL;
-"
+docker exec esign-app npm run build
 ```
 
-`order_id` starts with `TOP-`, `provider` is `pakasir`, `status` is `paid`. If `order_id` is
-null, you are looking at a row from before the `$fillable` fix — make a fresh top-up.
+Then open `/login` in the browser. You should see the checkbox between the "Remember me" row and
+the "Sign In" button, themed to match. Tick it, sign in, it works. Reload, do not tick it, sign
+in, you get "Please confirm you are not a robot." under the box.
 
-### 10.2 Flag off — nothing changed
+## 9. Phase 5 — tests for the rule itself
 
-1. `.env`: `PAKASIR_AUTO_SIMULATE=false`, `config:clear`.
-2. Show a QR. It stays on **Waiting for payment**. This is correct — it is today's behaviour.
-3. Confirm the webhook path still works end-to-end without the flag. Grab the order id and
-   amount from the row, then simulate at Pakasir and deliver the webhook by hand:
+The existing tests prove the check is off when unconfigured. Add one file proving it is on when
+configured. Nothing in `tests/` uses `Http::fake()` yet; this is how it works.
+
+New file: `tests/Feature/Auth/RecaptchaTest.php`
+
+```php
+<?php
+
+namespace Tests\Feature\Auth;
+
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+class RecaptchaTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config([
+            'services.recaptcha.site_key' => 'test-site-key',
+            'services.recaptcha.secret_key' => 'test-secret-key',
+        ]);
+    }
+
+    public function test_login_is_rejected_without_a_token(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ]);
+
+        $response->assertSessionHasErrors('recaptcha_token');
+        $this->assertGuest();
+    }
+
+    public function test_login_is_rejected_when_google_says_no(): void
+    {
+        Http::fake([
+            'www.google.com/recaptcha/api/siteverify' => Http::response(['success' => false]),
+        ]);
+
+        $user = User::factory()->create();
+
+        $response = $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'password',
+            'recaptcha_token' => 'anything',
+        ]);
+
+        $response->assertSessionHasErrors('recaptcha_token');
+        $this->assertGuest();
+    }
+
+    public function test_login_succeeds_when_google_says_yes(): void
+    {
+        Http::fake([
+            'www.google.com/recaptcha/api/siteverify' => Http::response(['success' => true]),
+        ]);
+
+        $user = User::factory()->create();
+
+        $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'password',
+            'recaptcha_token' => 'anything',
+        ]);
+
+        $this->assertAuthenticated();
+
+        Http::assertSent(fn ($request) =>
+            $request['secret'] === 'test-secret-key'
+            && $request['response'] === 'anything'
+        );
+    }
+
+    public function test_forgot_password_is_rejected_without_a_token(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->post('/forgot-password', ['email' => $user->email]);
+
+        $response->assertSessionHasErrors('recaptcha_token');
+    }
+
+    public function test_the_secret_is_never_shared_with_the_page(): void
+    {
+        $response = $this->get('/login');
+
+        $response->assertInertia(fn ($page) => $page
+            ->where('recaptchaSiteKey', 'test-site-key')
+            ->missing('recaptchaSecretKey')
+        );
+
+        $response->assertDontSee('test-secret-key');
+    }
+}
+```
+
+The last test is the one that matters most. It fails the build if anyone ever shares the secret
+by accident. `config([...])` in `setUp` turns the check on for this file only; every other test
+file still runs with it off.
+
+`Http::fake()` with a URL pattern intercepts only that host; nothing else in the request is faked.
+`Http::assertSent` proves we actually sent Google the secret and the token, with the right field
+names, which is the thing `asForm()` vs `asJson()` gets wrong silently.
 
 ```bash
-# 1) tell Pakasir the order is paid
-curl -s -X POST https://app.pakasir.com/api/paymentsimulation \
-  -H "Content-Type: application/json" \
-  -d '{"project":"ezsign","order_id":"TOP-...","amount":17813,"api_key":"<your key>"}'
-
-# 2) deliver the webhook Pakasir would have sent
-curl -s -X POST http://localhost:8000/pakasir/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"order_id":"TOP-...","amount":17813,"project":"ezsign","status":"completed"}'
+docker exec esign-app php artisan test tests/Feature/Auth
 ```
 
-The dialog flips to success on its next poll. This proves the refactored webhook still fulfils.
-`/pakasir/webhook` is CSRF-exempt (`VerifyCsrfToken::$except`) so the plain `curl` is accepted.
+All green, including the six new ones.
 
-### 10.3 Idempotency — protects real money
+## 10. Verification checklist
 
-With the flag on, make one top-up (auto-fulfilled). Then deliver the webhook for that same order
-by hand, as in 10.2 step 2. Run it twice. `balance_usd_cents` must not move on either call.
+Do every line. Tick it only if you saw it happen.
 
-### 10.4 The sandbox guard
+**Backend, no browser:**
 
-This is hard to test without a live project, so test the code path directly:
+- [ ] `tinker`: `verify('garbage')` returns `false`, no exception
+- [ ] `php artisan test tests/Feature/Auth` — all pass, including `RecaptchaTest`
+- [ ] `curl -X POST localhost:8000/login -d 'email=x@x.com&password=x'` with keys set → response
+      redirects back with a `recaptcha_token` error in the session (check with a follow-up GET or
+      look for the 302 and no auth cookie)
+- [ ] Remove both keys from `.env`, `config:clear`, same curl → no `recaptcha_token` error, only
+      the normal "these credentials do not match" one. The check is off when unconfigured.
+- [ ] Put the keys back. `config:clear`.
 
-```bash
-docker exec esign-app php artisan tinker --execute="
-\$t = App\Models\WalletTopup::where('status','pending')->whereNotNull('order_id')->latest()->first();
-\$svc = app(App\Services\PakasirFulfillmentService::class);
-var_dump(\$svc->fulfill(\$t, sandboxOnly: true));
-"
-```
+**Browser, keys set:**
 
-Against the sandbox project this prints `bool(true)` (Pakasir reports `is_sandbox: true`). Now
-read the `is_sandbox` check in `fulfill()` and convince yourself that a response without that
-field, or with `"is_sandbox": "true"` as a string, returns `false` and logs the refusal.
+- [ ] `/login`: checkbox visible, matches theme. Toggle theme, reload, still matches.
+- [ ] `/login`: submit unticked → "Please confirm you are not a robot." under the box
+- [ ] `/login`: tick, submit wrong password → "credentials do not match" **and the box has reset
+      to unticked**. This is 8.5; if the box stays ticked, `onError` is missing.
+- [ ] `/login`: tick, submit correct password → logged in
+- [ ] `/register`: same three checks
+- [ ] `/forgot-password`: same three checks (use a real email in the DB for the success case)
+- [ ] `/reset-password/{token}`: request a real reset email, follow the link, same three checks
+- [ ] Navigate `/login` → "Create one" → `/register` → "Sign in" → `/login` without reloading.
+      Widget renders on each page every time. This is the Inertia case from 8.2.
+- [ ] Tick the box, wait 2+ minutes without submitting, submit → error under the box, box reset.
+      This is `expired-callback`.
+- [ ] Open DevTools → Sources, search all JS for the secret key. **It must not be there.**
 
-### 10.5 Build and syntax
+**Browser, keys removed:**
 
-```bash
-docker exec esign-app php -l app/Services/PakasirFulfillmentService.php
-docker exec esign-app php -l app/Http/Controllers/PakasirWebhookController.php
-npm run build
-```
+- [ ] `config:clear`, rebuild, `/login`: no checkbox, no space where it was, no console errors,
+      login works.
 
-`php artisan test` currently fails on every test with the `postgres` hostname error regardless of
-your changes — it is a test-environment problem, not yours. Do not chase it in this PR.
+## 11. Common ways this goes wrong
 
----
-
-## 11. Traps
-
-**Deleting `createQris()`.** Section 1. The simulation needs the transaction to exist.
-
-**Putting the sandbox check in `PakasirService`.** That class is a dumb HTTP client. The
-safety logic belongs in the fulfilment service, where the `transactionDetail()` response is
-actually inspected.
-
-**Copy-pasting the fulfilment into the controllers** instead of extracting the service. You will
-end up with three copies of money-handling code. The refactor in phases 3–4 is not optional.
-
-**Calling `fulfill()` without `sandboxOnly: true` from the controllers.** The webhook is the only
-caller that should fulfil non-sandbox transactions.
-
-**Running artisan on the host.** `php artisan ...` on your machine cannot reach the database.
-Always `docker exec esign-app php artisan ...`.
-
-**Forgetting `config:clear`** after touching `.env`. Symptoms: the flag appears to do nothing.
-
-**Truthiness on `is_sandbox`.** It is `=== true`. Not `if ($transaction['is_sandbox'])`.
-
-**Changing the webhook's guards while moving code.** Phase 4 is a move, not a rewrite. If the
-provider / amount / project checks are not byte-for-byte what they were, you have drifted.
-
----
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Google always returns `missing-input-secret` | `Http::asJson()` instead of `asForm()` | 5.2 |
+| Widget never appears, no error | Script tag missing or `siteKey` prop is `null` | 8.1, 8.2; check `usePage().props.recaptchaSiteKey` in DevTools |
+| Widget appears on cold load but not after Inertia navigation | Used `class="g-recaptcha"` auto-render instead of `grecaptcha.render()` | 8.3 |
+| "Please confirm you are not a robot" after fixing a wrong password, box still ticked | Missing `onError: () => recaptcha.value?.reset()` | 8.4, 8.5 |
+| Same error, but `error-codes: ["timeout-or-duplicate"]` in the log | Token reused or older than 2 min | Working as intended; the reset should have cleared it |
+| `RegistrationTest` fails with `recaptcha_token` error | Real keys from `.env` leak into the test run | Add the two empty `<env>` overrides to `phpunit.xml`; 7.1 |
+| Submit button permanently disabled on local | Did 8.6 anyway | Remove the `!form.recaptcha_token` condition |
+| `Rules\Password` undefined after adding the import | Replaced `Illuminate\Validation\Rules` with `App\Rules` | 7.5; they are separate `use` lines |
+| Widget is light in dark mode | `theme()` reads before `.dark` class is applied | It is read at mount; check `app.js` `useColorMode` runs before page mount (it does) |
 
 ## 12. Definition of done
 
-- [ ] `config('services.pakasir.auto_simulate')` exists, defaults to `false`, is cast to bool
-- [ ] `PakasirService::simulatePayment()` exists and throws on a 4xx
-- [ ] `PakasirFulfillmentService` exists with `amountIdr()` and `fulfill()`
-- [ ] Webhook delegates to the service; no `DB::transaction` remains in the controller
-- [ ] Webhook behaviour for real deliveries is unchanged (10.2 passes)
-- [ ] Both controllers auto-simulate + fulfil when the flag is on, with `sandboxOnly: true`
-- [ ] `createQris()` is still called first in both controllers
-- [ ] Flag on: dialog flips to success within ~3s for top-up and for plan
-- [ ] Flag off: dialog waits, exactly as before
-- [ ] Duplicate fulfilment credits the wallet exactly once (10.3)
-- [ ] `npm run build` passes; both new/changed PHP files pass `php -l`
-- [ ] `PAKASIR_AUTO_SIMULATE` is **not** set to `true` in any committed file
-
----
-
-## 13. Scope
-
-Five phases above. Nothing else.
-
-Leave alone:
-
-- **The dialog.** No "sandbox mode" banner, no different success copy. The flip to success is
-  the signal. A banner is a reasonable follow-up, not this PR.
-- **`expired_at` / QR countdown.** Still unrendered. Separate task.
-- **The `postgres` test failures.** Environment, not code.
-- **ngrok / webhook URL on the Pakasir dashboard.** Auto-pay exists precisely so you do not need
-  them for local testing. Leave whatever is configured there as-is.
-- **Stripe.** Untouched.
-
-If you think the feature needs a change to `PaymentDialog.vue`, re-read section 9's last
-paragraph. It should not.
+- The four POST endpoints reject requests without a valid token when keys are configured.
+- The four endpoints behave as today when keys are not configured, and a production boot without
+  keys writes an error to the log.
+- The secret key is not in any response body, shared prop, or built JS asset. `RecaptchaTest`
+  proves this.
+- All tests in `tests/Feature/Auth` pass.
+- Every line in section 10 is ticked.
+- No new Composer or npm dependency.

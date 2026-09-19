@@ -16,6 +16,7 @@ import {
 } from "lucide-vue-next";
 
 import AuthLayout from "@/Layouts/AuthLayout.vue";
+import RecaptchaField from "@/Components/RecaptchaField.vue";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ import {
 const showPassword = ref(false);
 const showConfirmPassword = ref(false);
 const showTerms = ref(false);
+const recaptcha = ref(null);
 
 const props = defineProps({
     countries: { type: Array, required: true },
@@ -65,6 +67,7 @@ const form = useForm({
     terms: false,
     password: "",
     password_confirmation: "",
+    recaptcha_token: "",
 });
 
 const dialCode = computed(
@@ -79,6 +82,7 @@ const acceptTerms = () => {
 const submit = () => {
     form.post(route("register"), {
         onFinish: () => form.reset("password", "password_confirmation"),
+        onError: () => recaptcha.value?.reset(),
     });
 };
 </script>
@@ -385,6 +389,12 @@ const submit = () => {
                             </p>
                         </div>
                     </div>
+
+                    <RecaptchaField
+                        ref="recaptcha"
+                        v-model="form.recaptcha_token"
+                        :error="form.errors.recaptcha_token"
+                    />
 
                     <Button
                         class="h-11 w-full text-base font-semibold"
