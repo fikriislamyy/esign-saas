@@ -1,5 +1,5 @@
 <script setup>
-import { router } from "@inertiajs/vue3";
+import { router, Link } from "@inertiajs/vue3";
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
@@ -129,6 +129,12 @@ const viewAll = () => {
                     Create your first document to start sending agreements for
                     signature.
                 </p>
+
+                <Button class="mt-6" as-child>
+                    <Link :href="route('documents.index')">
+                        Create document
+                    </Link>
+                </Button>
             </div>
         </CardContent>
     </Card>
