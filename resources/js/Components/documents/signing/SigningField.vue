@@ -63,7 +63,7 @@ const style = computed(() => ({
         >
             <PenLine class="h-4 w-4 shrink-0 text-muted-foreground" />
 
-            <span> Click to Sign </span>
+            <span> Add signature </span>
         </div>
 
         <!-- Signed Indicator -->

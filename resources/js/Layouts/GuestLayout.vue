@@ -5,13 +5,6 @@ import { Link } from '@inertiajs/vue3';
 
 <template>
     <div class="min-h-screen flex flex-col sm:justify-center items-center pt-6 sm:pt-0 bg-muted">
-        <a
-            href="#main-content"
-            class="absolute -top-8 left-4 z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:top-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        >
-            Skip to main content
-        </a>
-
         <div>
             <Link href="/">
                 <ApplicationLogo class="w-20 h-20 fill-current text-muted-foreground" />

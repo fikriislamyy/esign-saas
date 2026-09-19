@@ -10,13 +10,6 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
     <div
         class="grid min-h-screen bg-gradient-to-br from-background via-background to-muted/40 lg:grid-cols-2"
     >
-        <a
-            href="#main-content"
-            class="absolute -top-8 left-4 z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:top-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        >
-            Skip to main content
-        </a>
-        <!-- LEFT -->
 
         <div
             class="hidden flex-col justify-between border-r bg-muted/20 p-14 lg:flex"

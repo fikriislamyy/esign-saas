@@ -99,7 +99,7 @@ const emit = defineEmits(["start-placement"]);
                             </p>
 
                             <p class="text-sm text-muted-foreground">
-                                Click anywhere on the PDF to place the signature
+                                Select anywhere on the PDF to place the signature
                                 field.
                             </p>
                         </div>
@@ -115,11 +115,11 @@ const emit = defineEmits(["start-placement"]);
 
                     <div class="space-y-2 text-sm text-muted-foreground">
                         <p>
-                            1. Click
+                            1. Select
                             <strong>Add Signature Field</strong>.
                         </p>
 
-                        <p>2. Click on the PDF.</p>
+                        <p>2. Select on the PDF.</p>
 
                         <p>3. Drag and resize as needed.</p>
                     </div>

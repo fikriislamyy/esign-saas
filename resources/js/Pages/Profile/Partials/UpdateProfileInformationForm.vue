@@ -67,7 +67,7 @@ const form = useForm({
                     as="button"
                     class="underline ml-1"
                 >
-                    Click here to re-send the verification email.
+                    Resend verification email
                 </Link>
             </p>
 
