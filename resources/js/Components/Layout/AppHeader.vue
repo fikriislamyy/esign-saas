@@ -82,6 +82,7 @@ const formattedWalletIdr = computed(() => {
                 <Button
                     variant="ghost"
                     size="icon"
+                    aria-label="Toggle sidebar"
                     @click="emit('toggle-sidebar')"
                 >
                     <Menu class="h-5 w-5" />

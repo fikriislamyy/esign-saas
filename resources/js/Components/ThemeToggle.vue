@@ -26,7 +26,7 @@ function toggleTheme() {
 </script>
 
 <template>
-    <Button variant="ghost" size="icon" @click="toggleTheme">
+    <Button variant="ghost" size="icon" :aria-label="isLight ? 'Switch to dark mode' : 'Switch to light mode'" @click="toggleTheme">
         <span class="relative flex h-5 w-5 items-center justify-center">
             <!-- Absolute icon overlays; the Moon below defines the layout box. -->
             <Sun :class="cn('absolute inset-0', base, isLight ? shown : hidden)" class="h-5 w-5" />

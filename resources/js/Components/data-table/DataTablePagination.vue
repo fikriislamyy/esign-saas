@@ -108,7 +108,7 @@ const props = defineProps({
                         size="icon"
                         class="h-9 w-9"
                         :disabled="!table.getCanPreviousPage()"
-                        @click="table.previousPage()"
+                        @click="table.previousPage()" aria-label="Previous page"
                     >
                         <ChevronLeft class="h-4 w-4" />
                     </Button>
@@ -119,7 +119,7 @@ const props = defineProps({
                         size="icon"
                         class="h-9 w-9"
                         :disabled="!table.getCanNextPage()"
-                        @click="table.nextPage()"
+                        @click="table.nextPage()" aria-label="Next page"
                     >
                         <ChevronRight class="h-4 w-4" />
                     </Button>

@@ -28,6 +28,7 @@ function handleUpdated() {
             variant="ghost"
             size="icon"
             class="h-8 w-8"
+            aria-label="Change role"
             title="Change role"
             @click="open = true"
         >

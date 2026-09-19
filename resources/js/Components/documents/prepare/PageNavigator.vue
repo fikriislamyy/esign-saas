@@ -23,6 +23,7 @@ const emit = defineEmits(["previous", "next"]);
         <Button
             variant="outline"
             size="icon"
+            aria-label="Go to previous page"
             :disabled="currentPage <= 1"
             @click="emit('previous')"
         >
@@ -44,6 +45,7 @@ const emit = defineEmits(["previous", "next"]);
         <Button
             variant="outline"
             size="icon"
+            aria-label="Go to next page"
             :disabled="currentPage >= totalPages"
             @click="emit('next')"
         >

@@ -105,6 +105,7 @@ const viewAll = () => {
                         <Button
                             variant="ghost"
                             size="icon"
+                            aria-label="View document"
                             class="shrink-0 rounded-full transition-[background-color,color] hover:bg-primary/10 hover:text-accent-ink"
                             @click="viewDocument(document.id)"
                         >

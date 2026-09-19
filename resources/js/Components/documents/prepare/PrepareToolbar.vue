@@ -40,7 +40,7 @@ const emit = defineEmits([
                 @zoom-out="emit('zoomOut')"
             />
 
-            <Button variant="outline" size="icon" @click="emit('resetZoom')">
+            <Button variant="outline" size="icon" @click="emit('resetZoom')" aria-label="Reset zoom">
                 <RotateCcw class="h-4 w-4" />
             </Button>
         </div>
