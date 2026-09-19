@@ -50,4 +50,19 @@ class PakasirService
 
         return $response->json();
     }
+
+    public function simulatePayment(string $orderId, int $amountIdr): array
+    {
+        $response = Http::asJson()
+            ->post($this->baseUrl.'/api/paymentsimulation', [
+                'project' => $this->project,
+                'order_id' => $orderId,
+                'amount' => $amountIdr,
+                'api_key' => $this->apiKey,
+            ]);
+
+        $response->throw();
+
+        return $response->json();
+    }
 }

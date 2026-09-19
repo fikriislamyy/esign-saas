@@ -231,6 +231,12 @@ class BillingTopupController extends Controller
             ]);
 
             $result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
+
+            if (config('services.pakasir.auto_simulate')) {
+                app(\App\Services\PakasirService::class)->simulatePayment($orderId, $amountIdr);
+                app(\App\Services\PakasirFulfillmentService::class)->fulfill($topup, sandboxOnly: true);
+            }
+
             $payload = $result['payment'] ?? [];
 
             return response()->json([

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\CardInfo;
 use App\Models\SubscriptionPayment;
 use App\Services\ExchangeRateService;
+use App\Services\PakasirFulfillmentService;
 use App\Services\PakasirService;
 use App\Services\PlanService;
 use App\Services\StripeService;
@@ -235,6 +236,11 @@ class SubscriptionController extends Controller
         ]);
 
         $result = $pakasir->createQris($orderId, $amountIdr);
+
+        if (config('services.pakasir.auto_simulate')) {
+            $pakasir->simulatePayment($orderId, $amountIdr);
+            app(PakasirFulfillmentService::class)->fulfill($payment, sandboxOnly: true);
+        }
 
         $payload = $result['payment'] ?? [];
 
