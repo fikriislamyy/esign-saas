@@ -7,14 +7,19 @@ use Illuminate\Support\Facades\Http;
 class PakasirService
 {
     protected string $baseUrl;
-    protected string $project;
-    protected string $apiKey;
+    protected ?string $project;
+    protected ?string $apiKey;
 
     public function __construct()
     {
-        $this->baseUrl = rtrim(config('services.pakasir.base_url'), '/');
+        $this->baseUrl = rtrim(config('services.pakasir.base_url') ?? 'https://app.pakasir.com', '/');
         $this->project = config('services.pakasir.project');
         $this->apiKey = config('services.pakasir.api_key');
+    }
+
+    public function isConfigured(): bool
+    {
+        return filled($this->project) && filled($this->apiKey);
     }
 
     public function createQris(string $orderId, int $amountIdr): array

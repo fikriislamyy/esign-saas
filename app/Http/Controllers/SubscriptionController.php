@@ -195,6 +195,16 @@ class SubscriptionController extends Controller
             'plan' => ['required', Rule::in(['pro'])],
         ]);
 
+        if (! $pakasir->isConfigured()) {
+            Log::error('QRIS blocked: Pakasir is not configured', [
+                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            ]);
+
+            return response()->json([
+                'message' => 'QRIS payments are not available yet. Please pay by card or contact support.',
+            ], 422);
+        }
+
         $organization = $user->organization;
         $subscription = app(PlanService::class)->subscriptionFor($organization);
         $planConfig = config('plans.'.$validated['plan']);

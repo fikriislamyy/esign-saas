@@ -64,6 +64,20 @@ class BillingTopupController extends Controller
 
         abort_unless($organization, 403);
 
+        $isQris = ($validated['method'] ?? 'card') === 'qris';
+
+        // Checked before the pending top-up row is created, so a misconfigured
+        // gateway does not leave orphaned rows behind.
+        if ($isQris && ! app(\App\Services\PakasirService::class)->isConfigured()) {
+            Log::error('QRIS blocked: Pakasir is not configured', [
+                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            ]);
+
+            return response()->json([
+                'message' => 'QRIS payments are not available yet. Please pay by card or contact support.',
+            ], 422);
+        }
+
         $currency = strtoupper($validated['currency']);
         $sourceAmount = (float) $validated['amount'];
 
@@ -194,7 +208,7 @@ class BillingTopupController extends Controller
             'status' => $topup->status,
         ]);
 
-        if (($validated['method'] ?? 'card') === 'qris') {
+        if ($isQris) {
             $rate = $this->exchangeRateService->usdToIdr();
 
             if (! $rate || $rate <= 0) {
