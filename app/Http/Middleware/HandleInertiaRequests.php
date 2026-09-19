@@ -71,6 +71,7 @@ class HandleInertiaRequests extends Middleware
                 : null,
 
             'stripeKey' => config('services.stripe.key'),
+            'recaptchaSiteKey' => config('services.recaptcha.site_key'),
         ]);
     }
 }

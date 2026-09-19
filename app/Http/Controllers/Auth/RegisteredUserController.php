@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Organization;
 use App\Providers\RouteServiceProvider;
+use App\Rules\Recaptcha;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -50,6 +51,7 @@ class RegisteredUserController extends Controller
             'phone_number' => ['required', 'string', 'regex:/^[0-9 ()+-]{6,20}$/'],
             'terms' => ['accepted'],
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
+            'recaptcha_token' => ['nullable', 'string', new Recaptcha],
         ], [
             'terms.accepted' => 'You must accept the Terms and Conditions to register.',
             'phone_number.regex' => 'Please enter a valid phone number.',

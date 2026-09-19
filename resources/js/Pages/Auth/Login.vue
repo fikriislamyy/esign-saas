@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import AuthLayout from "@/Layouts/AuthLayout.vue";
+import RecaptchaField from "@/Components/RecaptchaField.vue";
 import {
     Card,
     CardContent,
@@ -22,16 +23,19 @@ defineProps({
 });
 
 const showPassword = ref(false);
+const recaptcha = ref(null);
 
 const form = useForm({
     email: "",
     password: "",
     remember: false,
+    recaptcha_token: "",
 });
 
 const submit = () => {
     form.post(route("login"), {
         onFinish: () => form.reset("password"),
+        onError: () => recaptcha.value?.reset(),
     });
 };
 </script>
@@ -142,6 +146,12 @@ const submit = () => {
                             Remember me
                         </Label>
                     </div>
+
+                    <RecaptchaField
+                        ref="recaptcha"
+                        v-model="form.recaptcha_token"
+                        :error="form.errors.recaptcha_token"
+                    />
 
                     <Button
                         class="w-full h-11 text-base font-semibold"

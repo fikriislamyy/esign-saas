@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { Head, Link, useForm } from "@inertiajs/vue3";
 
 import AuthLayout from "@/Layouts/AuthLayout.vue";
+import RecaptchaField from "@/Components/RecaptchaField.vue";
 
 import { Mail, Loader2, ArrowLeft, KeyRound } from "lucide-vue-next";
 
@@ -22,12 +23,17 @@ const props = defineProps({
     status: String,
 });
 
+const recaptcha = ref(null);
+
 const form = useForm({
     email: "",
+    recaptcha_token: "",
 });
 
 const submit = () => {
-    form.post(route("password.email"));
+    form.post(route("password.email"), {
+        onError: () => recaptcha.value?.reset(),
+    });
 };
 </script>
 
@@ -92,6 +98,12 @@ const submit = () => {
                             {{ form.errors.email }}
                         </p>
                     </div>
+
+                    <RecaptchaField
+                        ref="recaptcha"
+                        v-model="form.recaptcha_token"
+                        :error="form.errors.recaptcha_token"
+                    />
 
                     <Button
                         class="h-11 w-full text-base font-semibold"
