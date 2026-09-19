@@ -15,7 +15,13 @@ const props = defineProps({
 const emit = defineEmits(["upload"]);
 
 function selectFile(file) {
+    props.form.clearErrors("file");
     props.form.file = file;
+}
+
+function showError(message) {
+    props.form.file = null;
+    props.form.setError("file", message);
 }
 
 function removeFile() {
@@ -37,7 +43,7 @@ function formatSize(bytes) {
 
 <template>
     <div class="space-y-6">
-        <FileDropzone @select="selectFile" />
+        <FileDropzone @select="selectFile" @error="showError" />
 
         <!-- Selected File -->
 

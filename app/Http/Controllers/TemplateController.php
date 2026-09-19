@@ -31,7 +31,11 @@ class TemplateController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'file' => ['required', 'file', 'mimes:pdf', 'max:10240'],
+            'file' => ['required', 'file', 'extensions:pdf', 'mimes:pdf', 'max:5120'],
+        ], [
+            'file.extensions' => 'Only PDF files can be uploaded.',
+            'file.mimes' => 'Only PDF files can be uploaded.',
+            'file.max' => 'The file must be 5 MB or smaller.',
         ]);
 
         $file = $request->file('file');

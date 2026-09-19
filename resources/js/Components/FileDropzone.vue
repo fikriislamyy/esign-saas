@@ -2,13 +2,25 @@
 import { ref } from "vue";
 import { Upload, FileText, X } from "lucide-vue-next";
 
-const emit = defineEmits(["select"]);
+const emit = defineEmits(["select", "error"]);
+
+const MAX_BYTES = 5 * 1024 * 1024;
 
 const file = ref(null);
 const dragging = ref(false);
 
 const selectFile = (selectedFile) => {
     if (!selectedFile) return;
+
+    if (!selectedFile.name.toLowerCase().endsWith(".pdf")) {
+        emit("error", "Only PDF files can be uploaded.");
+        return;
+    }
+
+    if (selectedFile.size > MAX_BYTES) {
+        emit("error", "The file must be 5 MB or smaller.");
+        return;
+    }
 
     file.value = selectedFile;
     emit("select", selectedFile);
@@ -58,17 +70,17 @@ const formatSize = (bytes) => {
             <h3 class="font-medium">Drop document here</h3>
 
             <p class="text-sm text-muted-foreground mt-1">
-                Drag & drop PDF or DOCX files
+                Drag & drop a PDF file
             </p>
 
             <p class="text-xs text-muted-foreground mt-2">
-                Maximum size: 10 MB
+                Maximum size: 5 MB
             </p>
 
             <input
                 type="file"
                 class="hidden"
-                accept=".pdf,.doc,.docx"
+                accept="application/pdf,.pdf"
                 @change="onInputChange"
             />
         </label>

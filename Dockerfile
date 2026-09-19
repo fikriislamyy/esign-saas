@@ -119,6 +119,9 @@ RUN mkdir -p \
         bootstrap/cache
 
 
+# PHP upload limits
+COPY docker/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+
 # Nginx configuration
 COPY docker/render/nginx.conf /etc/nginx/conf.d/default.conf
 
