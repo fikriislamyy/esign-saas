@@ -11,6 +11,7 @@ use App\Http\Controllers\InvitationAcceptController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\MembersController;
 use App\Http\Controllers\OrganizationSettingsController;
+use App\Http\Controllers\PakasirSandboxPayController;
 use App\Http\Controllers\PakasirWebhookController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SigningController;
@@ -63,6 +64,10 @@ Route::post('/pakasir/webhook', [
     PakasirWebhookController::class,
     'handle',
 ])->name('pakasir.webhook');
+
+Route::get('/pakasir/sandbox-pay/{orderId}', PakasirSandboxPayController::class)
+    ->middleware('signed')
+    ->name('pakasir.sandbox-pay');
 
 Route::get(
     '/sign/{token}',
