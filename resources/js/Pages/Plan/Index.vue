@@ -5,6 +5,7 @@ import {
     CreditCard,
     FileText,
     HardDrive,
+    LayoutTemplate,
     Mail,
     QrCode,
     ReceiptText,
@@ -101,6 +102,16 @@ const quotas = computed(() => [
             props.usage.documents.period === "week"
                 ? "This week"
                 : "This month",
+    },
+
+    {
+        key: "templates",
+        label: "Templates",
+        icon: LayoutTemplate,
+        used: props.usage.templates.used,
+        limit: props.usage.templates.limit,
+        formatter: formatCount,
+        caption: "Stored right now, on every plan",
     },
 
     {

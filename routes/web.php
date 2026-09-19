@@ -236,6 +236,9 @@ Route::middleware('auth', 'verified')->group(function () {
     Route::get('/templates/{template}/pdf', [TemplateController::class, 'pdf'])
         ->name('templates.pdf');
 
+    Route::delete('/templates/{template}', [TemplateController::class, 'destroy'])
+        ->name('templates.destroy');
+
     Route::post('/templates/{template}/signature-fields', [TemplateSignatureFieldController::class, 'store'])
         ->name('templates.signature-fields.store');
 

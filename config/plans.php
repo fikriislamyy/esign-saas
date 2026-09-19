@@ -20,6 +20,7 @@ return [
         'self_serve' => true,
         'limits' => [
             'documents' => ['limit' => 3, 'period' => 'week'],
+            'templates' => 5,
             'members' => 3,
             'storage_bytes' => 100 * 1024 * 1024,        // 100 MB
         ],
@@ -33,6 +34,7 @@ return [
         'self_serve' => true,
         'limits' => [
             'documents' => ['limit' => 100, 'period' => 'month'],
+            'templates' => 5,
             'members' => 10,
             'storage_bytes' => 10 * 1024 * 1024 * 1024,   // 10 GB
         ],
@@ -47,6 +49,7 @@ return [
         'contact_email' => 'sales@bebem.my.id',
         'limits' => [
             'documents' => ['limit' => null, 'period' => 'month'],
+            'templates' => 5,
             'members' => null,
             'storage_bytes' => null,
         ],

@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Template;
+use App\Services\PlanService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -23,8 +25,15 @@ class TemplateController extends Controller
                 return $template;
             });
 
+        $planService = app(PlanService::class);
+        $organization = $request->user()->organization;
+
         return Inertia::render('Templates/Index', [
             'templates' => $templates,
+            'templateQuota' => [
+                'used' => $planService->templatesUsed($organization),
+                'limit' => $planService->limits($organization)['templates'],
+            ],
         ]);
     }
 
@@ -37,6 +46,14 @@ class TemplateController extends Controller
             'file.mimes' => 'Only PDF files can be uploaded.',
             'file.max' => 'The file must be 5 MB or smaller.',
         ]);
+
+        $organization = $request->user()->organization;
+
+        if (! app(PlanService::class)->canAddTemplate($organization)) {
+            return back()->withErrors([
+                'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
+            ]);
+        }
 
         $file = $request->file('file');
 
@@ -107,5 +124,28 @@ class TemplateController extends Controller
         return response()->json([
             'data' => base64_encode($contents),
         ]);
+    }
+
+    public function destroy(Request $request, Template $template)
+    {
+        abort_unless(
+            $template->organization_id === $request->user()->organization_id,
+            403
+        );
+
+        $path = $template->file_path;
+
+        $template->delete();
+
+        if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
+            Log::warning('Template file was not removed from storage', [
+                'template_id' => $template->id,
+                'path' => $path,
+            ]);
+        }
+
+        return redirect()
+            ->route('templates.index')
+            ->with('status', 'Template deleted.');
     }
 }

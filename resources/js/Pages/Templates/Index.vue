@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from "vue";
 import { Head, useForm } from "@inertiajs/vue3";
 
 import { LayoutTemplate } from "lucide-vue-next";
@@ -18,9 +19,16 @@ import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
 
 import { useFeedback } from "@/Composables/useFeedback";
 
-defineProps({
+const props = defineProps({
     templates: Array,
+    templateQuota: Object,
 });
+
+const atLimit = computed(
+    () =>
+        props.templateQuota.limit !== null &&
+        props.templateQuota.used >= props.templateQuota.limit,
+);
 
 const form = useForm({
     file: null,
@@ -111,9 +119,28 @@ function submit() {
             <FadeIn :delay="200" type="scale">
                 <PageSection
                     title="Upload Template"
-                    description="Upload a PDF to use as a template."
+                    :description="`${templateQuota.used} of ${templateQuota.limit} templates used.`"
                 >
-                    <UploadCard :form="form" @upload="submit" />
+                    <div
+                        v-if="atLimit"
+                        class="rounded-xl border border-dashed p-10 text-center"
+                    >
+                        <LayoutTemplate
+                            class="mx-auto mb-3 h-10 w-10 text-muted-foreground"
+                        />
+
+                        <h3 class="font-medium">Template limit reached</h3>
+
+                        <p
+                            class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground"
+                        >
+                            Your organization can store up to
+                            {{ templateQuota.limit }} templates. Delete one below
+                            to upload another.
+                        </p>
+                    </div>
+
+                    <UploadCard v-else :form="form" @upload="submit" />
                 </PageSection>
             </FadeIn>
 
