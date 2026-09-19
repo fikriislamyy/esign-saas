@@ -1,709 +1,509 @@
-# Two scheduled cleanup jobs: document expiry and subscription expiry
+# UI polish pass: press feedback, transitions, icons and surfaces
 
 ## 1. What we are building
 
-Two Artisan commands that run on a daily schedule.
+A polish pass across the existing UI. No new screens, no new features, no redesign. Six focused
+changes that make the interface feel deliberate instead of default.
 
-1. **`documents:expire`** — finds documents older than 3 days, marks them `expired`, and deletes
-   their files from S3. Signed documents are exempt (see 3.1).
-2. **`subscriptions:expire`** — finds `pro` / `enterprise` subscriptions whose `expired_at` has
-   passed and puts them back on `free`.
-
-Plus the plumbing that makes scheduled commands actually run, because **this project has no
-scheduler process at all today**. If you skip Phase 6, both commands will be perfectly written
-and will never execute once.
+The work is driven by the `better-ui` skill in `.claude/skills/better-ui/`. **Read this document
+first, not the skill.** The skill is written for React projects with a motion library. This project
+is Vue 3 with no motion library, and it has its own design system in `DESIGN.md` that overrides the
+skill in three specific places. Section 3 lists them. Applying the skill mechanically will break
+the product's visual identity.
 
 **Definition of done:**
 
-- `php artisan documents:expire --dry-run` prints what it would do and changes nothing.
-- `php artisan documents:expire` marks old draft/sent documents `expired` and their S3 files are
-  gone.
-- A `completed` document from last year is still downloadable. It is never touched.
-- The Plan page storage bar goes **down** after documents expire.
-- `php artisan subscriptions:expire` moves a lapsed Pro org to Free.
-- A Pro org whose Stripe subscription is still live is **not** downgraded.
-- Running either command twice in a row produces no errors and no double work.
-- `docker compose up` starts a container that runs the schedule.
+- Every button scales to `0.96` on press instead of nudging down 1px.
+- Zero occurrences of `transition-all` in `resources/js/`.
+- The theme toggle cross-fades its icon and the page does not smear when the theme flips.
+- One icon library, not two.
+- All five `<img>` tags carry the prescribed outline.
+- `npm run build` passes.
+- Nothing in `DESIGN.md` is contradicted.
 
-**Read Section 3 and Section 4 before writing code.** Section 4 contains three things that will
-silently produce a broken result rather than an error message.
+**Effort:** roughly one day. Phases 1–3 are the ones users will actually feel; 4–6 are cleanup.
 
 ---
 
 ## 2. Before you write any code
 
-### Everything runs in Docker
+### The stack is not what the skill assumes
 
-Every command in this document is run inside the app container:
+| Skill assumes | This project actually is | What that means for you |
+| --- | --- | --- |
+| React / JSX | **Vue 3** (`<script setup>`) | Every code sample must be translated. `className` → `class`, `useEffect` → `onMounted`, `cn()` exists here as `cn` from `@/lib/utils` |
+| `motion` or `framer-motion` | **Neither is installed** | Use the CSS recipes only. **Never install a motion library for this work** — the skill says so explicitly, and a dependency for icon cross-fades is not justified |
+| Tailwind v3 | **Tailwind v4** (`@tailwindcss/vite`) | Config is CSS-first in `resources/css/app.css` via `@theme`. There is no `tailwind.config.js` to edit |
+
+Check for yourself before starting:
 
 ```bash
-docker compose exec app php artisan <command>
+grep -E '"motion"|"framer-motion"' package.json    # must return nothing
 ```
 
-If you run `php artisan` on your host machine it will fail to reach Postgres.
+If that returns nothing, you are on the CSS path for everything in this document.
 
 ### Where things live
 
 | Thing | Path |
 | --- | --- |
-| Commands you will create | `app/Console/Commands/` |
-| Schedule registration | `app/Console/Kernel.php` |
-| Document model | `app/Models/Document.php` |
-| Subscription model | `app/Models/Subscription.php` |
-| Limit calculations | `app/Services/PlanService.php` |
-| Local container setup | `docker-compose.yml` |
-| Production process list | `docker/render/supervisord.conf` |
+| Button variants (the highest-leverage file) | `resources/js/components/ui/button/index.js` |
+| Theme toggle | `resources/js/Components/ThemeToggle.vue` |
+| Enter animations | `resources/js/Components/animations/FadeIn.vue` |
+| Design tokens | `resources/css/app.css` |
+| **The design system you must not contradict** | `DESIGN.md` |
+| The skill and its recipes | `.claude/skills/better-ui/` |
 
-### There are no existing commands
+Note the two `Components` directories: `resources/js/Components/` (app components, capital C) and
+`resources/js/components/ui/` (shadcn-vue primitives, lowercase). This is existing convention. Do
+not try to merge them.
 
-`app/Console/Commands/` does not exist yet. `Kernel::schedule()` is empty. You are creating the
-first scheduled work in this project, which is why Phase 6 exists.
-
-### How to create a command
+### Build after every phase
 
 ```bash
-docker compose exec app php artisan make:command ExpireDocuments
+npm run build
 ```
-
-This writes `app/Console/Commands/ExpireDocuments.php`. Edit the `$signature` and `$description`
-properties, then put your logic in `handle()`.
 
 ---
 
 ## 3. Decisions already made (do not re-litigate)
 
-### 3.1 Only `draft` and `sent` documents expire
+### 3.1 DO NOT convert card borders to shadows
 
-`completed` documents keep their files forever. A completed document has a `signed_path` holding
-the executed contract — that artifact is the entire point of this product. Deleting it would mean
-a customer who signs on Monday cannot download their contract on Friday, and nothing can
-regenerate it.
+The skill says "Shadows for elevation, borders for structure" and gives a `--shadow-border` recipe.
 
-`cancelled` documents also keep their files for now. They are rare and nothing was executed, so
-they are not worth the extra risk.
+**`DESIGN.md` says the exact opposite, deliberately:**
 
-**Your query filters on `whereIn('status', ['draft', 'sent'])`. Not on "everything older than 3
-days".**
+> Use 0.5px hairline borders (#23252a or #383b3f) instead of shadows for surface separation —
+> Linear's elevation comes from borders and subtle inner shadows
 
-### 3.2 The database row survives; only the files are deleted
+> Do not use shadows to separate cards from the canvas
 
-An expired document keeps its row, its name, its `file_size`, and its `file_path`. Only the S3
-objects go away. This preserves the audit trail — you can still answer "what was this and how big
-was it" after the fact.
+This project's visual identity is Linear-inspired, and flat hairline borders are the whole point.
+Converting them to layered shadows would make it look like generic Material.
 
-### 3.3 Storage frees up by excluding expired rows from the sum
+**The design system wins. Skip that rule entirely.** Do not touch `Card.vue`, `DialogContent.vue`,
+or any `border` that separates a surface from the canvas. If you find yourself writing
+`box-shadow: 0px 0px 0px 1px oklch(...)`, stop — you are undoing a deliberate decision.
 
-This is the part that makes expiry actually reclaim quota. See Trap 2. You will change one line
-in `PlanService::storageUsedBytes()`.
+### 3.2 DO NOT invent new border radii for concentric math
 
-Do **not** zero out `file_size` to achieve this. That destroys information for no benefit.
+The skill says `outerRadius = innerRadius + padding`.
 
-### 3.4 An expired subscription becomes `plan=free`, `status=cancelled`
+`DESIGN.md` caps the radius vocabulary at four values — 12px cards, 6px buttons/inputs, 4px badges,
+9999px pills — and says:
 
-Mirror exactly what `StripeWebhookController::handleSubscriptionDeleted()` already does:
+> Do not use large radii (16px+) on cards or panels — 12px is the max card radius in this system
 
-```php
-['plan' => 'free', 'status' => 'cancelled', 'cancelled_at' => now()]
+Concentric math on a `p-6` card would demand `12 + 24 = 36px`, which is banned. Conveniently the
+skill already exempts this case:
+
+> Past `24px` of padding, treat the layers as separate surfaces and choose each radius independently
+
+`Card.vue` and `DialogContent.vue` are both `rounded-xl` (12px) with `p-6` (24px). **They are at
+the exemption boundary and are already correct.** No concentric work is needed anywhere in this
+codebase. Skip the rule.
+
+### 3.3 DO NOT change the button's icon padding
+
+`buttonVariants` already does optical alignment correctly:
+
+```
+default: "... px-2.5 ... has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2"
 ```
 
-Using the same shape means the Plan page already renders it correctly — `cancelled` is already in
-the status label and badge-variant maps in `resources/js/Pages/Plan/Index.vue`. Inventing a new
-`expired` status would require UI changes for no gain.
+Text-side padding is `px-2.5` = 10px. Icon-side drops to `pr-2` = 8px. That is exactly the skill's
+rule (`icon-side = text-side - 2px`). **It is already right. Leave it alone.**
 
-### 3.5 Both commands must be safe to run twice
+### 3.4 Keep `FadeIn.vue`'s existing easing and stagger
 
-Schedulers get retried, restarted, and run manually by panicking humans. Running either command a
-second time must be a no-op, not an error. Both queries naturally achieve this — after the first
-run the rows no longer match the filter — so just do not break that property.
+`FadeIn.vue` uses `cubic-bezier(0.16, 1, 0.3, 1)` and pages stagger it by passing `:delay="100"`,
+`:delay="200"`. That 100ms step is exactly what the skill prescribes for staged entrances, and the
+easing is the project's motion language. The skill says to match the project's motion language
+except where it prescribes an exact value — and it only prescribes `cubic-bezier(0.2, 0, 0, 1)` for
+*icon cross-fades*, which is Phase 3.
 
-### 3.6 Both commands need a `--dry-run` flag
+**Do not globally replace the easing curve.** Phase 6 touches one property in this file and nothing
+else.
 
-These commands delete files and downgrade paying customers. You must be able to see what they
-would do before letting them do it. This is not optional polish.
+### 3.5 Scope is UI polish only
+
+Hit areas, focus rings, keyboard support, ARIA and `prefers-reduced-motion` belong to
+`better-accessibility`. Type scale and wrapping belong to `better-typography`. Grouping and section
+spacing belong to `better-layout`. **All three are out of scope here.** Note anything you spot and
+move on.
 
 ---
 
 ## 4. The traps
 
-### Trap 1 — the database will reject the word `expired`
+### Trap 1 — `transition-all` hides in generated components
 
-`documents.status` looks like a plain string column, but Postgres is enforcing a CHECK
-constraint that Laravel's `enum()` created:
+Twenty-one occurrences across eighteen files, and some are in `components/ui/` (shadcn-vue
+primitives, e.g. `progress/Progress.vue`). Those files are vendored into the repo, not regenerated
+on install, so editing them is safe and permanent. Do not skip them.
 
-```
-CHECK (status::text = ANY (ARRAY['draft','sent','completed','cancelled']::text[]))
-```
+### Trap 2 — `transition-transform` is not a synonym for `transition-[transform]`
 
-`$document->update(['status' => 'expired'])` throws a `QueryException` until you change that
-constraint. **Phase 1 exists solely to fix this, and it must be done first.**
+In Tailwind, `transition-transform` expands to `transition-property: transform, translate, scale,
+rotate`. That is fine when transforms are all you animate. For a mix like scale plus opacity, use
+the bracket form: `transition-[scale,opacity]`. Do not write `transition-all` because the bracket
+syntax looked unfamiliar.
 
-`subscriptions.status` has no such constraint, so Phase 4 needs no migration.
+### Trap 3 — the press scale must be exactly `0.96`
 
-### Trap 2 — deleting the file does not reduce storage usage
+Not `0.95`, not `0.97`. The skill is explicit that anything below `0.95` reads as exaggerated. In
+Tailwind that is `active:scale-[0.96]`.
 
-This is the most important trap in this document, because it fails *silently* and produces an
-absurd result: an organization stuck over quota with an empty S3 bucket.
+### Trap 4 — icon cross-fade values are exact, and there are four of them
 
-`PlanService::storageUsedBytes()` currently does this:
+`scale` `0.25` → `1` (**not** `0.5`), `opacity` `0` → `1`, `blur` `4px` → `0px`, easing
+`cubic-bezier(0.2, 0, 0, 1)`. Getting three of four right produces a swap that looks almost right
+and therefore worse than no animation.
 
-```php
-return (int) Document::query()
-    ->where('organization_id', $organization->id)
-    ->sum('file_size');
-```
+### Trap 5 — theme transition suppression needs a forced reflow, and it is not optional
 
-It sums **every** document row regardless of status. Delete a thousand S3 objects and this number
-does not move by a single byte, because `file_size` is still sitting on every row.
+Reading `document.body.offsetHeight` looks like dead code. It is not. It forces a synchronous style
+flush so the new theme colors commit while the "no transitions" override is still in the document.
+Delete that line and the whole fix silently stops working. Comment it so the next person does not
+remove it.
 
-Fix it by excluding expired rows (Phase 2, step 3). Until you do, the storage bar on the Plan page
-is a lie.
+### Trap 6 — `will-change` on every instance costs memory
 
-### Trap 3 — every document can have two files, not one
+`FadeIn.vue` sets `willChange: "opacity, transform, filter"` on every element it wraps, permanently,
+including long after the animation finished. Each one is a GPU compositing layer the browser must
+hold. The skill says add it when you observe first-frame stutter, not preemptively.
 
-`file_path` holds the uploaded original. `completed` documents *also* have `signed_path` holding
-the executed version. Both are real S3 objects.
+### Trap 7 — there really are two icon packages
 
-Because of decision 3.1 you only expire `draft` and `sent` documents, which normally have no
-`signed_path`. But a partially-signed `sent` document may already have one. Delete both paths,
-and skip any that are null.
-
-### Trap 4 — S3 deletes fail silently
-
-`config/filesystems.php` sets `'throw' => false` on the `documents` disk. That means:
-
-```php
-$disk->delete($path);   // returns false on failure. Never throws.
-```
-
-If you ignore the return value you will mark documents `expired`, leave the files sitting on S3
-costing money, and log nothing. **Check the return value and log failures.**
-
-Note: deleting an object that does not exist returns `true`. That is correct and is what makes the
-command safe to re-run.
-
-### Trap 5 — `env()` returns null when config is cached
-
-`DocumentController` reads the disk name with `env('DOCUMENTS_DISK', 'documents')`. In a console
-command running on a production box with `php artisan config:cache` applied, `env()` returns
-**null**, so `Storage::disk(null)` falls through to the default `local` disk — and your delete
-loop quietly does nothing to S3.
-
-Phase 2 step 1 creates `config/documents.php`. Use `config()`, never `env()`, outside of config files.
-
-(The existing `DocumentController` has this same latent bug. Leave it alone — it is not this
-task's job to fix, and it currently works because config is not cached here.)
-
-### Trap 6 — do not downgrade a customer Stripe is still billing
-
-`subscriptions.expired_at` is a cached copy of Stripe's period end, kept fresh by the
-`invoice.paid` webhook. If that webhook is delayed, fails, or was never registered, `expired_at`
-goes stale while the customer is being charged perfectly well.
-
-A naive `where('expired_at', '<', now())` downgrade would then strip Pro from someone who just
-paid. For `provider = 'stripe'` rows you must confirm with Stripe before downgrading. Code is in
-Phase 4.
-
-Pakasir subscriptions cannot auto-renew, so they are the normal case for this command and need no
-such check.
-
-### Trap 7 — do not load every document into memory
-
-`Document::where(...)->get()` on a table with a million rows will exhaust the container's memory
-limit. Use `chunkById(100, ...)`, which is already in the code samples below. Do not "simplify" it
-away.
+`lucide-vue-next` (79 imports, app components) and `@lucide/vue` (18 imports, all in
+`components/ui/`). They can land on the same visual surface — a `Select` chevron next to an app
+icon inside one card — which is exactly what "one icon library per surface" forbids. It is also a
+duplicate dependency in the bundle.
 
 ---
 
-## 5. Phase 1 — Let the database accept `expired`
+## 5. Phase 1 — Button press feedback
 
-Create the migration:
+**One file. Every button in the product.** Do this first; it is the change users feel most.
 
-```bash
-docker compose exec app php artisan make:migration add_expired_to_documents_status_check
+`resources/js/components/ui/button/index.js`. In the long base string, find:
+
+```
+active:not-aria-[haspopup]:translate-y-px
 ```
 
-Replace the generated file's contents:
+and
 
-```php
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Support\Facades\DB;
-
-return new class extends Migration
-{
-    public function up(): void
-    {
-        DB::statement('ALTER TABLE documents DROP CONSTRAINT documents_status_check');
-
-        DB::statement(
-            "ALTER TABLE documents ADD CONSTRAINT documents_status_check
-             CHECK (status::text = ANY (ARRAY['draft','sent','completed','cancelled','expired']::text[]))"
-        );
-    }
-
-    public function down(): void
-    {
-        DB::statement("UPDATE documents SET status = 'cancelled' WHERE status = 'expired'");
-
-        DB::statement('ALTER TABLE documents DROP CONSTRAINT documents_status_check');
-
-        DB::statement(
-            "ALTER TABLE documents ADD CONSTRAINT documents_status_check
-             CHECK (status::text = ANY (ARRAY['draft','sent','completed','cancelled']::text[]))"
-        );
-    }
-};
+```
+transition-all
 ```
 
-The `down()` method rewrites expired rows before restoring the narrower constraint, because
-otherwise rolling back fails on any row that already says `expired`.
+Replace the press feedback with a scale, and name the transitioned properties:
 
-Run it:
+- Remove `active:not-aria-[haspopup]:translate-y-px`
+- Add `active:not-aria-[haspopup]:not-disabled:scale-[0.96]`
+- Replace `transition-all` with `transition-[scale,background-color,color,box-shadow,border-color] duration-150 ease-out`
 
-```bash
-docker compose exec app php artisan migrate
-```
+Keep the `not-aria-[haspopup]` guard — it stops dropdown triggers animating on every open, which is
+a high-frequency interaction. Adding `not-disabled` stops disabled buttons reacting to clicks.
 
 ### Checkpoint
 
 ```bash
-docker compose exec app php artisan tinker --execute="
-\$d = App\Models\Document::first();
-\$old = \$d->status;
-\$d->update(['status' => 'expired']);
-echo 'accepted'.PHP_EOL;
-\$d->update(['status' => \$old]);
-"
+npm run build
 ```
 
-Prints `accepted`. If you get a `QueryException`, the migration did not apply.
+Then in the browser: press and hold any button. It should shrink slightly and spring back on
+release. Press, then drag off the button before releasing — it must return smoothly, not snap. That
+smooth return is what makes a CSS transition the right tool here.
 
 ---
 
-## 6. Phase 2 — The document expiry command
+## 6. Phase 2 — Remove every `transition-all`
 
-### Step 1 — create `config/documents.php`
-
-Both settings this command needs go in one new file:
-
-```php
-<?php
-
-return [
-    // Trap 5: read through config(), never env(), from a console command.
-    'disk' => env('DOCUMENTS_DISK', 'documents'),
-
-    // Decision 3.1 applies this to draft and sent documents only.
-    'retention_days' => 3,
-];
-```
-
-**Do not put `retention_days` in `config/plans.php`.** `SubscriptionController::index()` sends
-`config('plans')` to the browser wholesale, and `PlanPickerDialog.vue` renders a plan card for
-every top-level key it finds. A scalar key there produces a broken fourth card and a JavaScript
-error on `plan.limits.documents`. `config/plans.php` holds plans and nothing else.
-
-### Step 2 — write the command
+Find them:
 
 ```bash
-docker compose exec app php artisan make:command ExpireDocuments
+grep -rn "transition-all" resources/js/ --include="*.vue" --include="*.js"
 ```
 
-`app/Console/Commands/ExpireDocuments.php`:
+Twenty-one results across eighteen files. For each, replace `transition-all` with the exact properties that element
+actually changes. Work out what changes by reading the hover/active/state classes next to it.
 
-```php
-<?php
+Common cases in this codebase:
 
-namespace App\Console\Commands;
+| File | Changes on state | Replace with |
+| --- | --- | --- |
+| `Components/common/StatCard.vue` | `hover:-translate-y-1 hover:shadow-lg` | `transition-[translate,box-shadow]` |
+| `Components/dashboard/DashboardStats.vue` | `hover:-translate-y-1 hover:shadow-lg` | `transition-[translate,box-shadow]` |
+| `Components/dashboard/RecentDocuments.vue` | `hover:bg-muted/40 hover:shadow-sm` | `transition-[background-color,box-shadow]` |
+| `components/ui/progress/Progress.vue` | width/transform of the bar | `transition-[transform]` |
+| `Components/documents/signing/SigningProgress.vue` | bar width | `transition-[width]` |
+| `Components/Layout/SidebarNavItem.vue` | background and color on hover | `transition-[background-color,color]` |
+| `Components/FileDropzone.vue` | border and background on drag-over | `transition-[border-color,background-color]` |
 
-use App\Models\Document;
-use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+For the rest, read the element and decide. **Do not guess** — if an element has
+`hover:bg-x hover:text-y`, the answer is `transition-[background-color,color]`, nothing more.
 
-class ExpireDocuments extends Command
-{
-    protected $signature = 'documents:expire
-                            {--days= : Override the retention window}
-                            {--dry-run : Report what would happen without changing anything}';
-
-    protected $description = 'Expire unsigned documents past the retention window and delete their files';
-
-    public function handle(): int
-    {
-        $days = (int) ($this->option('days') ?: config('documents.retention_days'));
-        $dryRun = (bool) $this->option('dry-run');
-        $cutoff = now()->subDays($days);
-
-        $disk = Storage::disk(config('documents.disk'));
-
-        $expired = 0;
-        $deleteFailures = 0;
-
-        $this->info(($dryRun ? '[DRY RUN] ' : '')."Expiring draft/sent documents created before {$cutoff}");
-
-        Document::query()
-            // Decision 3.1: signed work is never destroyed.
-            ->whereIn('status', ['draft', 'sent'])
-            ->where('created_at', '<', $cutoff)
-            ->chunkById(100, function ($documents) use ($disk, $dryRun, &$expired, &$deleteFailures) {
-                foreach ($documents as $document) {
-                    if ($dryRun) {
-                        $this->line("  would expire {$document->id} ({$document->name})");
-                        $expired++;
-
-                        continue;
-                    }
-
-                    // Trap 3: a part-signed document has two objects on S3.
-                    foreach ([$document->file_path, $document->signed_path] as $path) {
-                        if (! $path) {
-                            continue;
-                        }
-
-                        // Trap 4: this disk never throws, it returns false.
-                        if (! $disk->delete($path)) {
-                            $deleteFailures++;
-
-                            Log::warning('Could not delete expired document file', [
-                                'document_id' => $document->id,
-                                'path' => $path,
-                            ]);
-                        }
-                    }
-
-                    $document->update(['status' => 'expired']);
-                    $expired++;
-                }
-            });
-
-        $this->info("Documents expired: {$expired}");
-
-        if ($deleteFailures > 0) {
-            $this->warn("Files that could not be deleted: {$deleteFailures} (see log)");
-        }
-
-        return self::SUCCESS;
-    }
-}
-```
-
-### Step 3 — make storage actually drain (Trap 2)
-
-In `app/Services/PlanService.php`, change `storageUsedBytes()`:
-
-```php
-public function storageUsedBytes(Organization $organization): int
-{
-    return (int) Document::query()
-        ->where('organization_id', $organization->id)
-        // Expired documents have no files on S3, so they occupy no quota.
-        ->where('status', '!=', 'expired')
-        ->sum('file_size');
-}
-```
-
-One line. Without it, Phase 2 deletes files and frees nothing.
+While you are in `SidebarNavItem.vue` and `RecentDocuments.vue`: these are list rows, a
+high-frequency interaction. The skill caps those at `150ms`. Both currently sit at `duration-200`
+and `duration-300`. Drop them to `duration-150`.
 
 ### Checkpoint
 
 ```bash
-docker compose exec app php artisan documents:expire --dry-run --days=0
+grep -rc "transition-all" resources/js/ --include="*.vue" --include="*.js" | grep -v ":0" || echo "clean"
 ```
 
-`--days=0` makes everything look expired, so you should see a list of documents it *would* expire
-and no changes. Confirm nothing actually changed, then try a real run against a throwaway
-document.
+Prints `clean`.
 
 ---
 
-## 7. Phase 3 — Stop serving expired documents
+## 7. Phase 3 — Theme toggle
 
-Once files are gone, the download routes will ask S3 for objects that no longer exist. Because the
-disk has `'throw' => false`, this produces a confusing empty response rather than a clean error.
+Two separate problems in `resources/js/Components/ThemeToggle.vue`.
 
-In `app/Http/Controllers/DocumentController.php`, find the download/preview methods (around lines
-467, 498 and 526 — they each start by reading `$document->signed_path` or `$document->file_path`).
-Each already opens with an `abort_unless(...403)` ownership check. Add this immediately after that
-check, before `$filePath` is read:
+### Step 1 — cross-fade the icon instead of swapping it
 
-```php
-abort_if($document->status === 'expired', 410, 'This document has expired and its file was removed.');
+Current code toggles visibility, which the skill forbids for contextual state icons:
+
+```vue
+<Sun v-if="mode === 'light'" class="h-5 w-5" />
+<Moon v-else class="h-5 w-5" />
 ```
 
-410 Gone is the correct status: the resource existed, we know it existed, and it is permanently
-gone. That is more useful to a client than a 404.
+There is no motion library, so use the CSS cross-fade: keep **both** icons mounted, absolutely
+position one over the other, and animate `opacity`, `scale` and `blur`. Vue translation of the
+skill's recipe:
 
----
+```vue
+<script setup>
+import { computed } from "vue";
+import { useColorMode } from "@vueuse/core";
+import { Moon, Sun } from "lucide-vue-next";
 
-## 8. Phase 4 — The subscription expiry command
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
-```bash
-docker compose exec app php artisan make:command ExpireSubscriptions
+const mode = useColorMode({ emitAuto: true, initialValue: "dark" });
+
+const isLight = computed(() => mode.value === "light");
+
+const shown = "scale-100 opacity-100 blur-0";
+const hidden = "scale-[0.25] opacity-0 blur-[4px]";
+const base = "transition-[opacity,filter,scale] duration-300 ease-[cubic-bezier(0.2,0,0,1)]";
+
+function toggleTheme() {
+    mode.value = isLight.value ? "dark" : "light";
+}
+</script>
+
+<template>
+    <Button variant="ghost" size="icon" @click="toggleTheme">
+        <span class="relative flex h-5 w-5 items-center justify-center">
+            <!-- Absolute icon overlays; the Moon below defines the layout box. -->
+            <Sun :class="cn('absolute inset-0', base, isLight ? shown : hidden)" class="h-5 w-5" />
+            <Moon :class="cn(base, isLight ? hidden : shown)" class="h-5 w-5" />
+        </span>
+    </Button>
+</template>
 ```
 
-`app/Console/Commands/ExpireSubscriptions.php`:
+Exact values, per Trap 4: scale `0.25`, blur `4px`, easing `cubic-bezier(0.2,0,0,1)`.
 
-```php
-<?php
+### Step 2 — suppress transitions during the flip
 
-namespace App\Console\Commands;
+After Phase 2 there are transitions on `background-color`, `color` and `border-color` across the
+app. A theme flip changes all of them at once and the page smears instead of snapping.
 
-use App\Models\Subscription;
-use App\Services\StripeService;
-use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
+Create `resources/js/lib/theme-transitions.js`:
 
-class ExpireSubscriptions extends Command
-{
-    protected $signature = 'subscriptions:expire
-                            {--dry-run : Report what would happen without changing anything}';
+```js
+export function withoutTransitions(apply) {
+    const style = document.createElement("style");
+    style.append(
+        document.createTextNode("*,*::before,*::after{transition:none !important}"),
+    );
+    document.head.append(style);
 
-    protected $description = 'Return lapsed paid subscriptions to the free plan';
+    apply();
 
-    public function handle(StripeService $stripe): int
-    {
-        $dryRun = (bool) $this->option('dry-run');
+    // Read for its side effect: forces a synchronous style flush so the new
+    // theme commits while the override above still applies. Trap 5 — do not
+    // delete this line, the fix silently stops working without it.
+    const _flushReflow = document.body.offsetHeight;
 
-        $downgraded = 0;
-        $skipped = 0;
-
-        Subscription::query()
-            ->whereIn('plan', ['pro', 'enterprise'])
-            ->whereNotNull('expired_at')
-            ->where('expired_at', '<', now())
-            ->chunkById(100, function ($subscriptions) use ($stripe, $dryRun, &$downgraded, &$skipped) {
-                foreach ($subscriptions as $subscription) {
-                    // Trap 6: Stripe is the source of truth for Stripe subscriptions.
-                    // A stale expired_at means a missed webhook, not a lapsed customer.
-                    if ($subscription->provider === 'stripe' && $subscription->stripe_subscription_id) {
-                        if ($this->stillActiveAtStripe($stripe, $subscription)) {
-                            $skipped++;
-
-                            continue;
-                        }
-                    }
-
-                    if ($dryRun) {
-                        $this->line("  would downgrade org {$subscription->organization_id} from {$subscription->plan}");
-                        $downgraded++;
-
-                        continue;
-                    }
-
-                    // Decision 3.4: same shape the Stripe cancellation webhook writes.
-                    $subscription->update([
-                        'plan' => 'free',
-                        'status' => 'cancelled',
-                        'cancelled_at' => now(),
-                    ]);
-
-                    $downgraded++;
-                }
-            });
-
-        $this->info("Subscriptions downgraded: {$downgraded}");
-
-        if ($skipped > 0) {
-            $this->warn("Still active at Stripe, left alone: {$skipped} (a webhook was probably missed)");
-        }
-
-        return self::SUCCESS;
-    }
-
-    protected function stillActiveAtStripe(StripeService $stripe, Subscription $subscription): bool
-    {
-        try {
-            $remote = $stripe->client()->subscriptions->retrieve(
-                $subscription->stripe_subscription_id,
-                []
-            );
-        } catch (\Throwable $e) {
-            // Cannot confirm, so do not downgrade. A paying customer keeping Pro for
-            // one more day is a far cheaper mistake than wrongly stripping their plan.
-            Log::warning('Could not verify subscription at Stripe; leaving it alone', [
-                'subscription_id' => $subscription->id,
-                'message' => $e->getMessage(),
-            ]);
-
-            return true;
-        }
-
-        if (in_array($remote->status, ['active', 'trialing'], true)) {
-            Log::warning('Subscription looked expired locally but is active at Stripe', [
-                'subscription_id' => $subscription->id,
-                'stripe_subscription_id' => $subscription->stripe_subscription_id,
-            ]);
-
-            return true;
-        }
-
-        return false;
-    }
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => style.remove());
+    });
 }
 ```
 
-### Why this command exists at all
+Then wrap the toggle:
 
-`Subscription::effectivePlan()` **already** returns `free` when `expired_at` is in the past, and
-`SubscriptionController::index()` already sends `effectivePlan()` to the UI. So limits are not
-leaking today, and the Plan page already shows the right thing.
+```js
+import { withoutTransitions } from "@/lib/theme-transitions";
 
-What this command adds is making the *stored* `plan` column agree with reality, so that reporting
-queries, exports, and anything that reads `plan` directly are not wrong. Do not expect a visible
-UI change from this command — if you see one, something else is broken.
+function toggleTheme() {
+    withoutTransitions(() => {
+        mode.value = isLight.value ? "dark" : "light";
+    });
+}
+```
 
 ### Checkpoint
 
-```bash
-docker compose exec app php artisan subscriptions:expire --dry-run
-```
+Toggle the theme repeatedly. Colors must change instantly with no fade, while the sun/moon icon
+still cross-fades. Those two things are not in conflict — the override is removed two frames later,
+long before you can click again.
 
-On a clean database this prints `Subscriptions downgraded: 0`. To test properly, hand-set a
-subscription's `expired_at` into the past **and** set `provider` to something other than `stripe`
-so the Stripe check is skipped.
-
----
-
-## 9. Phase 5 — Register both on the schedule
-
-`app/Console/Kernel.php`:
-
-```php
-protected function schedule(Schedule $schedule): void
-{
-    $schedule->command('documents:expire')
-        ->dailyAt('02:00')
-        ->withoutOverlapping()
-        ->onOneServer();
-
-    $schedule->command('subscriptions:expire')
-        ->dailyAt('02:30')
-        ->withoutOverlapping()
-        ->onOneServer();
-}
-```
-
-- `withoutOverlapping()` stops a second run starting while a slow one is still going.
-- `onOneServer()` matters the moment you run more than one container. It needs a shared cache
-  lock, which Redis already provides here.
-- The two are half an hour apart so their logs do not interleave while you are debugging.
-
-Confirm they registered:
-
-```bash
-docker compose exec app php artisan schedule:list
-```
-
-Both commands should appear with their next run time.
+**While you are here, note but do not fix:** `ThemeToggle.vue` sets `initialValue: "dark"` while
+`resources/js/app.js` sets `initialValue: "system"`. Those disagree. It is a real bug, but it is a
+behaviour bug rather than UI polish. Report it; do not fix it in this pull request.
 
 ---
 
-## 10. Phase 6 — Make the scheduler actually run
+## 8. Phase 4 — One icon library
 
-**Nothing in this project runs scheduled commands today.** `docker-compose.yml` has `app`,
-`nginx`, `postgres`, `redis` and `mailpit`. `docker/render/supervisord.conf` runs `php-fpm` and
-`nginx`. No cron, no `schedule:work`. Skip this phase and Phases 1–5 are decorative.
-
-### Local
-
-Add to `docker-compose.yml`, at the same indentation as the other services:
-
-```yaml
-    scheduler:
-        build:
-            context: .
-            dockerfile: docker/php/Dockerfile
-
-        container_name: esign-scheduler
-
-        volumes:
-            - .:/var/www
-
-        working_dir: /var/www
-
-        command: php artisan schedule:work
-
-        depends_on:
-            - postgres
-            - redis
-```
-
-`schedule:work` is a foreground process that wakes every minute and runs whatever is due. It is
-the modern replacement for a crontab entry and needs no cron installed in the image.
-
-Start it:
+`lucide-vue-next` has 79 imports; `@lucide/vue` has 18, all inside `resources/js/components/ui/`.
+Consolidate onto `lucide-vue-next`, the majority.
 
 ```bash
-docker compose up -d scheduler
-docker compose logs -f scheduler
+grep -rl 'from "@lucide/vue"' resources/js/
 ```
 
-### Production
+For each file, change the import path only. The icon component names are identical between the two
+packages, so nothing else changes:
 
-Add to `docker/render/supervisord.conf`:
-
-```ini
-[program:scheduler]
-command=php /var/www/artisan schedule:work
-priority=30
-autostart=true
-autorestart=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
+```diff
+- import { ChevronRight } from "@lucide/vue";
++ import { ChevronRight } from "lucide-vue-next";
 ```
 
-`/var/www` is correct — the root `Dockerfile` sets that as `WORKDIR`.
+Then remove the dependency:
+
+```bash
+npm uninstall @lucide/vue
+npm run build
+```
+
+If the build fails on a name that does not exist in `lucide-vue-next`, stop and report it rather
+than inventing a substitute icon.
+
+**Do not** also start setting `stroke-width` on every icon. The codebase has exactly one
+`stroke-width` today, and auditing several hundred icons against their adjacent text weight is its
+own task. Note it as follow-up work.
+
+---
+
+## 9. Phase 5 — Image outlines
+
+Five `<img>` tags, none with an outline:
+
+```bash
+grep -rn "<img" resources/js/ --include="*.vue"
+```
+
+- `Pages/Landing.vue`
+- `Pages/Settings/Organization.vue`
+- `Components/landing/FeatureTabs.vue`
+- `Components/landing/DashboardPreviewCarousel.vue`
+- `Components/documents/signing/SigningField.vue`
+
+Add to each:
+
+```
+outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10
+```
+
+Pure black and pure white are non-negotiable. **Never** `outline-zinc-*`, `outline-slate-*` or any
+tinted neutral — a tinted outline picks up the surface colour behind it and reads as dirt on the
+image edge. `outline` is used rather than `border` because it never affects layout, and
+`-outline-offset-1` draws the ring just inside the corner radius.
+
+One judgement call: `SigningField.vue` renders the signer's captured signature. If it displays as a
+transparent PNG directly on the document, an outline would draw a visible box around the signature
+itself, which is wrong. **Look at it in the browser before adding the outline there.** Skip that one
+if it boxes the signature; add it to the other four regardless.
+
+---
+
+## 10. Phase 6 — `will-change` in `FadeIn.vue`
+
+`resources/js/Components/animations/FadeIn.vue`, in `styleObject`:
+
+```js
+willChange: "opacity, transform, filter",
+```
+
+This applies to every wrapped element permanently, including after the animation completes. Every
+page in the app uses several `FadeIn`s, so this is a standing pile of GPU compositing layers.
+
+Make it conditional so the hint exists only while the element is actually animating:
+
+```js
+const styleObject = computed(() => ({
+    ...(visible.value ? visibleStyle.value : hiddenStyle.value),
+
+    transition: `
+        opacity ${props.duration}ms ${props.easing},
+        transform ${props.duration}ms ${props.easing},
+        filter ${props.duration}ms ${props.easing}
+    `,
+
+    // Only hint the compositor before the element animates in. Holding this
+    // after the transition keeps a GPU layer alive for nothing.
+    willChange: visible.value ? "auto" : "opacity, transform, filter",
+}));
+```
+
+Per decision 3.4, change **nothing else in this file.** Not the easing, not the 700ms duration, not
+the transition list.
 
 ---
 
 ## 11. Verification
 
-Work through this list before opening a pull request. Do it against a database you are willing to
-damage.
+Run through this before opening a pull request.
 
-**Document expiry**
+**Automated**
 
-1. Upload a document. In tinker, set its `created_at` to 10 days ago.
-2. `php artisan documents:expire --dry-run` lists it and changes nothing. Confirm status is still
-   `draft`.
-3. Note the Plan page storage figure.
-4. `php artisan documents:expire`. Status becomes `expired`.
-5. The Plan page storage figure has **gone down**. If it has not, you skipped Phase 2 step 3.
-6. The S3 object is gone. Downloading it returns 410, not a 500.
-7. Run the command again. It reports 0 and does not error.
-8. Create a `completed` document dated a year ago. Run the command. **It must be untouched and
-   still downloadable.** This is the single most important check in this document.
+1. `npm run build` passes.
+2. `grep -rn "transition-all" resources/js/` returns nothing.
+3. `grep -rn '@lucide/vue' resources/js/ package.json` returns nothing.
+4. `grep -rn "scale-\[0.96\]" resources/js/components/ui/button/index.js` returns one match.
 
-**Subscription expiry**
+**In the browser** — run the dev server and check each:
 
-9. Set an org to `plan=pro`, `provider=pakasir`, `expired_at` yesterday.
-10. `--dry-run` lists it, changes nothing.
-11. Real run sets `plan=free`, `status=cancelled`, `cancelled_at` populated.
-12. Set an org to `plan=pro`, `provider=stripe` with a **live** Stripe subscription id and a stale
-    `expired_at`. Run the command. It must be **skipped**, with a warning in the log. This is
-    Trap 6 and it is the one that costs you a customer if it is wrong.
-13. Run again. Reports 0, no errors.
+5. Press and hold a button: it scales down. Drag off before releasing: it returns smoothly rather
+   than snapping.
+6. A disabled button does not scale on click.
+7. A dropdown trigger does not scale when opened (the `aria-haspopup` guard).
+8. Theme toggle: colours snap instantly, no page-wide smear.
+9. Theme toggle: the sun/moon icon cross-fades, scaling and blurring rather than popping.
+10. Hover a sidebar item and a dashboard row: the transition is quick (150ms), not floaty.
+11. Images on the landing page have a faint hairline edge in both light and dark mode.
+12. Cards still use hairline **borders**, not shadows. If any card gained a shadow, you violated
+    decision 3.1 — revert it.
+13. Open DevTools → Animations, set speed to 10%, and replay the theme-toggle icon swap. The icon
+    should scale up from very small with blur clearing. If it barely changes size you used `0.5`
+    instead of `0.25`.
 
-**Scheduler**
-
-14. `php artisan schedule:list` shows both commands.
-15. `docker compose up -d scheduler` and the logs show it waking up.
+Report anything you could not check as **Not verified** rather than assuming it passes.
 
 ---
 
 ## 12. Out of scope
 
-Do not do these in this pull request. Note them and move on.
+Note these and move on. Do not fix them here.
 
-- Notifying signers that a document they were asked to sign has expired. Real feature, needs
-  product input on wording and timing.
-- Emailing an org before or after their plan lapses.
-- Making the retention window a per-plan perk (free 3 days, pro 30). Deliberately rejected for now
-  to keep this small; `config('documents.retention_days')` is the hook if it comes back.
-- Fixing `DocumentController`'s use of `env()` (Trap 5). Pre-existing, harmless today.
-- Adding a guard against creating a second Stripe subscription when one is already active. Real
-  bug, tracked separately.
+- Focus rings, hit areas, keyboard navigation, ARIA, `prefers-reduced-motion` — `better-accessibility`.
+- Type scale, line length, truncation, tabular numbers — `better-typography`.
+- Section spacing, grouping, reading order, breakpoints — `better-layout`.
+- Product copy — `better-writing`.
+- Auditing icon `stroke-width` against adjacent text weight across the whole app (Phase 4 note).
+- The `initialValue` disagreement between `ThemeToggle.vue` and `app.js` (Phase 3 note) — a real
+  bug, but a behaviour bug.
+- `FadeIn.vue`'s 700ms default duration. Longer than the skill's guidance for entrances, but it is
+  the established motion language and changing it is a design decision, not a polish fix.
