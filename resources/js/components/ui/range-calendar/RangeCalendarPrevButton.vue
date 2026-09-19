@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronLeftIcon } from "@lucide/vue";
+import { ChevronLeftIcon } from "lucide-vue-next";
 
 import { reactiveOmit } from "@vueuse/core";
 import { RangeCalendarPrev, useForwardProps } from "reka-ui";

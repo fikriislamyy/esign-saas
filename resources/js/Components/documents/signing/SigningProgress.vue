@@ -35,7 +35,7 @@ const progress = computed(() => {
 
         <div class="h-2 overflow-hidden rounded-full bg-muted">
             <div
-                class="h-full rounded-full bg-primary transition-all duration-300"
+                class="h-full rounded-full bg-primary transition-[width] duration-300"
                 :style="{
                     width: `${progress}%`,
                 }"

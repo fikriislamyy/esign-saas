@@ -21,7 +21,7 @@ defineProps({
     <div class="border-t border-border/50 p-3">
         <div
             :class="[
-                'flex items-center rounded-xl bg-muted/40 transition-all',
+                'flex items-center rounded-xl bg-muted/40 transition-[background-color]',
                 collapsed && !mobile ? 'justify-center p-2' : 'gap-3 p-3',
             ]"
         >

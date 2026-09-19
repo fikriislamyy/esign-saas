@@ -44,7 +44,7 @@ const isActive = computed(() => {
         :href="route(item.route)"
         :title="collapsed ? item.title : undefined"
         :class="[
-            'group relative flex h-11 items-center rounded-xl transition-all duration-200',
+            'group relative flex h-11 items-center rounded-xl transition-[background-color,color] duration-150',
 
             collapsed ? 'justify-center px-0' : 'gap-3 px-3',
 

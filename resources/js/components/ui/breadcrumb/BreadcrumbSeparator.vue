@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronRightIcon } from "@lucide/vue";
+import { ChevronRightIcon } from "lucide-vue-next";
 
 import { cn } from "@/lib/utils";
 

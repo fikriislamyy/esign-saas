@@ -1,5 +1,5 @@
 <script setup>
-import { CheckIcon } from "@lucide/vue";
+import { CheckIcon } from "lucide-vue-next";
 
 import { reactiveOmit } from "@vueuse/core";
 import { CheckboxIndicator, CheckboxRoot, useForwardPropsEmits } from "reka-ui";

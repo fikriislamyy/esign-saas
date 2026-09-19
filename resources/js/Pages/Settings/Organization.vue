@@ -66,7 +66,7 @@ const submit = () => {
                                 v-if="organization.logo"
                                 :src="`/storage/${organization.logo}`"
                                 alt="Logo"
-                                class="h-20 w-20 rounded-lg border object-cover"
+                                class="h-20 w-20 rounded-lg border object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
                             />
 
                             <div

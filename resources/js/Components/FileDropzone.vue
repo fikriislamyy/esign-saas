@@ -46,7 +46,7 @@ const formatSize = (bytes) => {
             @dragover.prevent="dragging = true"
             @dragleave.prevent="dragging = false"
             @drop="onDrop"
-            class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all duration-200"
+            class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-[border-color,background-color] duration-200"
             :class="
                 dragging
                     ? 'border-accent-ink bg-primary/5'

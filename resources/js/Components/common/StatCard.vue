@@ -13,7 +13,7 @@ defineProps({
 
 <template>
     <Card
-        class="transition-all duration-300 hover:-translate-y-1 hover:shadow-lg"
+        class="transition-[translate,box-shadow] duration-300 hover:-translate-y-1 hover:shadow-lg"
     >
         <CardContent class="p-6">
             <div class="flex items-start justify-between">
