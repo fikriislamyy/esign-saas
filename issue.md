@@ -1,347 +1,253 @@
-# Document uploads: PDF only, 5 MB maximum
+# Templates: delete action and a 5-template limit
 
 ## 1. What we are building, in one paragraph
 
-There are two places a user uploads a document: the **Documents** page (`POST /documents`) and the
-**Templates** page (`POST /templates`). Today Documents accepts PDF, DOC and DOCX up to 10 MB, and
-Templates accepts PDF up to 10 MB. After this change both accept **only PDF, at most 5 MB**, the
-server rejects anything else with a clear message, and the upload box tells the user the rule
-before they pick a file.
+Two related things. First, a user can **delete a template**: the row in `templates` goes, every
+row in `template_signature_fields` that belongs to it goes, and the PDF file in storage goes.
+Second, **every organisation can hold at most 5 templates**, on every plan, free or paid. When an
+organisation already has 5, the upload box on the Templates page is replaced by a message saying
+to delete one first, and the server rejects the upload even if someone bypasses the page.
 
-The organisation **logo** upload on the Settings page is an image, not a document. It is out of
-scope. Do not touch `OrganizationSettingsController`.
+The two halves depend on each other. A hard limit with no way to delete is a dead end; a delete
+button with no limit is just a feature. Build the delete first (Phases 1–3), then the limit
+(Phases 4–6), so that at no point is a user stuck.
 
-## 2. Read this first: a 5 MB limit does not exist yet, at any layer
+## 2. Things you must not do
 
-Before you change a single validation rule, understand what the server does with a large file
-today. Run this:
+- **Do not** delete `template_signature_fields` rows by hand in the controller with a loop or a
+  `->signatureFields()->delete()` call. The database already does it. Section 3 explains; the
+  test in 8.2 proves it. Extra deletion code is not wrong, it is noise that suggests the author
+  did not know about the cascade.
+- **Do not** put the limit only in the Vue page. Hiding the upload box is a courtesy. The server
+  check in Phase 5 is the rule.
+- **Do not** make the limit vary by plan, and **do not** read it from `.env`. The task says 5 for
+  everyone. It goes in `config/plans.php` under each plan's `limits`, with the same value three
+  times, because that is where every other limit lives and where `PlanService` reads them.
+- **Do not** put the Delete button in the table row. It goes on the template's own page, behind a
+  confirmation dialog that names the template. Section 6.1 explains the reasoning; you may
+  disagree, but do it there first.
+- **Do not** use `window.confirm()`. `PendingInvitations.vue` does, and it is the one place in
+  the app that does. There is a proper `AlertDialog` component in `components/ui/alert-dialog`
+  that nothing uses yet. This feature is where it gets used.
+- **Do not** soft-delete. `Template` has no `SoftDeletes` trait and no `deleted_at` column. A
+  deleted template is gone.
 
-```bash
-docker exec esign-app php -r 'echo ini_get("upload_max_filesize"), " / ", ini_get("post_max_size"), "\n";'
-```
+## 3. How the pieces already fit together
 
-You will see `2M / 8M`. That is PHP's own ceiling, and it sits **in front of** Laravel. A 3 MB PDF
-never reaches `DocumentController::store()`. PHP discards it, hands Laravel an empty upload, and
-Laravel's `file` rule fails with the generic message *"The file failed to upload."* The `max:10240`
-rule that is in the code right now has never once fired, because nothing bigger than 2 MB has ever
-got past PHP.
+Read these before writing anything.
 
-So the task has a hidden first step: **raise PHP's limit above 5 MB**, so that Laravel's rule,
-with its friendly message, is the thing that says no. If you skip this, you will write
-`max:5120`, test with a 3 MB file, see "The file failed to upload", and spend an afternoon
-debugging validation that is not the problem.
-
-Nginx is already fine: both `docker/nginx/default.conf` and `docker/render/nginx.conf` set
-`client_max_body_size 100M`. Leave them alone.
-
-## 3. Things you must not do
-
-- **Do not** rely on the browser. The `accept=".pdf"` attribute on the file input and the
-  client-side size check are conveniences. Anyone can POST a 50 MB `.exe` with `curl`. The server
-  rule is the only real gate.
-- **Do not** check only the file extension on the server. A file called `virus.pdf` whose bytes are
-  a Windows executable must be rejected. Section 5 explains the two rules that together handle this.
-- **Do not** write `max:5` or `max:5000000`. Laravel's `max` on a file is in **kilobytes**.
-  5 MB is `max:5120`. This is the single most common mistake with this rule.
-- **Do not** add a migration or delete existing rows. Documents that were uploaded as DOCX before
-  this change stay in the database. This change is about what is accepted from now on.
-- **Do not** put the limit in `.env`. It is a product rule, not a deployment setting. Hard-code
-  `5120` in the two controllers.
-- **Do not** touch the logo upload.
-
-## 4. Where everything is
-
-| Layer | File | What it says today |
+| You need to | Look at | What you will see |
 | --- | --- | --- |
-| PHP ceiling | not in the repo — PHP's built-in default | `upload_max_filesize=2M`, `post_max_size=8M` |
-| Documents rule | [app/Http/Controllers/DocumentController.php:54-59](app/Http/Controllers/DocumentController.php#L54-L59) | `mimes:pdf,doc,docx`, `max:10240` |
-| Templates rule | [app/Http/Controllers/TemplateController.php:34](app/Http/Controllers/TemplateController.php#L34) | `mimes:pdf`, `max:10240` |
-| Drop zone UI | [resources/js/Components/FileDropzone.vue](resources/js/Components/FileDropzone.vue) | "Drag & drop PDF or DOCX files", "Maximum size: 10 MB", `accept=".pdf,.doc,.docx"` |
-| Wrapper that shows errors | [resources/js/Components/documents/UploadCard.vue](resources/js/Components/documents/UploadCard.vue) | Renders `form.errors.file` in a red box |
-| Pages using the wrapper | `Pages/Documents/Index.vue`, `Pages/Templates/Index.vue` | Both post `form.file` and pass errors to `showError()` |
+| Check a template belongs to the caller | [TemplateController.php:56-59](app/Http/Controllers/TemplateController.php#L56-L59) | `abort_unless($template->organization_id === $request->user()->organization_id, 403)` — every method does this |
+| Talk to the file store | [TemplateController.php:87](app/Http/Controllers/TemplateController.php#L87) | `Storage::disk(env('DOCUMENTS_DISK', 'documents'))` — same disk, same env key, every time |
+| See how a plan limit is defined | [config/plans.php](config/plans.php) | `'limits' => ['documents' => [...], 'members' => 3, 'storage_bytes' => ...]` per plan |
+| See how a plan limit is checked | [PlanService.php](app/Services/PlanService.php) `canAddMember()` | `$limit === null \|\| used < $limit` — null means unlimited |
+| See how a limit blocks an upload | [DocumentController.php:66-73](app/Http/Controllers/DocumentController.php#L66-L73) | `if (! $planService->canUploadDocument(...)) return back()->withErrors(['file' => '...'])` |
+| See how usage reaches the Plan page | `PlanService::usage()` → `SubscriptionController::index()` → `Pages/Plan/Index.vue` `quotas` | An array per quota with `used`, `limit`, `formatter`, `caption` |
+| See a destructive action on a page header | [Pages/Templates/Show.vue](resources/js/Pages/Templates/Show.vue) `#actions` slot | Preview and Prepare buttons; Delete goes beside them |
 
-`FileDropzone` is used by `UploadCard`, and `UploadCard` is used by both pages. So one change to
-`FileDropzone` fixes the text on both pages. You do not need to touch the two `Index.vue` files.
+**The cascade.** Open
+[the `template_signature_fields` migration](database/migrations/2026_09_14_162857_create_template_signature_fields_table.php)
+and find:
 
-## 5. Phase 1 — raise the PHP ceiling (Docker)
-
-### 5.1 New file: `docker/php/uploads.ini`
-
-```ini
-upload_max_filesize = 6M
-post_max_size = 10M
+```php
+$table->foreignUuid('template_id')
+    ->constrained()
+    ->cascadeOnDelete();
 ```
 
-Why 6 and not 5: `upload_max_filesize` measures the raw multipart body, which is a little bigger
-than the file itself (boundaries, headers, the CSRF token). If PHP's limit were exactly 5M, a
-4.99 MB PDF could still be cut off by PHP and the user would get the generic message instead of
-ours. Setting PHP slightly above the product limit means Laravel's `max:5120` is always the rule
-that fires for files in the 5–6 MB range. Files above 6 MB still hit PHP's wall and get *"The file
-failed to upload."* That is acceptable; the drop zone will have told them 5 MB already.
+`cascadeOnDelete()` is a PostgreSQL foreign-key rule. When a `templates` row is deleted, Postgres
+itself deletes every `template_signature_fields` row with that `template_id`, in the same
+statement, before Laravel gets control back. So `$template->delete()` **is** the deletion of the
+fields. You do not write a second line. The test in 8.2 asserts the fields are gone and will
+pass with the one-line delete.
 
-`post_max_size` must be larger than `upload_max_filesize`. If it is not, PHP silently drops the
-entire POST body, including the CSRF token, and Laravel returns a 419 page. That is a confusing
-failure and this is the only place it can come from.
+Nothing else references `templates`. `documents` has no `template_id` column (checked: the only
+foreign key to `templates` in any migration is the one above). So deleting a template cannot
+orphan a document.
 
-### 5.2 Local image: `docker/php/Dockerfile`
+## 4. Phase 1 — the route and the controller method
 
-Add after the `COPY --from=composer` line:
+### 4.1 Route: `routes/web.php`
 
-```dockerfile
-COPY docker/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+Inside the `auth, verified` group, after the `templates.pdf` route (line 236):
+
+```php
+Route::delete('/templates/{template}', [TemplateController::class, 'destroy'])
+    ->name('templates.destroy');
 ```
 
-`/usr/local/etc/php/conf.d/` is the directory the official PHP image scans for extra `.ini`
-files. You can see the list it currently loads with `docker exec esign-app php --ini`.
+`Route::delete`, not `post`. Inertia's `router.delete()` sends a real `DELETE` request, and the
+verb is what makes the URL `/templates/{id}` mean "remove" rather than "show".
 
-### 5.3 Production image: root `Dockerfile`
+### 4.2 Controller: `app/Http/Controllers/TemplateController.php`
 
-This is the Render build. The third stage starts at `FROM php:8.3-fpm-bookworm` (line 61). Add
-the same `COPY` line next to the nginx one near the bottom of that stage:
+Add after `pdf()`:
 
-```dockerfile
-# PHP upload limits
-COPY docker/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+```php
+public function destroy(Request $request, Template $template)
+{
+    abort_unless(
+        $template->organization_id === $request->user()->organization_id,
+        403
+    );
 
-# Nginx configuration
-COPY docker/render/nginx.conf /etc/nginx/conf.d/default.conf
+    $path = $template->file_path;
+
+    $template->delete();
+
+    if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
+        Log::warning('Template file was not removed from storage', [
+            'template_id' => $template->id,
+            'path' => $path,
+        ]);
+    }
+
+    return redirect()
+        ->route('templates.index')
+        ->with('status', 'Template deleted.');
+}
 ```
 
-Both Dockerfiles, not one. If you only do the local one, production still has a 2 MB wall and
-nobody notices until a customer complains.
+Add `use Illuminate\Support\Facades\Log;` to the imports at the top.
 
-### 5.4 Rebuild and verify
+Why this order and shape:
+
+- **Ownership check first**, copied from every other method in the file. Without it, anyone who
+  guesses a UUID can delete another organisation's template.
+- **Save `$path` before `delete()`.** After `$template->delete()` the model is still in memory
+  and `$template->file_path` would still work, but reading a property off a deleted model is the
+  kind of thing that looks like a bug to the next reader. Copy it out first.
+- **Database row first, file second.** If the file deletion fails (S3 is down, credentials
+  expired), you are left with a file in storage that nothing points to. That costs a few
+  kilobytes and is invisible to the user. The other order — file first, then row — fails the
+  other way: a row that points at a file that no longer exists, so the template still appears in
+  the list, and opening it 404s. The orphan file is the lesser harm.
+- **`Storage::delete()` returns `false` rather than throwing** when it cannot remove the file.
+  Without the `if`, that failure is silent. The log line means an orphaned file is at least
+  findable later.
+- **Redirect to the index**, because the page the user was on (the template's own page) no
+  longer exists. `with('status', ...)` is the same flash the login page uses.
+
+### 4.3 Quick check
 
 ```bash
-docker compose build app && docker compose up -d app
-docker exec esign-app php -r 'echo ini_get("upload_max_filesize"), " / ", ini_get("post_max_size"), "\n";'
+docker exec esign-app php artisan route:list --name=templates.destroy
 ```
 
-You must see `6M / 10M`. If you still see `2M`, the container is running the old image; check
-`docker compose ps` and that the build actually ran. **Do not continue to Phase 2 until this
-prints 6M.** Everything after this depends on it.
+One line, `DELETE templates/{template}`. If it says `GET` or is missing, re-read 4.1.
 
-The `-r` check runs PHP CLI, not PHP-FPM. They read the same `conf.d` directory in this image, so
-CLI is a fair proxy. If you want to be certain, also restart FPM — `docker compose up -d app` does
-that — and upload a 3 MB PDF through the browser once Phase 2 is done.
+## 5. Phase 2 — the Delete button
 
-## 6. Phase 2 — the server rules
+### 5.1 Why the Show page and not the table
 
-### 6.1 The two rules that together mean "a real PDF"
+The table on `/templates` has one action per row, an eye icon that opens the template. Putting a
+trash icon next to it means a destructive action one pixel from a harmless one, on a row the user
+may be scanning past. The Show page already has a header with Preview and Prepare; it is where
+the user has confirmed which template they are looking at. Delete belongs there, behind a dialog
+that says the template's name and how many signature fields go with it. One place, one
+confirmation, no accidental clicks in a list.
 
-```php
-'file' => ['required', 'file', 'extensions:pdf', 'mimes:pdf', 'max:5120'],
-```
+### 5.2 `resources/js/Pages/Templates/Show.vue`
 
-- `extensions:pdf` looks at the **filename** the browser sent. `report.txt` fails here even if
-  its bytes are a PDF. We want this because `DocumentController` derives the document's display
-  name from the filename, and downstream code assumes `.pdf`.
-- `mimes:pdf` looks at the **bytes**, not the name. Laravel sniffs the file's magic number; a
-  Windows executable renamed to `.pdf` fails here. This is the security rule.
-- `max:5120` is 5 MB in kilobytes.
-
-You need both `extensions` and `mimes`. Each catches something the other lets through.
-(`extensions` was added in Laravel 10.15; this project is on 10.50, so it is available.)
-
-### 6.2 Documents: `app/Http/Controllers/DocumentController.php`
-
-Replace the rule array and add a messages array. The whole `validate()` call becomes:
-
-```php
-$request->validate([
-    'file' => ['required', 'file', 'extensions:pdf', 'mimes:pdf', 'max:5120'],
-], [
-    'file.extensions' => 'Only PDF files can be uploaded.',
-    'file.mimes' => 'Only PDF files can be uploaded.',
-    'file.max' => 'The file must be 5 MB or smaller.',
-]);
-```
-
-Nothing below the `validate()` call changes. The plan-limit checks, the `store()`, the
-`Document::create()` all stay exactly as they are.
-
-The two "Only PDF" messages are deliberately identical. The user does not care which rule caught
-it; they care what to do. Tell them what is allowed, not what went wrong.
-
-### 6.3 Templates: `app/Http/Controllers/TemplateController.php`
-
-Same shape:
-
-```php
-$request->validate([
-    'file' => ['required', 'file', 'extensions:pdf', 'mimes:pdf', 'max:5120'],
-], [
-    'file.extensions' => 'Only PDF files can be uploaded.',
-    'file.mimes' => 'Only PDF files can be uploaded.',
-    'file.max' => 'The file must be 5 MB or smaller.',
-]);
-```
-
-Yes, the same five lines twice. Two controllers, two copies. Do not create a shared rule class
-or a config key for this; the duplication is nine lines and anyone reading either controller sees
-the whole rule without opening another file.
-
-### 6.4 Check it from the terminal before touching Vue
-
-Log in through the browser, then in DevTools → Application → Cookies copy the `XSRF-TOKEN` and
-the session cookie. Or, simpler, skip curl and go straight to Phase 4's tests, which is what they
-are for. Section 8 has the curl commands if you want them.
-
-## 7. Phase 3 — the drop zone
-
-### 7.1 `resources/js/Components/FileDropzone.vue`
-
-Three text changes and one attribute in the template:
-
-```vue
-<h3 class="font-medium">Drop document here</h3>
-
-<p class="text-sm text-muted-foreground mt-1">
-    Drag & drop a PDF file
-</p>
-
-<p class="text-xs text-muted-foreground mt-2">
-    Maximum size: 5 MB
-</p>
-
-<input
-    type="file"
-    class="hidden"
-    accept="application/pdf,.pdf"
-    @change="onInputChange"
-/>
-```
-
-`accept` takes both the MIME type and the extension because browsers differ in which one they
-honour in the file picker. This only filters the picker; drag-and-drop ignores it entirely,
-which is why the next part exists.
-
-### 7.2 Client-side pre-check, so the user does not wait for a round trip
-
-In the same file, change `selectFile` so an obviously wrong file is rejected before it is even
-attached to the form:
+**Imports.** Add to the existing ones:
 
 ```js
-const emit = defineEmits(["select", "error"]);
-
-const MAX_BYTES = 5 * 1024 * 1024;
-
-const selectFile = (selectedFile) => {
-    if (!selectedFile) return;
-
-    if (!selectedFile.name.toLowerCase().endsWith(".pdf")) {
-        emit("error", "Only PDF files can be uploaded.");
-        return;
-    }
-
-    if (selectedFile.size > MAX_BYTES) {
-        emit("error", "The file must be 5 MB or smaller.");
-        return;
-    }
-
-    file.value = selectedFile;
-    emit("select", selectedFile);
-};
+import { router } from "@inertiajs/vue3";
+import { Trash2 } from "lucide-vue-next";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 ```
 
-Two notes:
+`Head` and `Link` are already imported from `@inertiajs/vue3`; add `router` to that same line
+rather than a second import. `LayoutTemplate, Eye, FilePenLine` are already imported from
+`lucide-vue-next`; add `Trash2` to that line.
 
-- Check the **name**, not `selectedFile.type`. Browsers set `type` from the OS's extension
-  registry, and on some machines a `.pdf` reports an empty string. The name is reliable; the bytes
-  are the server's job.
-- The messages are word-for-word the same as the server's. If the server ever disagrees with the
-  client, the user sees the server's version, and it reads the same. Keep them in sync.
-
-### 7.3 `resources/js/Components/documents/UploadCard.vue`
-
-`UploadCard` already renders `form.errors.file` in a red box. Wire the new event into it:
-
-```vue
-<FileDropzone @select="selectFile" @error="showError" />
-```
-
-and in the script:
+**Script.** After `previewTemplate()`:
 
 ```js
-function selectFile(file) {
-    props.form.clearErrors("file");
-    props.form.file = file;
-}
+const confirmingDelete = ref(false);
 
-function showError(message) {
-    props.form.file = null;
-    props.form.setError("file", message);
+function deleteTemplate() {
+    confirmingDelete.value = false;
+
+    router.delete(route("templates.destroy", props.template.id), {
+        onStart: () => showLoading("Deleting template..."),
+        onFinish: () => hideLoading(),
+    });
 }
 ```
 
-`setError` and `clearErrors` are built into Inertia's `useForm`; they are the same mechanism the
-server's validation errors arrive through. So a client-side rejection and a server-side rejection
-render in the same red box, in the same place, in the same words. The user cannot tell which one
-caught it, and should not have to.
+Add `import { ref } from "vue";` at the top. `showLoading` and `hideLoading` are already
+destructured from `useFeedback()` in this file.
 
-`clearErrors("file")` on a fresh selection matters: without it, a user who drops a 6 MB file, sees
-the error, then drops a valid 2 MB file, still sees the stale error until they submit.
+The server redirects to `/templates` on success, so there is no `onSuccess` here; Inertia follows
+the redirect and the Templates page renders. If the server returns 403, Inertia shows its error
+modal, which is correct for a case that should never happen from the UI.
 
-### 7.4 Build and look
+**Template.** In the `#actions` slot, after the Prepare button:
+
+```vue
+<Button variant="destructive" @click="confirmingDelete = true">
+    <Trash2 class="mr-2 h-4 w-4" />
+    Delete
+</Button>
+```
+
+And after the closing `</PageHeader>`, still inside the `<FadeIn>`:
+
+```vue
+<AlertDialog v-model:open="confirmingDelete">
+    <AlertDialogContent>
+        <AlertDialogHeader>
+            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
+            <AlertDialogDescription>
+                "{{ template.name }}" and its
+                {{ template.signature_fields_count }}
+                signature field{{ template.signature_fields_count === 1 ? "" : "s" }}
+                will be permanently removed. This cannot be undone.
+            </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction @click="deleteTemplate">
+                Delete template
+            </AlertDialogAction>
+        </AlertDialogFooter>
+    </AlertDialogContent>
+</AlertDialog>
+```
+
+`template.signature_fields_count` is already there: `TemplateController::show()` calls
+`loadCount('signatureFields')` before rendering. The dialog tells the user exactly what is about
+to go, by name and by count. "Are you sure?" with no specifics is not a confirmation, it is a
+speed bump.
+
+### 5.3 Build and try it
 
 ```bash
 npm run build
 ```
 
-Open `/documents`. The box says "Drag & drop a PDF file" and "Maximum size: 5 MB". Drag a `.docx`
-onto it: red box, "Only PDF files can be uploaded.", nothing attached, Upload button stays
-disabled. Drag a real PDF: the file card appears, red box gone.
+Open any template, click Delete. Dialog appears with the right name and count. Cancel closes it.
+Delete again, confirm: loading overlay, then you land on `/templates` and the template is gone
+from the list.
 
-Repeat on `/templates`. Same component, so same result, but look anyway.
+## 6. Phase 3 — tests for delete
 
-## 8. Phase 4 — tests
+No factory exists for `Template`. Create rows directly with `Template::create()`; the model fills
+its own UUID. The organisation and user setup is the same as `DocumentUploadTest.php`, which you
+can open for reference.
 
-There are no upload tests today. Add two files. They are nearly identical; the second is left as
-a copy-and-adjust exercise once the first passes.
-
-### 8.1 The fake-file trap, explained before you hit it
-
-`UploadedFile::fake()->create('a.pdf', 5120)` makes a 5 MB file **full of null bytes** and tells
-Laravel its MIME type is whatever you pass as the third argument. But `mimes:pdf` does not trust
-that argument; it sniffs the bytes. Null bytes sniff as `application/octet-stream`, so the rule
-fails, and your "5 MB PDF should be accepted" test fails for the wrong reason.
-
-Use `createWithContent()` and start the content with a real PDF header. PHP's `finfo` recognises
-the `%PDF-` magic number and reports `application/pdf`; the rest of the file can be padding.
-
-```php
-private function pdf(string $name, int $bytes): UploadedFile
-{
-    $header = "%PDF-1.4\n";
-
-    return UploadedFile::fake()->createWithContent(
-        $name,
-        $header.str_repeat('a', $bytes - strlen($header))
-    );
-}
-```
-
-### 8.2 A user with an organisation
-
-`User::factory()` does not create an organisation, and `DocumentController::store()` needs one
-(for the plan checks and the `organization_id` column). Build it by hand in `setUp()`. The
-`Organization` model generates its own UUID and slug on create, and `PlanService` creates a free
-subscription on first use, so this is enough:
-
-```php
-$this->organization = Organization::create(['name' => 'Acme']);
-
-$this->user = User::factory()->create([
-    'organization_id' => $this->organization->id,
-    'role' => 'owner',
-]);
-```
-
-The free plan allows 3 documents per week and 100 MB of storage, so none of the tests below
-trip a plan limit. If you ever see *"Your plan allows 3 documents per week"* in a test, that is
-why.
-
-### 8.3 New file: `tests/Feature/DocumentUploadTest.php`
+### 6.1 New file: `tests/Feature/TemplateDeleteTest.php`
 
 ```php
 <?php
@@ -349,17 +255,19 @@ why.
 namespace Tests\Feature;
 
 use App\Models\Organization;
+use App\Models\Template;
+use App\Models\TemplateSignatureField;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
-class DocumentUploadTest extends TestCase
+class TemplateDeleteTest extends TestCase
 {
     use RefreshDatabase;
 
     private User $user;
+    private Organization $organization;
 
     protected function setUp(): void
     {
@@ -367,177 +275,483 @@ class DocumentUploadTest extends TestCase
 
         Storage::fake('documents');
 
-        $organization = Organization::create(['name' => 'Acme']);
+        $this->organization = Organization::create(['name' => 'Acme']);
 
         $this->user = User::factory()->create([
-            'organization_id' => $organization->id,
+            'organization_id' => $this->organization->id,
             'role' => 'owner',
         ]);
     }
 
-    private function pdf(string $name, int $bytes): UploadedFile
+    private function templateFor(Organization $organization, string $name = 'nda'): Template
     {
-        $header = "%PDF-1.4\n";
+        $path = "templates/{$name}.pdf";
 
-        return UploadedFile::fake()->createWithContent(
-            $name,
-            $header.str_repeat('a', $bytes - strlen($header))
-        );
+        Storage::disk('documents')->put($path, '%PDF-1.4 fake');
+
+        return Template::create([
+            'organization_id' => $organization->id,
+            'name' => $name,
+            'file_path' => $path,
+            'file_size' => 14,
+            'mime_type' => 'application/pdf',
+        ]);
     }
 
-    public function test_a_pdf_of_exactly_5mb_is_accepted(): void
+    public function test_deleting_a_template_removes_the_row_its_fields_and_its_file(): void
     {
-        $response = $this->actingAs($this->user)->post('/documents', [
-            'file' => $this->pdf('contract.pdf', 5 * 1024 * 1024),
+        $template = $this->templateFor($this->organization);
+
+        TemplateSignatureField::create([
+            'template_id' => $template->id,
+            'page' => 1, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
+        ]);
+        TemplateSignatureField::create([
+            'template_id' => $template->id,
+            'page' => 2, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
         ]);
 
-        $response->assertSessionHasNoErrors();
-        $this->assertDatabaseHas('documents', ['name' => 'contract']);
+        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
+
+        $response->assertRedirect('/templates');
+        $this->assertDatabaseMissing('templates', ['id' => $template->id]);
+        $this->assertDatabaseCount('template_signature_fields', 0);
+        Storage::disk('documents')->assertMissing('templates/nda.pdf');
     }
 
-    public function test_a_pdf_one_byte_over_5mb_is_rejected(): void
+    public function test_a_template_from_another_organisation_cannot_be_deleted(): void
     {
-        $response = $this->actingAs($this->user)->post('/documents', [
-            'file' => $this->pdf('contract.pdf', 5 * 1024 * 1024 + 1),
-        ]);
+        $other = Organization::create(['name' => 'Rival']);
+        $template = $this->templateFor($other);
 
-        $response->assertSessionHasErrors(['file' => 'The file must be 5 MB or smaller.']);
-        $this->assertDatabaseCount('documents', 0);
+        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
+
+        $response->assertForbidden();
+        $this->assertDatabaseHas('templates', ['id' => $template->id]);
+        Storage::disk('documents')->assertExists('templates/nda.pdf');
     }
 
-    public function test_a_docx_is_rejected(): void
+    public function test_a_guest_cannot_delete_a_template(): void
     {
-        $response = $this->actingAs($this->user)->post('/documents', [
-            'file' => UploadedFile::fake()->create('contract.docx', 100),
-        ]);
+        $template = $this->templateFor($this->organization);
 
-        $response->assertSessionHasErrors(['file' => 'Only PDF files can be uploaded.']);
-        $this->assertDatabaseCount('documents', 0);
-    }
+        $this->delete("/templates/{$template->id}")->assertRedirect('/login');
 
-    public function test_a_non_pdf_renamed_to_pdf_is_rejected(): void
-    {
-        $file = UploadedFile::fake()->createWithContent('contract.pdf', str_repeat("\0", 1024));
-
-        $response = $this->actingAs($this->user)->post('/documents', ['file' => $file]);
-
-        $response->assertSessionHasErrors(['file' => 'Only PDF files can be uploaded.']);
-        $this->assertDatabaseCount('documents', 0);
-    }
-
-    public function test_a_real_pdf_with_the_wrong_extension_is_rejected(): void
-    {
-        $response = $this->actingAs($this->user)->post('/documents', [
-            'file' => $this->pdf('contract.txt', 1024),
-        ]);
-
-        $response->assertSessionHasErrors(['file' => 'Only PDF files can be uploaded.']);
-        $this->assertDatabaseCount('documents', 0);
+        $this->assertDatabaseHas('templates', ['id' => $template->id]);
     }
 }
 ```
 
-The last two tests are the ones that justify having both `extensions` and `mimes`. Comment out
-`extensions:pdf` in the controller and the `.txt` test fails. Comment out `mimes:pdf` and the
-renamed-null-bytes test fails. Each rule has a test that only it can pass.
+The first test is the whole feature in one assertion block: row gone, fields gone (there were
+two, now there are zero), file gone. It passes with the one-line `$template->delete()` from 4.2,
+which is the proof that the cascade does the fields. If you added a manual fields-delete line
+"to be safe", remove it, rerun, and watch this test still pass.
 
-`Storage::fake('documents')` swaps the S3 disk for a temp directory for the duration of the test,
-so the accepted upload does not try to reach AWS.
-
-### 8.4 New file: `tests/Feature/TemplateUploadTest.php`
-
-Copy the file above. Change the class name, change `/documents` to `/templates`, change the
-`documents` table to `templates` in the two database assertions. Everything else is the same.
-
-### 8.5 Run them
+### 6.2 Run
 
 ```bash
-docker exec esign-app php artisan test tests/Feature/DocumentUploadTest.php tests/Feature/TemplateUploadTest.php
+docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php
 ```
 
-Ten tests, all green. Then run the whole suite to be sure nothing else moved:
+Three green.
+
+## 7. Phase 4 — the limit in config and `PlanService`
+
+### 7.1 `config/plans.php`
+
+Add `'templates' => 5,` to the `limits` array of **all three** plans. Free:
+
+```php
+'limits' => [
+    'documents' => ['limit' => 3, 'period' => 'week'],
+    'templates' => 5,
+    'members' => 3,
+    'storage_bytes' => 100 * 1024 * 1024,        // 100 MB
+],
+```
+
+Same line in `pro` and in `enterprise`. Yes, the same number three times, and yes, enterprise
+gets `5` rather than `null`. The task says every plan. If that changes later, it is a one-line
+edit per plan in the one file that holds every other limit, which is exactly why it lives here
+and not in a constant somewhere.
+
+### 7.2 `app/Services/PlanService.php`
+
+Add `use App\Models\Template;` to the imports. Then three additions, each shaped like its
+`members` neighbour:
+
+```php
+public function templatesUsed(Organization $organization): int
+{
+    return Template::query()
+        ->where('organization_id', $organization->id)
+        ->count();
+}
+
+public function canAddTemplate(Organization $organization): bool
+{
+    $limit = $this->limits($organization)['templates'];
+
+    return $limit === null
+        || $this->templatesUsed($organization) < $limit;
+}
+```
+
+And in `usage()`, add a `templates` entry between `documents` and `members`:
+
+```php
+'templates' => [
+    'used' => $this->templatesUsed($organization),
+    'limit' => $limits['templates'],
+],
+```
+
+The `$limit === null` branch is there because every other `can*()` method has it and the Plan
+page's `percentOf()` already treats `null` as unlimited. Nothing sets it to `null` today. Keep
+the branch anyway; it is the convention, and removing it would make this method the odd one out.
+
+Note that unlike documents, templates have no period. A document quota resets every week or
+month; a template quota is "how many exist right now". That is why `templatesUsed()` has no
+`created_at` filter and why the config entry is a bare `5`, not `['limit' => 5, 'period' => …]`.
+
+## 8. Phase 5 — enforce the limit on upload
+
+### 8.1 `app/Http/Controllers/TemplateController.php` — `store()`
+
+After `validate()` and before `$file->store(...)`:
+
+```php
+$organization = $request->user()->organization;
+
+if (! app(PlanService::class)->canAddTemplate($organization)) {
+    return back()->withErrors([
+        'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
+    ]);
+}
+```
+
+Add `use App\Services\PlanService;` to the imports.
+
+The check sits **before** `$file->store()`, not after. If it came after, a rejected upload would
+still have written the PDF to S3 before returning the error. `DocumentController::store()` does
+it in the same order for the same reason.
+
+The error goes on the `file` key because that is the key `UploadCard.vue` and `Templates/Index.vue`
+already read (`errors.file ?? errors.template ?? …`). Reuse the channel; do not invent a new
+key the page would have to learn about.
+
+### 8.2 `TemplateController::index()` — tell the page where it stands
+
+The page needs to know the count and the limit so it can hide the upload box. Add one prop:
+
+```php
+$planService = app(PlanService::class);
+$organization = $request->user()->organization;
+
+return Inertia::render('Templates/Index', [
+    'templates' => $templates,
+    'templateQuota' => [
+        'used' => $planService->templatesUsed($organization),
+        'limit' => $planService->limits($organization)['templates'],
+    ],
+]);
+```
+
+Use `templatesUsed()` rather than `$templates->count()`. They are equal today, but if the index
+query ever gains a filter (search, pagination), the count the page shows must stay the count the
+server enforces.
+
+## 9. Phase 6 — the page at the limit
+
+### 9.1 `resources/js/Pages/Templates/Index.vue`
+
+Add the prop:
+
+```js
+const props = defineProps({
+    templates: Array,
+    templateQuota: Object,
+});
+```
+
+(It is currently `defineProps({ templates: Array })` with no `const props =`; add the
+assignment so you can read it in script.)
+
+Add a computed and the import for it:
+
+```js
+import { computed } from "vue";
+
+const atLimit = computed(
+    () =>
+        props.templateQuota.limit !== null &&
+        props.templateQuota.used >= props.templateQuota.limit,
+);
+```
+
+Then in the template, replace the Upload section's `<UploadCard :form="form" @upload="submit" />`
+with:
+
+```vue
+<div
+    v-if="atLimit"
+    class="rounded-xl border border-dashed p-10 text-center"
+>
+    <LayoutTemplate class="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+
+    <h3 class="font-medium">Template limit reached</h3>
+
+    <p class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+        Your organization can store up to
+        {{ templateQuota.limit }} templates. Delete one below to upload
+        another.
+    </p>
+</div>
+
+<UploadCard v-else :form="form" @upload="submit" />
+```
+
+And change the section's description to show progress:
+
+```vue
+<PageSection
+    title="Upload Template"
+    :description="`${templateQuota.used} of ${templateQuota.limit} templates used.`"
+>
+```
+
+`LayoutTemplate` is already imported in this file for the page header.
+
+The `v-if="atLimit"` box is styled to match `FileDropzone`'s dashed border so the page keeps its
+shape; the drop zone is replaced by an explanation in the same place, not removed leaving a gap.
+
+"Delete one below" is accurate: the templates table is the next section down, each row opens the
+template, and the Delete button is on that page. Do not add a delete control to this notice.
+
+### 9.2 `resources/js/Pages/Plan/Index.vue` — show it with the other quotas
+
+The `quotas` computed lists documents, members and storage. Add templates after documents:
+
+```js
+{
+    key: "templates",
+    label: "Templates",
+    icon: LayoutTemplate,
+    used: props.usage.templates.used,
+    limit: props.usage.templates.limit,
+    formatter: formatCount,
+    caption: "Stored right now, on every plan",
+},
+```
+
+Add `LayoutTemplate` to the `lucide-vue-next` import. `usage.templates` is already arriving from
+`PlanService::usage()` after 7.2; this just renders it. No controller change.
+
+### 9.3 Build and look
 
 ```bash
+npm run build
+```
+
+With fewer than 5 templates: `/templates` shows the drop zone and "N of 5 templates used" under
+the Upload heading. `/plan` shows a Templates card next to Documents.
+
+Upload until you have 5. The drop zone is replaced by "Template limit reached". Open a template,
+delete it, land back on `/templates`: the drop zone is back and the caption says "4 of 5".
+
+## 10. Phase 7 — tests for the limit
+
+### 10.1 New file: `tests/Feature/TemplateLimitTest.php`
+
+```php
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Organization;
+use App\Models\Template;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class TemplateLimitTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $user;
+    private Organization $organization;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Storage::fake('documents');
+
+        $this->organization = Organization::create(['name' => 'Acme']);
+
+        $this->user = User::factory()->create([
+            'organization_id' => $this->organization->id,
+            'role' => 'owner',
+        ]);
+    }
+
+    private function seedTemplates(int $count): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            Template::create([
+                'organization_id' => $this->organization->id,
+                'name' => "template-{$i}",
+                'file_path' => "templates/template-{$i}.pdf",
+                'file_size' => 1024,
+                'mime_type' => 'application/pdf',
+            ]);
+        }
+    }
+
+    private function pdf(): UploadedFile
+    {
+        return UploadedFile::fake()->createWithContent('new.pdf', "%PDF-1.4\n".str_repeat('a', 1000));
+    }
+
+    public function test_the_fifth_template_is_accepted(): void
+    {
+        $this->seedTemplates(4);
+
+        $this->actingAs($this->user)
+            ->post('/templates', ['file' => $this->pdf()])
+            ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('templates', 5);
+    }
+
+    public function test_the_sixth_template_is_rejected(): void
+    {
+        $this->seedTemplates(5);
+
+        $response = $this->actingAs($this->user)->post('/templates', ['file' => $this->pdf()]);
+
+        $response->assertSessionHasErrors([
+            'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
+        ]);
+        $this->assertDatabaseCount('templates', 5);
+        Storage::disk('documents')->assertMissing('templates/new.pdf');
+    }
+
+    public function test_deleting_one_makes_room_for_another(): void
+    {
+        $this->seedTemplates(5);
+        $victim = Template::where('name', 'template-3')->first();
+
+        $this->actingAs($this->user)->delete("/templates/{$victim->id}");
+
+        $this->actingAs($this->user)
+            ->post('/templates', ['file' => $this->pdf()])
+            ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('templates', 5);
+    }
+
+    public function test_the_limit_is_per_organisation(): void
+    {
+        $this->seedTemplates(5);
+
+        $other = Organization::create(['name' => 'Rival']);
+        $otherUser = User::factory()->create([
+            'organization_id' => $other->id,
+            'role' => 'owner',
+        ]);
+
+        $this->actingAs($otherUser)
+            ->post('/templates', ['file' => $this->pdf()])
+            ->assertSessionHasNoErrors();
+    }
+
+    public function test_the_templates_page_reports_the_quota(): void
+    {
+        $this->seedTemplates(2);
+
+        $this->actingAs($this->user)
+            ->get('/templates')
+            ->assertInertia(fn ($page) => $page
+                ->where('templateQuota.used', 2)
+                ->where('templateQuota.limit', 5)
+            );
+    }
+}
+```
+
+The `assertMissing('templates/new.pdf')` in the sixth-template test is the check for 8.1's
+ordering. If the limit check were after `$file->store()`, the file would exist even though the
+row does not, and this line would fail. Note the stored filename is generated by Laravel, not
+`new.pdf`, so strictly this asserts that *no* file with that name was written; the stronger
+check is `assertDirectoryEmpty('templates')` if your Laravel version has it, but the count
+assertion above already proves no row was created.
+
+### 10.2 Run everything
+
+```bash
+docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php tests/Feature/TemplateLimitTest.php
 docker exec esign-app php artisan test
 ```
 
-Two registration tests in `tests/Feature/Auth` fail before you start and will still fail after.
-They are unrelated to uploads (they post a registration form that predates the phone-number
-fields). Do not try to fix them in this change; just confirm the count of failures did not go up.
+Eight new tests green. The full suite has the same two pre-existing registration failures as
+before and no new ones. (`TemplateUploadTest` from the previous change also still passes: its
+`setUp` starts with zero templates, so the limit never triggers.)
 
-### 8.6 curl, if you want to see it from outside
-
-With the app running and a logged-in browser session, DevTools → Application → Cookies. Copy the
-values of `XSRF-TOKEN` and `laravel_session`. Then:
-
-```bash
-head -c 6000000 /dev/urandom > /tmp/big.pdf
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/documents \
-  -H "X-XSRF-TOKEN: <decoded XSRF value>" \
-  -b "laravel_session=<value>; XSRF-TOKEN=<value>" \
-  -F "file=@/tmp/big.pdf"
-```
-
-A 302 back to `/documents` with the error in the session is what you want. Honestly, the tests in
-8.3 tell you the same thing with less copying of cookies.
-
-## 9. Verification checklist
+## 11. Verification checklist
 
 Tick each only if you saw it happen.
 
-**PHP ceiling:**
+**Delete:**
 
-- [ ] `docker exec esign-app php -r 'echo ini_get("upload_max_filesize");'` prints `6M`
-- [ ] `docker/php/uploads.ini` is `COPY`'d in **both** `docker/php/Dockerfile` and the root `Dockerfile`
+- [ ] `route:list --name=templates.destroy` shows a `DELETE` route
+- [ ] Template page has a red Delete button beside Preview and Prepare
+- [ ] Clicking it opens a dialog naming the template and its field count
+- [ ] Cancel closes the dialog, nothing deleted
+- [ ] Confirm: loading overlay, land on `/templates`, template gone from the list
+- [ ] In the database: `select count(*) from template_signature_fields where template_id = '<id>'` is 0
+- [ ] In S3 (or the local disk if `DOCUMENTS_DISK` is local): the file is gone
+- [ ] `TemplateDeleteTest` — 3 pass
 
-**Server:**
+**Limit:**
 
-- [ ] `php artisan test tests/Feature/DocumentUploadTest.php` — 5 pass
-- [ ] `php artisan test tests/Feature/TemplateUploadTest.php` — 5 pass
-- [ ] Full suite: no new failures beyond the two pre-existing registration ones
+- [ ] `config/plans.php` has `'templates' => 5` under free, pro **and** enterprise
+- [ ] `/templates` with fewer than 5: drop zone visible, "N of 5 templates used"
+- [ ] `/templates` with exactly 5: drop zone replaced by "Template limit reached"
+- [ ] Delete one, return to `/templates`: drop zone back, "4 of 5"
+- [ ] `/plan` shows a Templates card with the same numbers
+- [ ] With 5 templates, POST a sixth via the test or curl: rejected, no new row, no new file
+- [ ] `TemplateLimitTest` — 5 pass
+- [ ] Full suite: no new failures
 
-**Browser, `/documents`:**
-
-- [ ] Box reads "Drag & drop a PDF file" and "Maximum size: 5 MB"
-- [ ] Clicking the box opens a picker that filters to PDF
-- [ ] Drag a `.docx` → red "Only PDF files can be uploaded.", nothing attached, button disabled
-- [ ] Drag a 6 MB PDF → red "The file must be 5 MB or smaller.", nothing attached
-- [ ] After either error, drag a valid 1 MB PDF → red box disappears, file card appears
-- [ ] Upload the valid PDF → success toast, document listed
-- [ ] Upload a 3 MB PDF → **succeeds**. (This is the Phase 1 check. Before this change it failed.)
-- [ ] Temporarily set `MAX_BYTES` to something huge in `FileDropzone.vue`, rebuild, drag a 6 MB PDF,
-      click Upload → the **server's** red message appears. Put `MAX_BYTES` back. This proves the
-      server rule works when the client check is bypassed.
-
-**Browser, `/templates`:**
-
-- [ ] Same first five checks. It is the same component, but look.
-
-**Untouched:**
-
-- [ ] Settings → Organisation → logo upload still accepts a PNG
-
-## 10. Common ways this goes wrong
+## 12. Common ways this goes wrong
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Every file over 2 MB: "The file failed to upload." | Phase 1 skipped, or container not rebuilt | 5.4 |
-| Large upload returns a 419 "Page Expired" | `post_max_size` ≤ `upload_max_filesize` | 5.1 |
-| `max:5` rejects everything | Kilobytes, not megabytes | `max:5120` |
-| "5 MB PDF accepted" test fails on `mimes` | `UploadedFile::fake()->create()` makes null bytes | 8.1, use `createWithContent` with `%PDF-` |
-| Test: "Your plan allows 3 documents per week" | User has no organisation, or too many docs created in one test | 8.2 |
-| Test tries to reach S3 | `Storage::fake('documents')` missing from `setUp()` | 8.3 |
-| Drop zone still says DOCX on `/templates` | Edited a page instead of `FileDropzone.vue` | 7.1 |
-| Stale error stays after picking a valid file | `clearErrors("file")` missing in `selectFile` | 7.3 |
-| `.pdf` from a Mac rejected by client check | Checked `file.type` instead of `file.name` | 7.2 |
-| Works locally, 2 MB wall in production | `COPY uploads.ini` only in the local Dockerfile | 5.3 |
+| `template_signature_fields` rows survive the delete | You are not on Postgres, or the migration was edited | Check `DB_CONNECTION=pgsql` and that the migration still has `cascadeOnDelete()` |
+| Delete works, file still in S3, no log line | Forgot the `if (! Storage::…->delete())` wrapper | 4.2 |
+| Delete works, file still in S3, log line present | S3 credentials or permissions | Not a code bug; the log line is doing its job |
+| Dialog does not open | `confirmingDelete` not a `ref`, or `v-model:open` missing | 5.2 |
+| Dialog shows "undefined signature fields" | Reading `signature_fields_count` on a page that did not `loadCount` | Only `show()` loads it; the dialog lives on the Show page |
+| 405 Method Not Allowed on delete | Route registered as `post` or `get` | 4.1 |
+| Sixth upload rejected but file appears in S3 | Limit check placed after `$file->store()` | 8.1 |
+| Sixth upload accepted | `'templates'` key missing from the plan the org is on | 7.1, all three plans |
+| Page always shows the drop zone | `templateQuota` prop not passed from `index()` | 8.2 |
+| Page never shows the drop zone | `atLimit` compares `used > limit` instead of `>=` | 9.1 |
+| Plan page crashes: cannot read `templates` of undefined | `usage()` not updated | 7.2 |
+| `TemplateUploadTest` starts failing | It seeds 0 templates; if it fails, the limit is reading the wrong org or counting globally | `templatesUsed()` must filter by `organization_id` |
 
-## 11. Definition of done
+## 13. Definition of done
 
-- Both `POST /documents` and `POST /templates` reject non-PDF files and files over 5 MB with
-  the messages in 6.2, and accept a 5 MB PDF.
-- PHP's `upload_max_filesize` is 6M in both the local and the production image.
-- The drop zone says PDF / 5 MB and rejects wrong files before submit, using the same words as
-  the server.
-- Ten new tests pass; the full suite has no new failures.
-- No migration, no new dependency, no change to the logo upload.
+- `DELETE /templates/{id}` removes the row, its signature fields (via cascade) and its file,
+  for the owner's organisation only.
+- The Show page has a Delete button behind a dialog that names the template and its field count.
+- `config/plans.php` gives every plan `'templates' => 5`; `PlanService` exposes
+  `templatesUsed()`, `canAddTemplate()` and a `templates` entry in `usage()`.
+- `POST /templates` rejects a sixth template before writing anything to storage.
+- The Templates page replaces the drop zone with an explanation at the limit, and the Plan page
+  shows the quota.
+- Eight new tests pass; the full suite has no new failures.
+- No migration, no new dependency, no soft-delete, no manual deletion of field rows.

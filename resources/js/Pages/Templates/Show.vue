@@ -1,7 +1,8 @@
 <script setup>
-import { Head, Link } from "@inertiajs/vue3";
+import { ref } from "vue";
+import { Head, Link, router } from "@inertiajs/vue3";
 
-import { LayoutTemplate, Eye, FilePenLine } from "lucide-vue-next";
+import { LayoutTemplate, Eye, FilePenLine, Trash2 } from "lucide-vue-next";
 
 import AppLayout from "@/Layouts/AppLayout.vue";
 
@@ -18,6 +19,16 @@ import FeedbackDialog from "@/Components/feedback/FeedbackDialog.vue";
 import { useFeedback } from "@/Composables/useFeedback";
 
 import { Button } from "@/components/ui/button";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const props = defineProps({
     template: Object,
@@ -38,8 +49,19 @@ const {
     closeFeedback,
 } = useFeedback();
 
+const confirmingDelete = ref(false);
+
 function previewTemplate() {
     window.open(route("templates.preview", props.template.id), "_blank");
+}
+
+function deleteTemplate() {
+    confirmingDelete.value = false;
+
+    router.delete(route("templates.destroy", props.template.id), {
+        onStart: () => showLoading("Deleting template..."),
+        onFinish: () => hideLoading(),
+    });
 }
 </script>
 
@@ -78,9 +100,37 @@ function previewTemplate() {
                                     Prepare Template
                                 </Link>
                             </Button>
+
+                            <Button
+                                variant="destructive"
+                                @click="confirmingDelete = true"
+                            >
+                                <Trash2 class="mr-2 h-4 w-4" />
+                                Delete
+                            </Button>
                         </div>
                     </template>
                 </PageHeader>
+
+                <AlertDialog v-model:open="confirmingDelete">
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                "{{ template.name }}" and its
+                                {{ template.signature_fields_count }}
+                                signature field{{ template.signature_fields_count === 1 ? "" : "s" }}
+                                will be permanently removed. This cannot be undone.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction @click="deleteTemplate">
+                                Delete template
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </FadeIn>
 
             <!-- Template Information -->

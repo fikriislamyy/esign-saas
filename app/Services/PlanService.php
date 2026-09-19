@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Document;
 use App\Models\Organization;
 use App\Models\Subscription;
+use App\Models\Template;
 use Carbon\Carbon;
 
 class PlanService
@@ -78,6 +79,21 @@ class PlanService
             || $this->membersUsed($organization) < $limit;
     }
 
+    public function templatesUsed(Organization $organization): int
+    {
+        return Template::query()
+            ->where('organization_id', $organization->id)
+            ->count();
+    }
+
+    public function canAddTemplate(Organization $organization): bool
+    {
+        $limit = $this->limits($organization)['templates'];
+
+        return $limit === null
+            || $this->templatesUsed($organization) < $limit;
+    }
+
     public function canStore(Organization $organization, int $bytes): bool
     {
         $limit = $this->limits($organization)['storage_bytes'];
@@ -96,6 +112,10 @@ class PlanService
                 'used' => $this->documentsUsed($organization),
                 'limit' => $limits['documents']['limit'],
                 'period' => $limits['documents']['period'],
+            ],
+            'templates' => [
+                'used' => $this->templatesUsed($organization),
+                'limit' => $limits['templates'],
             ],
             'members' => [
                 'used' => $this->membersUsed($organization),
