@@ -1,757 +1,791 @@
-# Templates: delete action and a 5-template limit
+# Landing page SEO for "digital signature"
 
 ## 1. What we are building, in one paragraph
 
-Two related things. First, a user can **delete a template**: the row in `templates` goes, every
-row in `template_signature_fields` that belongs to it goes, and the PDF file in storage goes.
-Second, **every organisation can hold at most 5 templates**, on every plan, free or paid. When an
-organisation already has 5, the upload box on the Templates page is replaced by a message saying
-to delete one first, and the server rejects the upload even if someone bypasses the page.
+Make the landing page rank for **digital signature** with **small and individual business owners**
+as the audience. The strategy work (which questions to answer, what searchers want, the heading
+structure, the copy) is done in section 4 — you paste it, you do not invent it. The engineering
+work is getting that content in front of crawlers, which today see almost nothing, and telling
+them which pages are public and which are private.
 
-The two halves depend on each other. A hard limit with no way to delete is a dead end; a delete
-button with no limit is just a feature. Build the delete first (Phases 1–3), then the limit
-(Phases 4–6), so that at no point is a user stuck.
+Measured on the current build with `curl -s http://localhost:8000/`:
+
+| What a crawler needs | In the raw HTML today |
+| --- | --- |
+| `<title>` with the keyword | `EZSign` (just the app name) |
+| `<meta name="description">` | none |
+| `<link rel="canonical">` | none |
+| Open Graph / Twitter tags (link previews in Slack, WhatsApp, X) | none |
+| `<h1>` | none — it is typed out letter by letter by JavaScript after load |
+| Structured data (`application/ld+json`) | none |
+| Body text | an empty `<div id="app">` plus a JSON blob |
+| `robots.txt` | allows everything, including `/dashboard`, `/documents` and private `/sign/{token}` links |
+| `sitemap.xml` | none |
+
+Googlebot runs JavaScript, so the body eventually gets rendered. The head tags do not: bots that
+generate link previews never run JavaScript, and Google's own snippet comes from the head. So the
+head is rendered server-side in Blade (Phase 1), the H1 becomes real text (Phase 2), the new
+content goes in as a Vue section (Phase 3), and robots/sitemap/noindex tell crawlers where to look
+(Phase 4).
 
 ## 2. Things you must not do
 
-- **Do not** delete `template_signature_fields` rows by hand in the controller with a loop or a
-  `->signatureFields()->delete()` call. The database already does it. Section 3 explains; the
-  test in 8.2 proves it. Extra deletion code is not wrong, it is noise that suggests the author
-  did not know about the cascade.
-- **Do not** put the limit only in the Vue page. Hiding the upload box is a courtesy. The server
-  check in Phase 5 is the rule.
-- **Do not** make the limit vary by plan, and **do not** read it from `.env`. The task says 5 for
-  everyone. It goes in `config/plans.php` under each plan's `limits`, with the same value three
-  times, because that is where every other limit lives and where `PlanService` reads them.
-- **Do not** put the Delete button in the table row. It goes on the template's own page, behind a
-  confirmation dialog that names the template. Section 6.1 explains the reasoning; you may
-  disagree, but do it there first.
-- **Do not** use `window.confirm()`. `PendingInvitations.vue` does, and it is the one place in
-  the app that does. There is a proper `AlertDialog` component in `components/ui/alert-dialog`
-  that nothing uses yet. This feature is where it gets used.
-- **Do not** soft-delete. `Template` has no `SoftDeletes` trait and no `deleted_at` column. A
-  deleted template is gone.
+- **Do not** set up Inertia SSR. It needs a Node process in production, a second Vite build and
+  supervisor changes. Everything a non-JavaScript bot needs is in the head, and this plan renders
+  the head in Blade. SSR is the next step *only if* Search Console later shows the body missing.
+- **Do not** repeat the keyword. Three or four natural uses of "digital signature" in ~200 words
+  of body copy is right. Ten is a penalty. The copy in 4.4 has the density already; paste it as-is.
+- **Do not** add `Review` or `AggregateRating` structured data for the testimonials. They are
+  three first-name-and-initial quotes with no company. Google treats self-serving review markup
+  as spam, and there is nothing to back the quotes up.
+- **Do not** claim things the product does not do. In particular: no "SOC 2", no "GDPR
+  compliant", no "bank-level encryption". The copy in 4.4 claims only what the code does:
+  email one-time passcode, a certificate-based signature on the finished PDF, a record of who
+  signed and when.
+- **Do not** put pricing figures in the new SEO section. The landing page's pricing card and
+  `config/plans.php` currently disagree (Phase 5 fixes that). The SEO copy says "free to start",
+  which is true, and nothing more.
+- **Do not** hardcode the domain anywhere except `public/robots.txt` (which is a static file
+  and has no choice). Everything else reads `config('app.url')`.
+- **Do not** `noindex` the landing page. The default this plan introduces is "noindex unless
+  the route passed `meta`" — the landing route passes it. Check with curl in section 11.
 
 ## 3. How the pieces already fit together
 
-Read these before writing anything.
-
 | You need to | Look at | What you will see |
 | --- | --- | --- |
-| Check a template belongs to the caller | [TemplateController.php:56-59](app/Http/Controllers/TemplateController.php#L56-L59) | `abort_unless($template->organization_id === $request->user()->organization_id, 403)` — every method does this |
-| Talk to the file store | [TemplateController.php:87](app/Http/Controllers/TemplateController.php#L87) | `Storage::disk(env('DOCUMENTS_DISK', 'documents'))` — same disk, same env key, every time |
-| See how a plan limit is defined | [config/plans.php](config/plans.php) | `'limits' => ['documents' => [...], 'members' => 3, 'storage_bytes' => ...]` per plan |
-| See how a plan limit is checked | [PlanService.php](app/Services/PlanService.php) `canAddMember()` | `$limit === null \|\| used < $limit` — null means unlimited |
-| See how a limit blocks an upload | [DocumentController.php:66-73](app/Http/Controllers/DocumentController.php#L66-L73) | `if (! $planService->canUploadDocument(...)) return back()->withErrors(['file' => '...'])` |
-| See how usage reaches the Plan page | `PlanService::usage()` → `SubscriptionController::index()` → `Pages/Plan/Index.vue` `quotas` | An array per quota with `used`, `limit`, `formatter`, `caption` |
-| See a destructive action on a page header | [Pages/Templates/Show.vue](resources/js/Pages/Templates/Show.vue) `#actions` slot | Preview and Prepare buttons; Delete goes beside them |
+| Find the landing route | [routes/web.php:38-40](routes/web.php#L38-L40) | A closure inside the `guest` group: `Inertia::render('Landing')` |
+| See the root HTML every page uses | [resources/views/app.blade.php](resources/views/app.blade.php) | `<title inertia>` and `@inertiaHead`; no meta tags |
+| See how the client composes the tab title | [resources/js/app.js:17](resources/js/app.js#L17) | `title: (title) => \`${title} - ${appName}\`` — the client **appends** " - EZSign" |
+| See the H1 | [Landing.vue:154-161](resources/js/Pages/Landing.vue#L154-L161) | `<h1><Typewriter text="Secure Digital Signing for Modern Teams" /></h1>` |
+| See how a landing section is built | [LandingSection.vue](resources/js/Components/landing/LandingSection.vue) | Props `id`, `eyebrow`, `title`, `subtitle`, `muted`; renders the `<h2>` for you |
+| See a section that uses it | [HowItWorks.vue](resources/js/Components/landing/HowItWorks.vue) | `<LandingSection id="how-it-works" eyebrow="…" title="…">` with `<h3>` cards inside |
+| See how page-level values reach Vue | [HandleInertiaRequests.php:74](app/Http/Middleware/HandleInertiaRequests.php#L74) | `'recaptchaSiteKey' => config(...)` shared as a prop |
+| See the plan limits that pricing copy must match | [config/plans.php](config/plans.php) | free: 3 documents/**week**, 3 members; pro: $10/month |
+| See the FAQ data shape | [Faq.vue:5-32](resources/js/Components/landing/Faq.vue#L5-L32) | `const faqs = [{ q, a }, …]` |
 
-**The cascade.** Open
-[the `template_signature_fields` migration](database/migrations/2026_09_14_162857_create_template_signature_fields_table.php)
-and find:
+**Two Inertia facts this plan depends on.**
 
-```php
-$table->foreignUuid('template_id')
-    ->constrained()
-    ->cascadeOnDelete();
+`Inertia::render(...)->withViewData([...])` passes variables to `app.blade.php` — server-side,
+in the HTML, before any JavaScript. That is how the head tags get there. It exists in the
+installed `inertia-laravel` 0.6.11.
+
+The client-side `<Head>` component only manages elements that carry the `inertia` attribute.
+Meta tags we write in Blade *without* that attribute are left alone after hydration. The one
+element that has it, `<title inertia>`, gets replaced by the client — so Blade must compose the
+title with the same " - EZSign" suffix `app.js` adds, or the title will flicker from one string
+to another.
+
+## 4. The SEO strategy — done for you
+
+You paste from this section. The reasoning is here so you can judge edge cases, not so you can
+redo it.
+
+### 4.1 Sub-question analysis
+
+What a small business owner actually needs answered before they trust a digital signature tool
+with a real contract. Each is mapped to where on the page it is answered.
+
+| # | Sub-question | Answered by |
+| --- | --- | --- |
+| 1 | Is a digital signature legally binding for my contracts? | New section, H3 "Is a digital signature legally binding?" |
+| 2 | What is the difference between a digital and an electronic signature, and which is this? | New section, H3 "Digital signature vs. electronic signature" |
+| 3 | How do I know the right person signed, not whoever had the link? | Security section (retitled "How we verify who signed") |
+| 4 | Can the document be changed after it is signed? Would I know? | New section, para 1; new FAQ entry |
+| 5 | Does my client need an account, an app or a special device? | Existing FAQ "Do signers need an account?" |
+| 6 | What does it cost, and is there a free plan? | Pricing section (facts fixed in Phase 5) |
+| 7 | What files can I use? | Existing FAQ "What file types can I upload?" |
+| 8 | How long does it take from upload to signed? | How-it-works section (three steps) |
+| 9 | What do I get at the end — where is my proof? | New section, para 1; existing "Verify & sign" step |
+| 10 | Can I reuse the same contract for every client? | Existing pricing bullet "Templates"; not expanded here |
+| 11 | Where are my documents stored and who can see them? | New FAQ entry |
+
+Excluded on purpose: the history of digital signatures, how public-key cryptography works,
+vendor comparison tables, compliance acronyms. A small business owner does not need any of it to
+decide, and each one dilutes the page.
+
+### 4.2 Search intent and page structure
+
+**"digital signature" is mixed intent, leaning informational.** Most people typing the bare
+phrase want to know what one is and whether it counts. A significant minority are looking for a
+tool ("digital signature software", "free digital signature", "sign PDF online"). Almost nobody is
+ready to pay this second.
+
+**Structure that serves both:** a product landing page whose first scroll answers the
+informational question. Hero (commercial, keyword in H1) → "What is a digital signature?"
+(informational, ~200 words, sub-questions 1, 2, 4, 9) → How it works (8) → How we verify who
+signed (3) → Use cases → Pricing (6) → FAQ (5, 7, 11). The informational block sits second, not
+buried at the bottom, because it is what qualifies the page for the larger share of the query.
+
+Long-tail phrases folded in naturally, never forced: "digital signature for small business",
+"legally binding", "sign a PDF online", "free to start".
+
+### 4.3 Content blueprint
+
+Headings only. Existing sections keep their H3s; only the ones marked *new* or *retitle* change.
+
+```
+H1  Digital Signature Software for Small Business                      (Phase 2 — replaces the typewriter)
+
+H2  What is a digital signature?                                       (Phase 3 — new section)
+    H3  Digital signature vs. electronic signature
+    H3  Is a digital signature legally binding?
+
+H2  Sign a document in three steps                                     (existing HowItWorks — unchanged)
+    H3  Upload your PDF
+    H3  Add signers & send
+    H3  Verify & sign
+
+H2  How we verify who signed                                           (Phase 3 — retitle from "Built for trust")
+    H3  Access & Authentication                                        (existing)
+    H3  Compliance & Audit                                             (existing)
+
+H2  One tool for every agreement                                       (existing UseCases — unchanged)
+
+H2  Start free. Scale when you're ready.                               (existing Pricing — bullets fixed in Phase 5)
+
+H2  Frequently asked questions                                         (existing Faq — two entries added in Phase 3)
 ```
 
-`cascadeOnDelete()` is a PostgreSQL foreign-key rule. When a `templates` row is deleted, Postgres
-itself deletes every `template_signature_fields` row with that `template_id`, in the same
-statement, before Laravel gets control back. So `$template->delete()` **is** the deletion of the
-fields. You do not write a second line. The test in 8.2 asserts the fields are gone and will
-pass with the one-line delete.
+### 4.4 The copy
 
-Nothing else references `templates`. `documents` has no `template_id` column (checked: the only
-foreign key to `templates` in any migration is the one above). So deleting a template cannot
-orphan a document.
+**Head strings** (go in `config/seo.php`, Phase 1). Title is 46 characters; the client appends
+" - EZSign" for 55. Description is 139 characters.
 
-## 4. Phase 1 — the route and the controller method
-
-### 4.1 Route: `routes/web.php`
-
-Inside the `auth, verified` group, after the `templates.pdf` route (line 236):
-
-```php
-Route::delete('/templates/{template}', [TemplateController::class, 'destroy'])
-    ->name('templates.destroy');
+```
+title:        Digital Signature Software for Small Business
+description:  Get contracts signed online with a legally binding digital signature. Your clients sign from an email link, no account needed. Free to start.
 ```
 
-`Route::delete`, not `post`. Inertia's `router.delete()` sends a real `DELETE` request, and the
-verb is what makes the URL `/templates/{id}` mean "remove" rather than "show".
+**Hero** (Phase 2). H1 then the paragraph under it.
 
-### 4.2 Controller: `app/Http/Controllers/TemplateController.php`
+```
+H1: Digital Signature Software for Small Business
 
-Add after `pdf()`:
-
-```php
-public function destroy(Request $request, Template $template)
-{
-    abort_unless(
-        $template->organization_id === $request->user()->organization_id,
-        403
-    );
-
-    $path = $template->file_path;
-
-    $template->delete();
-
-    if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
-        Log::warning('Template file was not removed from storage', [
-            'template_id' => $template->id,
-            'path' => $path,
-        ]);
-    }
-
-    return redirect()
-        ->route('templates.index')
-        ->with('status', 'Template deleted.');
-}
+Send a contract, your client signs it in the browser, and you get back a
+PDF that proves who signed and that nothing changed afterwards. No account
+needed for signers. Free to start.
 ```
 
-Add `use Illuminate\Support\Facades\Log;` to the imports at the top.
+**"What is a digital signature?" section** (Phase 3). This is the drafted main-topic section:
+one H2, two H3s, three short paragraphs, about 230 words. "digital signature" appears four times
+in the body, which is where it should be.
 
-Why this order and shape:
+```
+H2: What is a digital signature?
 
-- **Ownership check first**, copied from every other method in the file. Without it, anyone who
-  guesses a UUID can delete another organisation's template.
-- **Save `$path` before `delete()`.** After `$template->delete()` the model is still in memory
-  and `$template->file_path` would still work, but reading a property off a deleted model is the
-  kind of thing that looks like a bug to the next reader. Copy it out first.
-- **Database row first, file second.** If the file deletion fails (S3 is down, credentials
-  expired), you are left with a file in storage that nothing points to. That costs a few
-  kilobytes and is invisible to the user. The other order — file first, then row — fails the
-  other way: a row that points at a file that no longer exists, so the template still appears in
-  the list, and opening it 404s. The orphan file is the lesser harm.
-- **`Storage::delete()` returns `false` rather than throwing** when it cannot remove the file.
-  Without the `if`, that failure is silent. The log line means an orphaned file is at least
-  findable later.
-- **Redirect to the index**, because the page the user was on (the template's own page) no
-  longer exists. `with('status', ...)` is the same flash the login page uses.
+A digital signature is a way to sign a document online so that two things
+can be proven later: who signed it, and that nothing in it has changed
+since. Instead of printing, signing with a pen and scanning, you send the
+PDF by email. Your client opens the link, confirms their identity with a
+one-time code, and signs in the browser. When everyone has signed, the PDF
+is sealed with a certificate, so any PDF reader can check that it has not
+been altered.
 
-### 4.3 Quick check
+H3: Digital signature vs. electronic signature
 
-```bash
-docker exec esign-app php artisan route:list --name=templates.destroy
+An electronic signature is any mark that shows agreement: a typed name, a
+drawn squiggle, a ticked box. A digital signature goes further. It records
+who signed and when, and it locks the document so that later edits can be
+detected. EZSign does both. Every signer is verified by an email code, and
+every finished document carries a certificate-based digital signature and a
+record of who signed it.
+
+H3: Is a digital signature legally binding?
+
+In most countries, yes, provided the signer's identity was verified, the
+signer clearly intended to sign, and the signed document cannot be changed
+without detection. EZSign records all three. A few document types still
+require a notary or ink by law, such as some wills, deeds and court filings.
+Check the rules where you live for those.
 ```
 
-One line, `DELETE templates/{template}`. If it says `GET` or is missing, re-read 4.1.
+Every claim above maps to code: the one-time code is `SigningOtpService`; the certificate seal is
+`$pdf->setSignature(...)` at [SigningController.php:465](app/Http/Controllers/SigningController.php#L465),
+which throws if no certificate is configured, so every finished PDF has it; "who signed and when"
+is `signers.signed_at`.
 
-## 5. Phase 2 — the Delete button
+**Two new FAQ entries** (Phase 3):
 
-### 5.1 Why the Show page and not the table
+```
+q: Can a signed PDF be changed afterwards?
+a: Not without it showing. When the last person signs, EZSign seals the PDF with a certificate. Open it in Adobe Reader or any PDF viewer with a signature panel and it will tell you whether the file has been modified since signing.
 
-The table on `/templates` has one action per row, an eye icon that opens the template. Putting a
-trash icon next to it means a destructive action one pixel from a harmless one, on a row the user
-may be scanning past. The Show page already has a header with Preview and Prepare; it is where
-the user has confirmed which template they are looking at. Delete belongs there, behind a dialog
-that says the template's name and how many signature fields go with it. One place, one
-confirmation, no accidental clicks in a list.
-
-### 5.2 `resources/js/Pages/Templates/Show.vue`
-
-**Imports.** Add to the existing ones:
-
-```js
-import { router } from "@inertiajs/vue3";
-import { Trash2 } from "lucide-vue-next";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+q: Where are my documents stored?
+a: In private cloud storage that only your organization's members can reach through the app. Signers see only the document they were sent, through their own link.
 ```
 
-`Head` and `Link` are already imported from `@inertiajs/vue3`; add `router` to that same line
-rather than a second import. `LayoutTemplate, Eye, FilePenLine` are already imported from
-`lucide-vue-next`; add `Trash2` to that line.
+## 5. Phase 1 — render the head tags server-side
 
-**Script.** After `previewTemplate()`:
-
-```js
-const confirmingDelete = ref(false);
-
-function deleteTemplate() {
-    confirmingDelete.value = false;
-
-    router.delete(route("templates.destroy", props.template.id), {
-        onStart: () => showLoading("Deleting template..."),
-        onFinish: () => hideLoading(),
-    });
-}
-```
-
-Add `import { ref } from "vue";` at the top. `showLoading` and `hideLoading` are already
-destructured from `useFeedback()` in this file.
-
-The server redirects to `/templates` on success, so there is no `onSuccess` here; Inertia follows
-the redirect and the Templates page renders. If the server returns 403, Inertia shows its error
-modal, which is correct for a case that should never happen from the UI.
-
-**Template.** In the `#actions` slot, after the Prepare button:
-
-```vue
-<Button variant="destructive" @click="confirmingDelete = true">
-    <Trash2 class="mr-2 h-4 w-4" />
-    Delete
-</Button>
-```
-
-And after the closing `</PageHeader>`, still inside the `<FadeIn>`:
-
-```vue
-<AlertDialog v-model:open="confirmingDelete">
-    <AlertDialogContent>
-        <AlertDialogHeader>
-            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
-            <AlertDialogDescription>
-                "{{ template.name }}" and its
-                {{ template.signature_fields_count }}
-                signature field{{ template.signature_fields_count === 1 ? "" : "s" }}
-                will be permanently removed. This cannot be undone.
-            </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction @click="deleteTemplate">
-                Delete template
-            </AlertDialogAction>
-        </AlertDialogFooter>
-    </AlertDialogContent>
-</AlertDialog>
-```
-
-`template.signature_fields_count` is already there: `TemplateController::show()` calls
-`loadCount('signatureFields')` before rendering. The dialog tells the user exactly what is about
-to go, by name and by count. "Are you sure?" with no specifics is not a confirmation, it is a
-speed bump.
-
-### 5.3 Build and try it
-
-```bash
-npm run build
-```
-
-Open any template, click Delete. Dialog appears with the right name and count. Cancel closes it.
-Delete again, confirm: loading overlay, then you land on `/templates` and the template is gone
-from the list.
-
-## 6. Phase 3 — tests for delete
-
-No factory exists for `Template`. Create rows directly with `Template::create()`; the model fills
-its own UUID. The organisation and user setup is the same as `DocumentUploadTest.php`, which you
-can open for reference.
-
-### 6.1 New file: `tests/Feature/TemplateDeleteTest.php`
+### 5.1 New file: `config/seo.php`
 
 ```php
 <?php
 
-namespace Tests\Feature;
+return [
 
-use App\Models\Organization;
-use App\Models\Template;
-use App\Models\TemplateSignatureField;
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Storage;
-use Tests\TestCase;
-
-class TemplateDeleteTest extends TestCase
-{
-    use RefreshDatabase;
-
-    private User $user;
-    private Organization $organization;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        Storage::fake('documents');
-
-        $this->organization = Organization::create(['name' => 'Acme']);
-
-        $this->user = User::factory()->create([
-            'organization_id' => $this->organization->id,
-            'role' => 'owner',
-        ]);
-    }
-
-    private function templateFor(Organization $organization, string $name = 'nda'): Template
-    {
-        $path = "templates/{$name}.pdf";
-
-        Storage::disk('documents')->put($path, '%PDF-1.4 fake');
-
-        return Template::create([
-            'organization_id' => $organization->id,
-            'name' => $name,
-            'file_path' => $path,
-            'file_size' => 14,
-            'mime_type' => 'application/pdf',
-        ]);
-    }
-
-    public function test_deleting_a_template_removes_the_row_its_fields_and_its_file(): void
-    {
-        $template = $this->templateFor($this->organization);
-
-        TemplateSignatureField::create([
-            'template_id' => $template->id,
-            'page' => 1, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
-        ]);
-        TemplateSignatureField::create([
-            'template_id' => $template->id,
-            'page' => 2, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
-        ]);
-
-        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
-
-        $response->assertRedirect('/templates');
-        $this->assertDatabaseMissing('templates', ['id' => $template->id]);
-        $this->assertDatabaseCount('template_signature_fields', 0);
-        Storage::disk('documents')->assertMissing('templates/nda.pdf');
-    }
-
-    public function test_a_template_from_another_organisation_cannot_be_deleted(): void
-    {
-        $other = Organization::create(['name' => 'Rival']);
-        $template = $this->templateFor($other);
-
-        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
-
-        $response->assertForbidden();
-        $this->assertDatabaseHas('templates', ['id' => $template->id]);
-        Storage::disk('documents')->assertExists('templates/nda.pdf');
-    }
-
-    public function test_a_guest_cannot_delete_a_template(): void
-    {
-        $template = $this->templateFor($this->organization);
-
-        $this->delete("/templates/{$template->id}")->assertRedirect('/login');
-
-        $this->assertDatabaseHas('templates', ['id' => $template->id]);
-    }
-}
-```
-
-The first test is the whole feature in one assertion block: row gone, fields gone (there were
-two, now there are zero), file gone. It passes with the one-line `$template->delete()` from 4.2,
-which is the proof that the cascade does the fields. If you added a manual fields-delete line
-"to be safe", remove it, rerun, and watch this test still pass.
-
-### 6.2 Run
-
-```bash
-docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php
-```
-
-Three green.
-
-## 7. Phase 4 — the limit in config and `PlanService`
-
-### 7.1 `config/plans.php`
-
-Add `'templates' => 5,` to the `limits` array of **all three** plans. Free:
-
-```php
-'limits' => [
-    'documents' => ['limit' => 3, 'period' => 'week'],
-    'templates' => 5,
-    'members' => 3,
-    'storage_bytes' => 100 * 1024 * 1024,        // 100 MB
-],
-```
-
-Same line in `pro` and in `enterprise`. Yes, the same number three times, and yes, enterprise
-gets `5` rather than `null`. The task says every plan. If that changes later, it is a one-line
-edit per plan in the one file that holds every other limit, which is exactly why it lives here
-and not in a constant somewhere.
-
-### 7.2 `app/Services/PlanService.php`
-
-Add `use App\Models\Template;` to the imports. Then three additions, each shaped like its
-`members` neighbour:
-
-```php
-public function templatesUsed(Organization $organization): int
-{
-    return Template::query()
-        ->where('organization_id', $organization->id)
-        ->count();
-}
-
-public function canAddTemplate(Organization $organization): bool
-{
-    $limit = $this->limits($organization)['templates'];
-
-    return $limit === null
-        || $this->templatesUsed($organization) < $limit;
-}
-```
-
-And in `usage()`, add a `templates` entry between `documents` and `members`:
-
-```php
-'templates' => [
-    'used' => $this->templatesUsed($organization),
-    'limit' => $limits['templates'],
-],
-```
-
-The `$limit === null` branch is there because every other `can*()` method has it and the Plan
-page's `percentOf()` already treats `null` as unlimited. Nothing sets it to `null` today. Keep
-the branch anyway; it is the convention, and removing it would make this method the odd one out.
-
-Note that unlike documents, templates have no period. A document quota resets every week or
-month; a template quota is "how many exist right now". That is why `templatesUsed()` has no
-`created_at` filter and why the config entry is a bare `5`, not `['limit' => 5, 'period' => …]`.
-
-## 8. Phase 5 — enforce the limit on upload
-
-### 8.1 `app/Http/Controllers/TemplateController.php` — `store()`
-
-After `validate()` and before `$file->store(...)`:
-
-```php
-$organization = $request->user()->organization;
-
-if (! app(PlanService::class)->canAddTemplate($organization)) {
-    return back()->withErrors([
-        'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
-    ]);
-}
-```
-
-Add `use App\Services\PlanService;` to the imports.
-
-The check sits **before** `$file->store()`, not after. If it came after, a rejected upload would
-still have written the PDF to S3 before returning the error. `DocumentController::store()` does
-it in the same order for the same reason.
-
-The error goes on the `file` key because that is the key `UploadCard.vue` and `Templates/Index.vue`
-already read (`errors.file ?? errors.template ?? …`). Reuse the channel; do not invent a new
-key the page would have to learn about.
-
-### 8.2 `TemplateController::index()` — tell the page where it stands
-
-The page needs to know the count and the limit so it can hide the upload box. Add one prop:
-
-```php
-$planService = app(PlanService::class);
-$organization = $request->user()->organization;
-
-return Inertia::render('Templates/Index', [
-    'templates' => $templates,
-    'templateQuota' => [
-        'used' => $planService->templatesUsed($organization),
-        'limit' => $planService->limits($organization)['templates'],
+    'landing' => [
+        'title' => 'Digital Signature Software for Small Business',
+        'description' => 'Get contracts signed online with a legally binding digital signature. Your clients sign from an email link, no account needed. Free to start.',
+        'image' => '/storage/images/dashboard-preview-3.png',
     ],
-]);
+
+];
 ```
 
-Use `templatesUsed()` rather than `$templates->count()`. They are equal today, but if the index
-query ever gains a filter (search, pagination), the count the page shows must stay the count the
-server enforces.
+The image is the light-theme dashboard screenshot already used on the page. Link previews want
+1200×630; that file is a different shape and will be cropped. Good enough for now; if a designer
+exports a proper `public/images/og-image.png` later, this is the one line to change.
 
-## 9. Phase 6 — the page at the limit
+### 5.2 New file: `app/Http/Controllers/LandingController.php`
 
-### 9.1 `resources/js/Pages/Templates/Index.vue`
+Replace the route closure with a controller so the meta-building has a home.
 
-Add the prop:
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use Inertia\Inertia;
+
+class LandingController extends Controller
+{
+    public function __invoke()
+    {
+        $seo = config('seo.landing');
+        $base = rtrim(config('app.url'), '/');
+
+        $meta = [
+            'title' => $seo['title'],
+            'description' => $seo['description'],
+            'canonical' => $base.'/',
+            'image' => $base.$seo['image'],
+            'jsonLd' => [
+                '@context' => 'https://schema.org',
+                '@type' => 'SoftwareApplication',
+                'name' => config('app.name'),
+                'applicationCategory' => 'BusinessApplication',
+                'operatingSystem' => 'Web',
+                'url' => $base.'/',
+                'description' => $seo['description'],
+                'offers' => [
+                    '@type' => 'Offer',
+                    'price' => '0',
+                    'priceCurrency' => 'USD',
+                ],
+            ],
+        ];
+
+        return Inertia::render('Landing', ['meta' => $meta])
+            ->withViewData(['meta' => $meta]);
+    }
+}
+```
+
+The same `$meta` goes two places on purpose. `withViewData` puts it in the Blade head. The page
+prop puts it in Vue so `<Head :title>` can set the same title after hydration (5.5). One array,
+two consumers, no drift.
+
+`config('app.url')` rather than `url('/')`: behind Render's proxy the request scheme can read as
+`http`, and a canonical that says `http://` when the site is `https://` is a wrong canonical.
+`APP_URL` is deterministic. Confirm on Render that `APP_URL` is `https://<your domain>` with no
+trailing slash.
+
+### 5.3 `routes/web.php`
+
+Replace lines 38–40:
+
+```php
+Route::get('/', LandingController::class)->name('landing');
+```
+
+Add `use App\Http\Controllers\LandingController;` with the other imports. The route stays inside
+the `guest` group; Googlebot is never logged in, so it always gets the landing page.
+
+### 5.4 `resources/views/app.blade.php`
+
+Replace the single `<title inertia>` line with this block:
+
+```blade
+@php($meta = $meta ?? null)
+
+@if ($meta)
+    <title inertia>{{ $meta['title'] }} - {{ config('app.name') }}</title>
+    <meta name="description" content="{{ $meta['description'] }}">
+    <link rel="canonical" href="{{ $meta['canonical'] }}">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{ config('app.name') }}">
+    <meta property="og:title" content="{{ $meta['title'] }}">
+    <meta property="og:description" content="{{ $meta['description'] }}">
+    <meta property="og:url" content="{{ $meta['canonical'] }}">
+    <meta property="og:image" content="{{ $meta['image'] }}">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ $meta['title'] }}">
+    <meta name="twitter:description" content="{{ $meta['description'] }}">
+    <meta name="twitter:image" content="{{ $meta['image'] }}">
+
+    <script type="application/ld+json">@json($meta['jsonLd'])</script>
+@else
+    <title inertia>{{ config('app.name', 'Laravel') }}</title>
+    <meta name="robots" content="noindex, nofollow">
+@endif
+```
+
+Read the `@if` as a rule: **a route that passes `meta` is public; every other page is
+`noindex`.** Today only the landing route passes it, so login, register, dashboard, signing links
+and everything else become noindex with no per-page work. When a second public page is added (a
+pricing page, a blog post), its controller passes `meta` and it is indexed.
+
+`@json` escapes `<` as `<`, so the JSON can never close the `<script>` tag early. Do not
+swap it for `{!! json_encode(...) !!}`.
+
+The title is `{{ $meta['title'] }} - {{ config('app.name') }}` because [app.js:17](resources/js/app.js#L17)
+appends " - EZSign" on the client. Blade must produce the identical string or the tab title
+changes a moment after load.
+
+### 5.5 `resources/js/Pages/Landing.vue`
+
+Add the prop and use it in `<Head>`:
 
 ```js
-const props = defineProps({
-    templates: Array,
-    templateQuota: Object,
+defineProps({
+    meta: Object,
 });
 ```
 
-(It is currently `defineProps({ templates: Array })` with no `const props =`; add the
-assignment so you can read it in script.)
-
-Add a computed and the import for it:
-
-```js
-import { computed } from "vue";
-
-const atLimit = computed(
-    () =>
-        props.templateQuota.limit !== null &&
-        props.templateQuota.used >= props.templateQuota.limit,
-);
+```vue
+<Head :title="meta.title" />
 ```
 
-Then in the template, replace the Upload section's `<UploadCard :form="form" @upload="submit" />`
+Replace the existing `<Head title="EZSign — Send, sign and track documents online" />` at
+[line 89](resources/js/Pages/Landing.vue#L89). Pass the *bare* title — `app.js` adds the suffix.
+
+### 5.6 Check
+
+```bash
+curl -s http://localhost:8000/ | grep -E '<title|name="description"|rel="canonical"|og:title|ld\+json'
+curl -s http://localhost:8000/login | grep -E '<title|name="robots"'
+```
+
+First command: five matches, title reads `Digital Signature Software for Small Business - EZSign`.
+Second: title `EZSign`, and `<meta name="robots" content="noindex, nofollow">`.
+
+## 6. Phase 2 — a real H1
+
+### 6.1 `resources/js/Pages/Landing.vue`
+
+At [lines 154–161](resources/js/Pages/Landing.vue#L154-L161), replace:
+
+```vue
+<h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
+    <Typewriter text="Secure Digital Signing for Modern Teams" />
+</h1>
+```
+
 with:
 
 ```vue
-<div
-    v-if="atLimit"
-    class="rounded-xl border border-dashed p-10 text-center"
->
-    <LayoutTemplate class="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
-
-    <h3 class="font-medium">Template limit reached</h3>
-
-    <p class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-        Your organization can store up to
-        {{ templateQuota.limit }} templates. Delete one below to upload
-        another.
-    </p>
-</div>
-
-<UploadCard v-else :form="form" @upload="submit" />
+<h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
+    Digital Signature Software for Small Business
+</h1>
 ```
 
-And change the section's description to show progress:
+Then replace the paragraph under it (the one beginning "Create, send, sign and manage
+documents…") with the hero paragraph from 4.4:
 
 ```vue
-<PageSection
-    title="Upload Template"
-    :description="`${templateQuota.used} of ${templateQuota.limit} templates used.`"
->
+<p class="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
+    Send a contract, your client signs it in the browser, and you get back a
+    PDF that proves who signed and that nothing changed afterwards. No account
+    needed for signers. Free to start.
+</p>
 ```
 
-`LayoutTemplate` is already imported in this file for the page header.
+Why the typewriter goes: an H1 that is empty at load and fills in over two seconds is an H1 a
+crawler may snapshot half-written. The H1 is the single most weighted on-page element; it is
+not the place for an effect. The `<FadeIn>` wrappers around it can stay: opacity does not remove
+text from the DOM.
 
-The `v-if="atLimit"` box is styled to match `FileDropzone`'s dashed border so the page keeps its
-shape; the drop zone is replaced by an explanation in the same place, not removed leaving a gap.
+### 6.2 Delete the component
 
-"Delete one below" is accurate: the templates table is the next section down, each row opens the
-template, and the Delete button is on that page. Do not add a delete control to this notice.
+`Typewriter.vue` has no other user (checked with grep). Remove the import at
+[line 24](resources/js/Pages/Landing.vue#L24) and delete
+`resources/js/Components/Typewriter.vue`. Run `grep -rn Typewriter resources/js` afterwards; it
+must print nothing.
 
-### 9.2 `resources/js/Pages/Plan/Index.vue` — show it with the other quotas
+## 7. Phase 3 — the content
 
-The `quotas` computed lists documents, members and storage. Add templates after documents:
+### 7.1 New file: `resources/js/Components/landing/WhatIsDigitalSignature.vue`
+
+```vue
+<script setup>
+import LandingSection from "@/Components/landing/LandingSection.vue";
+</script>
+
+<template>
+    <LandingSection
+        id="what-is-a-digital-signature"
+        eyebrow="The basics"
+        title="What is a digital signature?"
+    >
+        <div class="mx-auto max-w-3xl space-y-10">
+            <p class="text-lg leading-8 text-muted-foreground">
+                A digital signature is a way to sign a document online so that
+                two things can be proven later: who signed it, and that nothing
+                in it has changed since. Instead of printing, signing with a pen
+                and scanning, you send the PDF by email. Your client opens the
+                link, confirms their identity with a one-time code, and signs in
+                the browser. When everyone has signed, the PDF is sealed with a
+                certificate, so any PDF reader can check that it has not been
+                altered.
+            </p>
+
+            <div class="grid gap-8 md:grid-cols-2">
+                <div>
+                    <h3 class="text-lg font-semibold">
+                        Digital signature vs. electronic signature
+                    </h3>
+
+                    <p class="mt-3 leading-7 text-muted-foreground">
+                        An electronic signature is any mark that shows
+                        agreement: a typed name, a drawn squiggle, a ticked box.
+                        A digital signature goes further. It records who signed
+                        and when, and it locks the document so that later edits
+                        can be detected. EZSign does both. Every signer is
+                        verified by an email code, and every finished document
+                        carries a certificate-based digital signature and a
+                        record of who signed it.
+                    </p>
+                </div>
+
+                <div>
+                    <h3 class="text-lg font-semibold">
+                        Is a digital signature legally binding?
+                    </h3>
+
+                    <p class="mt-3 leading-7 text-muted-foreground">
+                        In most countries, yes, provided the signer's identity
+                        was verified, the signer clearly intended to sign, and
+                        the signed document cannot be changed without detection.
+                        EZSign records all three. A few document types still
+                        require a notary or ink by law, such as some wills, deeds
+                        and court filings. Check the rules where you live for
+                        those.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </LandingSection>
+</template>
+```
+
+`LandingSection` renders the `<h2>` from its `title` prop, so this file only writes the `<h3>`s.
+Open [LandingSection.vue](resources/js/Components/landing/LandingSection.vue) once to confirm the
+heading tag it uses is `h2`; the blueprint depends on it.
+
+### 7.2 Place it in `Landing.vue`
+
+Import it with the other landing components:
+
+```js
+import WhatIsDigitalSignature from "@/Components/landing/WhatIsDigitalSignature.vue";
+```
+
+Render it immediately **after the hero section and before `<HowItWorks />`**. Find where
+`<HowItWorks />` is used in the template and put `<WhatIsDigitalSignature />` on the line above
+it. Second position is deliberate (section 4.2): it answers the informational half of the query
+on the first scroll.
+
+### 7.3 Retitle the security section
+
+In [SecurityCompliance.vue:35](resources/js/Components/landing/SecurityCompliance.vue#L35), change
+`title="Built for trust"` to `title="How we verify who signed"`. Keep the subtitle. The two
+existing cards stay as they are; check that their titles render as `<h3>`, and if they are
+`<div>`s or `<p>`s, change the tag — the blueprint needs them as H3.
+
+### 7.4 Two FAQ entries
+
+In [Faq.vue](resources/js/Components/landing/Faq.vue), append to the `faqs` array, after
+"Can my whole team use one account?":
 
 ```js
 {
-    key: "templates",
-    label: "Templates",
-    icon: LayoutTemplate,
-    used: props.usage.templates.used,
-    limit: props.usage.templates.limit,
-    formatter: formatCount,
-    caption: "Stored right now, on every plan",
+    q: "Can a signed PDF be changed afterwards?",
+    a: "Not without it showing. When the last person signs, EZSign seals the PDF with a certificate. Open it in Adobe Reader or any PDF viewer with a signature panel and it will tell you whether the file has been modified since signing.",
+},
+{
+    q: "Where are my documents stored?",
+    a: "In private cloud storage that only your organization's members can reach through the app. Signers see only the document they were sent, through their own link.",
 },
 ```
 
-Add `LayoutTemplate` to the `lucide-vue-next` import. `usage.templates` is already arriving from
-`PlanService::usage()` after 7.2; this just renders it. No controller change.
-
-### 9.3 Build and look
+### 7.5 Build and look
 
 ```bash
 npm run build
 ```
 
-With fewer than 5 templates: `/templates` shows the drop zone and "N of 5 templates used" under
-the Upload heading. `/plan` shows a Templates card next to Documents.
+Open `/`. The H1 is plain text, present instantly. Scroll: the new section is second. The
+security heading reads "How we verify who signed". The FAQ has eight entries.
 
-Upload until you have 5. The drop zone is replaced by "Template limit reached". Open a template,
-delete it, land back on `/templates`: the drop zone is back and the caption says "4 of 5".
+## 8. Phase 4 — robots, sitemap, noindex
 
-## 10. Phase 7 — tests for the limit
+The noindex default is already live from 5.4. This phase adds the two files crawlers look for.
 
-### 10.1 New file: `tests/Feature/TemplateLimitTest.php`
+### 8.1 `public/robots.txt`
+
+Replace the contents with:
+
+```
+User-agent: *
+Disallow: /api/
+Disallow: /billing
+Disallow: /confirm-password
+Disallow: /dashboard
+Disallow: /documents
+Disallow: /forgot-password
+Disallow: /invitations/
+Disallow: /login
+Disallow: /members
+Disallow: /pakasir/
+Disallow: /payments
+Disallow: /plan
+Disallow: /profile
+Disallow: /register
+Disallow: /reset-password
+Disallow: /settings
+Disallow: /sign/
+Disallow: /templates
+Disallow: /verify-email
+
+Sitemap: https://YOUR-DOMAIN/sitemap.xml
+```
+
+Replace `YOUR-DOMAIN` with the production host. This is the one hardcoded domain in the plan;
+`robots.txt` is a static file and cannot read config.
+
+The list is every top-level path the app serves except `/` — taken from
+`php artisan route:list --method=GET`. `/sign/` matters most: those are private signing links
+with a token in the URL, and a crawler that finds one in a forwarded email should not index it.
+
+Do **not** disallow `/build/` or `/storage/`. Google needs the CSS, JavaScript and images to
+render the page. Blocking them is the classic way to make a page look empty to Google.
+
+### 8.2 Sitemap route
+
+In `routes/web.php`, outside every middleware group (next to the `/health` route is a good
+spot):
+
+```php
+Route::get('/sitemap.xml', function () {
+    $base = rtrim(config('app.url'), '/');
+
+    return response()
+        ->view('sitemap', ['urls' => [$base.'/']])
+        ->header('Content-Type', 'application/xml');
+})->name('sitemap');
+```
+
+Outside the groups because a logged-in user (or a bot that once got a session cookie) must not be
+redirected to the dashboard when fetching the sitemap.
+
+### 8.3 New file: `resources/views/sitemap.blade.php`
+
+```blade
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+@foreach ($urls as $url)
+    <url>
+        <loc>{{ $url }}</loc>
+        <changefreq>weekly</changefreq>
+        <priority>1.0</priority>
+    </url>
+@endforeach
+</urlset>
+```
+
+One URL today. When a second public page exists, add it to the array in 8.2. No package; a
+sitemap with one entry does not need one.
+
+### 8.4 Check
+
+```bash
+curl -s http://localhost:8000/sitemap.xml
+curl -sI http://localhost:8000/sitemap.xml | grep -i content-type
+```
+
+Valid XML with one `<loc>`; `Content-Type: application/xml`.
+
+## 9. Phase 5 — make the pricing facts true
+
+The landing page and the plan catalogue disagree. Google's guidance on helpful content is blunt
+about pages that say one thing and charge another, and a business owner who signs up on the
+strength of "3 documents / month" and hits a weekly cap will not come back.
+
+[config/plans.php](config/plans.php) is the source of truth:
+
+| Plan | Documents | Members | Storage | Price |
+| --- | --- | --- | --- | --- |
+| free | 3 / **week** | **3** | 100 MB | $0 |
+| pro | 100 / month | 10 | 10 GB | **$10 / month** (Stripe subscription) |
+| enterprise | unlimited | unlimited | unlimited | contact |
+
+### 9.1 `resources/js/Components/landing/Pricing.vue`
+
+Change the Starter bullets at [line 15](resources/js/Components/landing/Pricing.vue#L15) from
+`"3 documents / month", "1 user"` to:
+
+```js
+bullets: ["3 documents / week", "Up to 3 members", "Email OTP verification", "Signed PDF download"],
+```
+
+The Team and Business cards describe a credit model that `config/plans.php` does not have. That is
+a product decision, not a copy fix, so leave those two cards alone and **tell the owner** they do
+not match the Pro plan. Do not invent bullets for them.
+
+### 9.2 `resources/js/Components/landing/Faq.vue`
+
+The entry "How does pricing work?" says "There is no monthly subscription." Pro is a monthly
+subscription. Replace the answer with:
+
+```js
+a: "Start on the free plan. When you need more, upgrade to a monthly plan from the Plan page. You can see exactly how many documents and members each plan includes before you pay.",
+```
+
+## 10. Phase 6 — tests
+
+### 10.1 New file: `tests/Feature/LandingSeoTest.php`
 
 ```php
 <?php
 
 namespace Tests\Feature;
 
-use App\Models\Organization;
-use App\Models\Template;
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
-class TemplateLimitTest extends TestCase
+class LandingSeoTest extends TestCase
 {
-    use RefreshDatabase;
-
-    private User $user;
-    private Organization $organization;
-
-    protected function setUp(): void
+    public function test_the_landing_page_renders_seo_tags_in_the_html(): void
     {
-        parent::setUp();
+        $response = $this->get('/');
 
-        Storage::fake('documents');
-
-        $this->organization = Organization::create(['name' => 'Acme']);
-
-        $this->user = User::factory()->create([
-            'organization_id' => $this->organization->id,
-            'role' => 'owner',
-        ]);
+        $response->assertOk();
+        $response->assertSee('<title inertia>Digital Signature Software for Small Business - EZSign</title>', false);
+        $response->assertSee('<meta name="description" content="Get contracts signed online', false);
+        $response->assertSee('<link rel="canonical" href="'.rtrim(config('app.url'), '/').'/">', false);
+        $response->assertSee('property="og:title"', false);
+        $response->assertSee('application/ld+json', false);
+        $response->assertSee('"@type":"SoftwareApplication"', false);
+        $response->assertDontSee('name="robots"', false);
     }
 
-    private function seedTemplates(int $count): void
+    public function test_pages_without_meta_are_noindex(): void
     {
-        for ($i = 1; $i <= $count; $i++) {
-            Template::create([
-                'organization_id' => $this->organization->id,
-                'name' => "template-{$i}",
-                'file_path' => "templates/template-{$i}.pdf",
-                'file_size' => 1024,
-                'mime_type' => 'application/pdf',
-            ]);
-        }
+        $response = $this->get('/login');
+
+        $response->assertOk();
+        $response->assertSee('<meta name="robots" content="noindex, nofollow">', false);
+        $response->assertDontSee('name="description"', false);
     }
 
-    private function pdf(): UploadedFile
+    public function test_the_sitemap_lists_the_landing_page(): void
     {
-        return UploadedFile::fake()->createWithContent('new.pdf', "%PDF-1.4\n".str_repeat('a', 1000));
-    }
+        $response = $this->get('/sitemap.xml');
 
-    public function test_the_fifth_template_is_accepted(): void
-    {
-        $this->seedTemplates(4);
-
-        $this->actingAs($this->user)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-
-        $this->assertDatabaseCount('templates', 5);
-    }
-
-    public function test_the_sixth_template_is_rejected(): void
-    {
-        $this->seedTemplates(5);
-
-        $response = $this->actingAs($this->user)->post('/templates', ['file' => $this->pdf()]);
-
-        $response->assertSessionHasErrors([
-            'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
-        ]);
-        $this->assertDatabaseCount('templates', 5);
-        Storage::disk('documents')->assertMissing('templates/new.pdf');
-    }
-
-    public function test_deleting_one_makes_room_for_another(): void
-    {
-        $this->seedTemplates(5);
-        $victim = Template::where('name', 'template-3')->first();
-
-        $this->actingAs($this->user)->delete("/templates/{$victim->id}");
-
-        $this->actingAs($this->user)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-
-        $this->assertDatabaseCount('templates', 5);
-    }
-
-    public function test_the_limit_is_per_organisation(): void
-    {
-        $this->seedTemplates(5);
-
-        $other = Organization::create(['name' => 'Rival']);
-        $otherUser = User::factory()->create([
-            'organization_id' => $other->id,
-            'role' => 'owner',
-        ]);
-
-        $this->actingAs($otherUser)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-    }
-
-    public function test_the_templates_page_reports_the_quota(): void
-    {
-        $this->seedTemplates(2);
-
-        $this->actingAs($this->user)
-            ->get('/templates')
-            ->assertInertia(fn ($page) => $page
-                ->where('templateQuota.used', 2)
-                ->where('templateQuota.limit', 5)
-            );
+        $response->assertOk();
+        $response->assertHeader('Content-Type', 'application/xml');
+        $response->assertSee('<loc>'.rtrim(config('app.url'), '/').'/</loc>', false);
     }
 }
 ```
 
-The `assertMissing('templates/new.pdf')` in the sixth-template test is the check for 8.1's
-ordering. If the limit check were after `$file->store()`, the file would exist even though the
-row does not, and this line would fail. Note the stored filename is generated by Laravel, not
-`new.pdf`, so strictly this asserts that *no* file with that name was written; the stronger
-check is `assertDirectoryEmpty('templates')` if your Laravel version has it, but the count
-assertion above already proves no row was created.
+`assertSee(..., false)` — the second argument turns off HTML escaping so the assertion matches raw
+tags. Without it every test here fails. `@json` writes `"@type":"SoftwareApplication"` with no
+spaces, which is what the assertion looks for.
 
-### 10.2 Run everything
+None of these tests use `RefreshDatabase`; the pages they hit touch no tables.
+
+### 10.2 Run
 
 ```bash
-docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php tests/Feature/TemplateLimitTest.php
+docker exec esign-app php artisan test tests/Feature/LandingSeoTest.php
 docker exec esign-app php artisan test
 ```
 
-Eight new tests green. The full suite has the same two pre-existing registration failures as
-before and no new ones. (`TemplateUploadTest` from the previous change also still passes: its
-`setUp` starts with zero templates, so the limit never triggers.)
+Three green; no new failures in the full suite.
 
 ## 11. Verification checklist
 
 Tick each only if you saw it happen.
 
-**Delete:**
+**Head (Phase 1):**
 
-- [ ] `route:list --name=templates.destroy` shows a `DELETE` route
-- [ ] Template page has a red Delete button beside Preview and Prepare
-- [ ] Clicking it opens a dialog naming the template and its field count
-- [ ] Cancel closes the dialog, nothing deleted
-- [ ] Confirm: loading overlay, land on `/templates`, template gone from the list
-- [ ] In the database: `select count(*) from template_signature_fields where template_id = '<id>'` is 0
-- [ ] In S3 (or the local disk if `DOCUMENTS_DISK` is local): the file is gone
-- [ ] `TemplateDeleteTest` — 3 pass
+- [ ] `curl -s localhost:8000/ | grep '<title'` → `Digital Signature Software for Small Business - EZSign`
+- [ ] Same curl shows `name="description"`, `rel="canonical"`, `og:title`, `twitter:card`, `ld+json`
+- [ ] `curl -s localhost:8000/login | grep robots` → `noindex, nofollow`
+- [ ] `curl -s localhost:8000/ | grep robots` → nothing
+- [ ] In the browser, the tab title does not change after the page loads (no flicker)
 
-**Limit:**
+**Body (Phases 2–3):**
 
-- [ ] `config/plans.php` has `'templates' => 5` under free, pro **and** enterprise
-- [ ] `/templates` with fewer than 5: drop zone visible, "N of 5 templates used"
-- [ ] `/templates` with exactly 5: drop zone replaced by "Template limit reached"
-- [ ] Delete one, return to `/templates`: drop zone back, "4 of 5"
-- [ ] `/plan` shows a Templates card with the same numbers
-- [ ] With 5 templates, POST a sixth via the test or curl: rejected, no new row, no new file
-- [ ] `TemplateLimitTest` — 5 pass
-- [ ] Full suite: no new failures
+- [ ] `curl -s localhost:8000/ | grep -c '<h1'` is still `0` — that is expected; the body is client-rendered. The H1 check is in the browser:
+- [ ] Elements panel after load: exactly one `<h1>`, text present with no typewriter
+- [ ] `grep -rn Typewriter resources/js` prints nothing
+- [ ] Heading outline (browser extension "HeadingsMap", or Lighthouse → Accessibility → heading order): H1 → H2 "What is a digital signature?" → H3 ×2 → H2 "Sign a document in three steps" → … matches 4.3
+- [ ] Security section heading reads "How we verify who signed"
+- [ ] FAQ has eight entries
+
+**Crawler files (Phase 4):**
+
+- [ ] `curl localhost:8000/robots.txt` lists the Disallow lines and a `Sitemap:` line with the real domain
+- [ ] `curl localhost:8000/sitemap.xml` is valid XML with one `<loc>`
+
+**Facts (Phase 5):**
+
+- [ ] Starter card says "3 documents / week" and "Up to 3 members"
+- [ ] FAQ pricing answer no longer says "no monthly subscription"
+- [ ] The owner has been told the Team/Business cards do not match `config/plans.php`
+
+**After deploy (needs the production URL):**
+
+- [ ] Paste the URL into Google's Rich Results Test — it reports a valid `SoftwareApplication`
+- [ ] Paste the URL into a link-preview checker (or a Slack DM to yourself) — title, description and image appear
+- [ ] Lighthouse SEO category ≥ 95
+- [ ] Search Console → URL inspection → Test live URL → "View crawled page" shows the H1 and the "What is a digital signature?" section in the rendered HTML. If it does not, that is the signal that SSR is the next step — not before.
 
 ## 12. Common ways this goes wrong
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `template_signature_fields` rows survive the delete | You are not on Postgres, or the migration was edited | Check `DB_CONNECTION=pgsql` and that the migration still has `cascadeOnDelete()` |
-| Delete works, file still in S3, no log line | Forgot the `if (! Storage::…->delete())` wrapper | 4.2 |
-| Delete works, file still in S3, log line present | S3 credentials or permissions | Not a code bug; the log line is doing its job |
-| Dialog does not open | `confirmingDelete` not a `ref`, or `v-model:open` missing | 5.2 |
-| Dialog shows "undefined signature fields" | Reading `signature_fields_count` on a page that did not `loadCount` | Only `show()` loads it; the dialog lives on the Show page |
-| 405 Method Not Allowed on delete | Route registered as `post` or `get` | 4.1 |
-| Sixth upload rejected but file appears in S3 | Limit check placed after `$file->store()` | 8.1 |
-| Sixth upload accepted | `'templates'` key missing from the plan the org is on | 7.1, all three plans |
-| Page always shows the drop zone | `templateQuota` prop not passed from `index()` | 8.2 |
-| Page never shows the drop zone | `atLimit` compares `used > limit` instead of `>=` | 9.1 |
-| Plan page crashes: cannot read `templates` of undefined | `usage()` not updated | 7.2 |
-| `TemplateUploadTest` starts failing | It seeds 0 templates; if it fails, the limit is reading the wrong org or counting globally | `templatesUsed()` must filter by `organization_id` |
+| Tab title flickers from one string to another on load | Blade title and `app.js` suffix do not match | 5.4: Blade must produce `{title} - EZSign` exactly |
+| Title in raw HTML is `EZSign` | `withViewData` not called, or route still uses the old closure | 5.2, 5.3 |
+| `Undefined variable $meta` on `/login` | Missing `@php($meta = $meta ?? null)` | 5.4, first line of the block |
+| Landing page has `noindex` | The `@if ($meta)` is inverted, or `meta` key misspelt | 5.4 |
+| Canonical says `http://localhost:8000/` in production | `APP_URL` on Render is wrong | Set `APP_URL=https://<domain>` in Render's env, no trailing slash |
+| Canonical says `http://` in production | Someone swapped `config('app.url')` for `url('/')` | 5.2 |
+| JSON-LD invalid in Rich Results Test | `{!! json_encode !!}` used instead of `@json`, or a trailing comma in the PHP array | 5.2, 5.4 |
+| `<h1>` still typed out | Only the import was removed, not the tag | 6.1 |
+| `Typewriter` import error on build | Component deleted but Landing.vue still imports it | 6.2 |
+| New section's `<h2>` is empty | `title` prop not passed to `LandingSection` (it always renders the tag) | 7.1 |
+| Sitemap redirects to `/dashboard` when logged in | Route placed inside the `guest` or `auth` group | 8.2 |
+| Sitemap served as `text/html` | `->header('Content-Type', 'application/xml')` missing | 8.2 |
+| Google renders the page blank | `/build/` or `/storage/` disallowed in robots.txt | 8.1 |
+| `assertSee` fails on a tag that is clearly there | Second argument `false` missing | 10.1 |
+| Lighthouse says "Document does not have a meta description" on `/login` | Correct — it is noindex on purpose; run Lighthouse on `/` | — |
 
 ## 13. Definition of done
 
-- `DELETE /templates/{id}` removes the row, its signature fields (via cascade) and its file,
-  for the owner's organisation only.
-- The Show page has a Delete button behind a dialog that names the template and its field count.
-- `config/plans.php` gives every plan `'templates' => 5`; `PlanService` exposes
-  `templatesUsed()`, `canAddTemplate()` and a `templates` entry in `usage()`.
-- `POST /templates` rejects a sixth template before writing anything to storage.
-- The Templates page replaces the drop zone with an explanation at the limit, and the Plan page
-  shows the quota.
-- Eight new tests pass; the full suite has no new failures.
-- No migration, no new dependency, no soft-delete, no manual deletion of field rows.
+- Raw HTML of `/` contains the title, description, canonical, Open Graph, Twitter and
+  `SoftwareApplication` JSON-LD from sections 4.4 and 5.2, served by Blade with no JavaScript.
+- Every other page carries `<meta name="robots" content="noindex, nofollow">` by default.
+- The H1 is static text: "Digital Signature Software for Small Business". `Typewriter.vue` is gone.
+- The "What is a digital signature?" section sits second on the page with the copy from 4.4,
+  as one H2 and two H3s.
+- The security section is titled "How we verify who signed"; the FAQ has the two new entries.
+- `robots.txt` disallows every app path and points at `sitemap.xml`; the sitemap serves valid XML.
+- The Starter pricing card and the pricing FAQ match `config/plans.php`; the Team/Business
+  mismatch has been reported to the owner.
+- `LandingSeoTest` — 3 tests pass; the full suite has no new failures.
+- No SSR, no new package, no hardcoded domain outside `robots.txt`, no review markup.

@@ -21,10 +21,10 @@ import {
     CheckCircle2,
 } from "lucide-vue-next";
 
-import Typewriter from "@/Components/Typewriter.vue";
 import FadeIn from "@/Components/animations/FadeIn.vue";
 import SlideIn from "@/Components/animations/SlideIn.vue";
 
+import WhatIsDigitalSignature from "@/Components/landing/WhatIsDigitalSignature.vue";
 import HowItWorks from "@/Components/landing/HowItWorks.vue";
 import FeatureTabs from "@/Components/landing/FeatureTabs.vue";
 import SecurityCompliance from "@/Components/landing/SecurityCompliance.vue";
@@ -34,6 +34,10 @@ import Pricing from "@/Components/landing/Pricing.vue";
 import Faq from "@/Components/landing/Faq.vue";
 import CtaBanner from "@/Components/landing/CtaBanner.vue";
 import LandingMobileNav from "@/Components/landing/LandingMobileNav.vue";
+
+defineProps({
+    meta: Object,
+});
 
 const activePreview = ref(0);
 const isDarkMode = ref(false);
@@ -86,7 +90,7 @@ onUnmounted(() => {
 });
 </script>
 <template>
-    <Head title="EZSign — Send, sign and track documents online" />
+    <Head :title="meta.title" />
     <div class="min-h-screen scroll-smooth bg-background">
         <!-- Background Glow -->
         <div class="pointer-events-none absolute inset-0 overflow-hidden">
@@ -155,19 +159,16 @@ onUnmounted(() => {
                         <h1
                             class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl"
                         >
-                            <Typewriter
-                                text="Secure Digital Signing for Modern Teams"
-                            />
+                            Digital Signature Software for Small Business
                         </h1>
                     </FadeIn>
                     <FadeIn type="fade" :delay="500">
                         <p
                             class="mt-6 max-w-xl text-lg leading-8 text-muted-foreground"
                         >
-                            Create, send, sign and manage documents with secure
-                            electronic signatures. Collaborate with your team,
-                            track document progress, and keep everything
-                            organized in one place.
+                            Send a contract, your client signs it in the browser, and you get back a
+                            PDF that proves who signed and that nothing changed afterwards. No account
+                            needed for signers. Free to start.
                         </p>
                     </FadeIn>
 
@@ -355,6 +356,7 @@ onUnmounted(() => {
             </div>
         </section>
 
+        <WhatIsDigitalSignature />
         <HowItWorks />
         <FeatureTabs />
         <SecurityCompliance />

@@ -21,11 +21,19 @@ const faqs = [
     },
     {
         q: "How does pricing work?",
-        a: "You top up a credit balance and each sent document uses credits. There is no monthly subscription and unused credits never expire.",
+        a: "Start on the free plan. When you need more, upgrade to a monthly plan from the Plan page. You can see exactly how many documents and members each plan includes before you pay.",
     },
     {
         q: "Can my whole team use one account?",
         a: "Yes. Create an organization, invite members and manage every document in one shared dashboard.",
+    },
+    {
+        q: "Can a signed PDF be changed afterwards?",
+        a: "Not without it showing. When the last person signs, EZSign seals the PDF with a certificate. Open it in Adobe Reader or any PDF viewer with a signature panel and it will tell you whether the file has been modified since signing.",
+    },
+    {
+        q: "Where are my documents stored?",
+        a: "In private cloud storage that only your organization's members can reach through the app. Signers see only the document they were sent, through their own link.",
     },
 ];
 </script>

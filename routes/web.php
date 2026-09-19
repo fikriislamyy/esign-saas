@@ -9,6 +9,7 @@ use App\Http\Controllers\DocumentSignatureFieldController;
 use App\Http\Controllers\DocumentSignerController;
 use App\Http\Controllers\InvitationAcceptController;
 use App\Http\Controllers\InvitationController;
+use App\Http\Controllers\LandingController;
 use App\Http\Controllers\MembersController;
 use App\Http\Controllers\OrganizationSettingsController;
 use App\Http\Controllers\PakasirSandboxPayController;
@@ -35,9 +36,7 @@ use Inertia\Inertia;
 */
 
 Route::middleware('guest')->group(function () {
-    Route::get('/', function () {
-        return Inertia::render('Landing');
-    })->name('landing');
+    Route::get('/', LandingController::class)->name('landing');
 
     Route::get(
         '/invitations/{token}',
@@ -279,5 +278,21 @@ Route::middleware('auth', 'verified')->group(function () {
     Route::get('/payments/{orderId}/status', [PaymentStatusController::class, 'show'])
         ->name('payments.status');
 });
+
+Route::get('/sitemap.xml', function () {
+    $base = rtrim(config('app.url'), '/');
+    $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
+    $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . "\n";
+    foreach ([$base.'/'] as $url) {
+        $xml .= '    <url>' . "\n";
+        $xml .= '        <loc>' . e($url) . '</loc>' . "\n";
+        $xml .= '        <changefreq>weekly</changefreq>' . "\n";
+        $xml .= '        <priority>1.0</priority>' . "\n";
+        $xml .= '    </url>' . "\n";
+    }
+    $xml .= '</urlset>';
+
+    return response($xml)->header('Content-Type', 'application/xml');
+})->name('sitemap');
 
 require __DIR__.'/auth.php';

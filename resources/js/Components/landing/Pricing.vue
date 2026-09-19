@@ -12,7 +12,7 @@ const plans = [
         name: "Starter",
         price: "Free",
         description: "For individuals trying it out",
-        bullets: ["3 documents / month", "1 user", "Email OTP verification", "Signed PDF download"],
+        bullets: ["3 documents / week", "Up to 3 members", "Email OTP verification", "Signed PDF download"],
         button: { text: "Get started", variant: "outline", href: "/register" },
     },
     {

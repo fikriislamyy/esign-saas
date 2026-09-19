@@ -1,2 +1,22 @@
 User-agent: *
-Disallow:
+Disallow: /api/
+Disallow: /billing
+Disallow: /confirm-password
+Disallow: /dashboard
+Disallow: /documents
+Disallow: /forgot-password
+Disallow: /invitations/
+Disallow: /login
+Disallow: /members
+Disallow: /pakasir/
+Disallow: /payments
+Disallow: /plan
+Disallow: /profile
+Disallow: /register
+Disallow: /reset-password
+Disallow: /settings
+Disallow: /sign/
+Disallow: /templates
+Disallow: /verify-email
+
+Sitemap: https://ezsign.my.id/sitemap.xml
