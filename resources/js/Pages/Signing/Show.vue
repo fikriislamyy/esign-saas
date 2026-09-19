@@ -577,7 +577,7 @@ onBeforeUnmount(() => {
                         {{
                             allFieldsSigned
                                 ? "Review your signatures, then submit."
-                                : "Tap each highlighted field to sign."
+                                : "Select each highlighted field to sign."
                         }}
                     </p>
                 </div>

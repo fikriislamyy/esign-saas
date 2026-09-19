@@ -73,6 +73,7 @@ function formatSize(bytes) {
                         variant="ghost"
                         size="icon"
                         class="shrink-0"
+                        aria-label="Remove file"
                         @click="removeFile"
                     >
                         <X class="h-4 w-4" />

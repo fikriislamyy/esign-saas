@@ -30,11 +30,11 @@ const props = defineProps({
             </div>
 
             <div class="min-w-0 space-y-1">
-                <h1 class="break-words text-2xl font-bold tracking-tight sm:text-3xl">
+                <h1 class="text-2xl font-bold tracking-tight sm:text-3xl">
                     {{ title }}
                 </h1>
 
-                <p v-if="description" class="break-words text-muted-foreground">
+                <p v-if="description" class="text-muted-foreground" style="text-wrap: pretty">
                     {{ description }}
                 </p>
             </div>

@@ -135,7 +135,7 @@ function buttonLabel(key) {
 
                     <!-- Price -->
                     <div class="mt-3">
-                        <span class="text-3xl font-bold tracking-tight">
+                        <span class="text-3xl font-bold tracking-tight tabular-nums">
                             {{ formatPrice(plan.price_usd_cents) }}
                         </span>
 

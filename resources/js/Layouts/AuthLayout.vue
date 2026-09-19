@@ -10,7 +10,6 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
     <div
         class="grid min-h-screen bg-gradient-to-br from-background via-background to-muted/40 lg:grid-cols-2"
     >
-        <!-- LEFT -->
 
         <div
             class="hidden flex-col justify-between border-r bg-muted/20 p-14 lg:flex"
@@ -84,7 +83,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
 
         <!-- RIGHT -->
 
-        <div class="flex items-center justify-center p-6 md:p-12">
+        <div id="main-content" class="flex items-center justify-center p-6 md:p-12">
             <FadeIn :duration="800" direction="left">
                 <slot />
             </FadeIn>

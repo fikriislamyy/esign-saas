@@ -43,6 +43,7 @@ function toggleSidebar() {
 
 <template>
     <div class="bg-background">
+
         <div class="flex min-h-screen">
             <AppSidebar :collapsed="collapsed" :hide-text="hideSidebarText" />
 
@@ -55,7 +56,7 @@ function toggleSidebar() {
                     @toggle-sidebar="toggleSidebar"
                 />
 
-                <main class="flex-1 overflow-y-auto bg-muted/20">
+                <main id="main-content" class="flex-1 overflow-y-auto bg-muted/20">
                     <div class="mx-auto w-full max-w-7xl p-4 lg:p-8">
                         <slot />
                     </div>

@@ -97,6 +97,7 @@ const props = defineProps({
                         size="icon"
                         class="hidden h-9 w-9 sm:inline-flex"
                         :disabled="!table.getCanPreviousPage()"
+                        aria-label="First page"
                         @click="table.setPageIndex(0)"
                     >
                         <ChevronsLeft class="h-4 w-4" />
@@ -108,7 +109,7 @@ const props = defineProps({
                         size="icon"
                         class="h-9 w-9"
                         :disabled="!table.getCanPreviousPage()"
-                        @click="table.previousPage()"
+                        @click="table.previousPage()" aria-label="Previous page"
                     >
                         <ChevronLeft class="h-4 w-4" />
                     </Button>
@@ -119,7 +120,7 @@ const props = defineProps({
                         size="icon"
                         class="h-9 w-9"
                         :disabled="!table.getCanNextPage()"
-                        @click="table.nextPage()"
+                        @click="table.nextPage()" aria-label="Next page"
                     >
                         <ChevronRight class="h-4 w-4" />
                     </Button>
@@ -130,6 +131,7 @@ const props = defineProps({
                         size="icon"
                         class="hidden h-9 w-9 sm:inline-flex"
                         :disabled="!table.getCanNextPage()"
+                        aria-label="Last page"
                         @click="table.setPageIndex(table.getPageCount() - 1)"
                     >
                         <ChevronsRight class="h-4 w-4" />

@@ -189,7 +189,7 @@ const submit = () => {
                     <!-- Confirm password -->
 
                     <div class="space-y-2">
-                        <Label for="password_confirmation">Confirm Password</Label>
+                        <Label for="password_confirmation">Confirm password</Label>
 
                         <div class="relative">
                             <Lock

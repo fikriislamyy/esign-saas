@@ -238,7 +238,7 @@ async function finishPreparing() {
 
     if (freeFields.value.length > 0) {
         showError(
-            `${freeFields.value.length} template field(s) still have no signer. Click each unassigned field to assign a signer, or discard them from the sidebar.`,
+            `${freeFields.value.length} template field(s) still have no signer. Select each unassigned field to assign a signer, or discard them from the sidebar.`,
             "Unassigned Fields",
         );
 

@@ -82,6 +82,7 @@ const formattedWalletIdr = computed(() => {
                 <Button
                     variant="ghost"
                     size="icon"
+                    aria-label="Toggle sidebar"
                     @click="emit('toggle-sidebar')"
                 >
                     <Menu class="h-5 w-5" />
@@ -91,9 +92,9 @@ const formattedWalletIdr = computed(() => {
             <div v-if="title" class="hidden min-w-0 flex-col gap-1 lg:flex">
                 <AppBreadcrumb :items="breadcrumbs" />
 
-                <h1 class="truncate text-xl font-semibold tracking-tight">
+                <div class="truncate text-xl font-semibold tracking-tight">
                     {{ title }}
-                </h1>
+                </div>
 
                 <p
                     v-if="subtitle"

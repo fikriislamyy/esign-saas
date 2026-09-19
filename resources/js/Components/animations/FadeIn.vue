@@ -48,6 +48,10 @@ const props = defineProps({
 
 const root = ref(null);
 const visible = ref(false);
+const prefersReducedMotion = ref(
+    typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+);
 
 let observer;
 
@@ -113,21 +117,35 @@ const visibleStyle = computed(() => ({
     filter: "blur(0px)",
 }));
 
-const styleObject = computed(() => ({
-    ...(visible.value ? visibleStyle.value : hiddenStyle.value),
+const styleObject = computed(() => {
+    const baseStyle = prefersReducedMotion.value
+        ? visibleStyle.value
+        : visible.value
+          ? visibleStyle.value
+          : hiddenStyle.value;
 
-    transition: `
+    return {
+        ...baseStyle,
+        transition: prefersReducedMotion.value
+            ? "none"
+            : `
         opacity ${props.duration}ms ${props.easing},
         transform ${props.duration}ms ${props.easing},
         filter ${props.duration}ms ${props.easing}
     `,
-
-    // Only hint the compositor before the element animates in. Holding this
-    // after the transition keeps a GPU layer alive for nothing.
-    willChange: visible.value ? "auto" : "opacity, transform, filter",
-}));
+        willChange:
+            prefersReducedMotion.value || visible.value
+                ? "auto"
+                : "opacity, transform, filter",
+    };
+});
 
 onMounted(() => {
+    if (prefersReducedMotion.value) {
+        visible.value = true;
+        return;
+    }
+
     observer = new IntersectionObserver(
         ([entry]) => {
             if (entry.isIntersecting) {

@@ -239,7 +239,7 @@ function handleFeedbackConfirm() {
 
                     <Save v-else class="mr-2 h-4 w-4" />
 
-                    Save Changes
+                    Save changes
                 </Button>
             </DialogFooter>
         </DialogContent>

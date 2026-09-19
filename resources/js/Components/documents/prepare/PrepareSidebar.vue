@@ -183,7 +183,7 @@ const isSequential = computed(() => {
                             </p>
 
                             <p class="text-sm text-muted-foreground">
-                                Click anywhere on the PDF to place a field for
+                                Select anywhere on the PDF to place a field for
                                 <strong>{{ editor.selectedMember?.name }}</strong>.
                             </p>
                         </div>
@@ -207,7 +207,7 @@ const isSequential = computed(() => {
                         </p>
 
                         <p class="text-sm text-muted-foreground">
-                            Click each dashed field on the PDF to choose its signer.
+                            Select each dashed field on the PDF to choose its signer.
                             Unassigned fields are not saved.
                         </p>
 
@@ -225,13 +225,13 @@ const isSequential = computed(() => {
                     <Info class="mt-0.5 h-4 w-4 text-muted-foreground" />
 
                     <div class="space-y-2 text-sm text-muted-foreground">
-                        <p>1. Click <strong>Add Signature Field</strong> and choose a member.</p>
+                        <p>1. Select <strong>Add Signature Field</strong> and choose a member.</p>
 
-                        <p>2. Click on the PDF to place the field.</p>
+                        <p>2. Select on the PDF to place the field.</p>
 
                         <p>3. Drag and resize as needed.</p>
 
-                        <p>Or click <strong>Use Template</strong>, then click each field to choose its signer.</p>
+                        <p>Or select <strong>Use Template</strong>, then select each field to choose its signer.</p>
                     </div>
                 </div>
             </div>

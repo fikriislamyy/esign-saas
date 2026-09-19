@@ -29,6 +29,7 @@ const emit = defineEmits(["zoomIn", "zoomOut"]);
             variant="outline"
             size="icon"
             :disabled="editor.zoom <= min"
+            aria-label="Zoom out"
             @click="emit('zoomOut')"
         >
             <Minus class="h-4 w-4" />
@@ -44,6 +45,7 @@ const emit = defineEmits(["zoomIn", "zoomOut"]);
             variant="outline"
             size="icon"
             :disabled="editor.zoom >= max"
+            aria-label="Zoom in"
             @click="emit('zoomIn')"
         >
             <Plus class="h-4 w-4" />

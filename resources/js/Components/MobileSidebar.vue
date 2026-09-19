@@ -15,7 +15,7 @@ const open = ref(false);
 <template>
     <Sheet v-model:open="open">
         <SheetTrigger as-child>
-            <Button variant="ghost" size="icon">
+            <Button variant="ghost" size="icon" aria-label="Toggle menu">
                 <Menu class="h-5 w-5" />
             </Button>
         </SheetTrigger>

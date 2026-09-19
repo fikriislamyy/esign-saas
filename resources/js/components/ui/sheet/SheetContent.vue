@@ -60,7 +60,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
       <slot />
 
       <DialogClose v-if="showCloseButton" data-slot="sheet-close" as-child>
-        <Button variant="ghost" class="absolute top-4 right-4" size="icon-sm">
+        <Button variant="ghost" class="absolute top-4 right-4" size="icon-sm" aria-label="Close">
           <XIcon />
           <span class="sr-only">Close</span>
         </Button>

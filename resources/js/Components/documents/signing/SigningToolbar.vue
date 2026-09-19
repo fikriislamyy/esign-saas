@@ -45,7 +45,7 @@ const emit = defineEmits([
                 variant="outline"
                 class="h-10 w-10"
                 :disabled="currentPage <= 1"
-                @click="emit('previousPage')"
+                @click="emit('previousPage')" aria-label="Previous page"
             >
                 <ChevronLeft class="h-4 w-4" />
             </Button>
@@ -61,7 +61,7 @@ const emit = defineEmits([
                 variant="outline"
                 class="h-10 w-10"
                 :disabled="currentPage >= totalPages"
-                @click="emit('nextPage')"
+                @click="emit('nextPage')" aria-label="Next page"
             >
                 <ChevronRight class="h-4 w-4" />
             </Button>
@@ -75,7 +75,7 @@ const emit = defineEmits([
                 variant="outline"
                 class="h-10 w-10"
                 :disabled="currentFieldIndex <= 0"
-                @click="emit('previousSignature')"
+                @click="emit('previousSignature')" aria-label="Previous signature"
             >
                 <ChevronLeft class="h-4 w-4" />
             </Button>
@@ -95,7 +95,7 @@ const emit = defineEmits([
                 variant="outline"
                 class="h-10 w-10"
                 :disabled="currentFieldIndex >= totalFields - 1"
-                @click="emit('nextSignature')"
+                @click="emit('nextSignature')" aria-label="Next signature"
             >
                 <ChevronRight class="h-4 w-4" />
             </Button>

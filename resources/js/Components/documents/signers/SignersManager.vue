@@ -290,6 +290,7 @@ async function updateSigningWorkflow(sequential) {
                             v-if="document.status === 'draft'"
                             size="icon"
                             variant="ghost"
+                            aria-label="Remove signer"
                             @click="removeSigner(signer)"
                         >
                             <Trash2 class="h-4 w-4 text-destructive" />
