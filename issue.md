@@ -1,951 +1,597 @@
-# Implement QRIS payments in the unified PaymentDialog
+# Sandbox auto-pay: complete QRIS payments automatically via `paymentsimulation`
 
-## 1. What we are building
+## 1. Read this before anything else — the request as worded cannot work
 
-`PaymentDialog.vue` already has a **Card** tab and a **QRIS** tab. The QRIS tab is a placeholder
-with a `TODO`. The job is to make it real, for **both** things the dialog is used for:
+The task says: *"instead of hitting transactioncreate, hit paymentsimulation."*
 
-- **Top up wallet** (`mode="topup"`) — user types a dollar amount
-- **Upgrade to Pro** (`mode="plan"`) — fixed monthly price
+That literal swap is impossible. It was tested against the live sandbox:
 
-When the user picks QRIS and presses the button, a QR code appears **inside the dialog**. They scan
-it with an Indonesian banking or e-wallet app, and the dialog flips to a success state on its own.
+```
+POST /api/paymentsimulation   with an order_id that was never created
+→ 404  {"message":"Transaksi tidak ditemukan"}     ("transaction not found")
+```
 
-The user must never leave the dialog. That is the whole point of the refactor.
+`paymentsimulation` does not create anything. It marks an **existing** transaction as paid. So
+`transactioncreate/qris` must stay exactly where it is. What we are actually building is:
 
----
+> **Keep** creating the QR with `transactioncreate/qris`. Then, **when a sandbox flag is on**, also
+> call `paymentsimulation` so the payment completes instantly without anyone scanning anything.
 
-## 2. What already exists
+If you find yourself deleting the `createQris()` call, stop. You have misread the task.
 
-Read this table before writing anything. Roughly half the work is already done, and two files are
-traps that look useful but are not.
+### What the user will see when this is done
 
-| Thing | Where | State |
-| --- | --- | --- |
-| Pakasir API client | `app/Services/PakasirService.php` | **Works.** `createQris()` and `transactionDetail()`. Do not modify. |
-| Plan QR backend | `SubscriptionController::payWithQr()` | Works, but renders a **full page**. We need JSON. |
-| Plan QR route | `routes/web.php:264` — `POST /plan/qr` | Keep the route, change what it returns. |
-| Pakasir webhook | `app/Http/Controllers/PakasirWebhookController.php` | Works for **plan payments only**. Needs to handle top-ups. |
-| Status endpoint | `app/Http/Controllers/Api/PaymentStatusController.php` | **Broken — see section 3.** Also plan-only. |
-| Top-up backend | `app/Http/Controllers/BillingTopupController.php` | **Stripe only.** No QRIS branch. |
-| Top-up DB columns | `wallet_topups.provider`, `wallet_topups.order_id` | **Already migrated.** No new migration needed. |
-| Wallet crediting | `WalletService::credit()` | Works. Mirror how `StripeWebhookController::handlePaymentIntentSucceeded()` calls it. |
-| `qrcode` npm package | `package.json` | **Already installed.** Used by `Plan/Qr.vue`. |
-| Full-page QR view | `resources/js/Pages/Plan/Qr.vue` | Becomes dead once the dialog works. **Delete in phase 6.** |
-| Standalone QR dialog | `resources/js/Components/plan/QrPaymentDialog.vue` | **Orphaned — imported by nothing.** Plan-only, navigates away. Do not build on it. **Delete in phase 6.** |
+With the flag on: click **Show QR code** → QR appears → about three seconds later the dialog
+flips to **Payment successful** on its own → wallet balance goes up / plan becomes Pro.
 
-> `QrPaymentDialog.vue` will look like a head start. It is not. It only handles the plan case, it
-> navigates away instead of staying in the dialog, and nothing imports it. Read it for the IDR
-> formatting and the "QRIS does not auto-renew" warning copy, then delete it.
+With the flag off: exactly what happens today. QR appears and waits for a real scan.
+
+### Why this is worth building
+
+Testing a QRIS payment today needs: a public tunnel (ngrok) so Pakasir can reach the webhook, a
+dashboard trip to point the webhook at it, and a hand-crafted `curl` to Pakasir with the right
+order id and amount. Every single time. This feature collapses all of that into one click.
 
 ---
 
-## 3. Blocker: fix this first or nothing will work
+## 2. Already done — do not redo
 
-`Plan/Qr.vue` polls `GET /api/payments/{orderId}/status`. That route lives in `routes/api.php`
-behind `auth:sanctum`. But in `app/Http/Kernel.php:45`, the middleware that makes session cookies
-work on API routes is **commented out**:
+| Thing | State |
+| --- | --- |
+| `PakasirService::createQris()` and `transactionDetail()` | Work. Verified against the live sandbox. |
+| Response-shape fixes (`payment` / `transaction` wrappers) | Fixed in PR #40. |
+| QRIS wired into `PaymentDialog.vue` for top-up and plan | Done in PR #42. |
+| `WalletTopup::$fillable` missing `provider` and `order_id` | **Fixed in commit `1ee21c8`.** Before that fix, every QRIS top-up silently saved `order_id = null`, so the webhook could never find it. If you see a top-up row with a null `order_id`, it predates the fix — ignore it and make a new one. |
+| Webhook validates provider, amount, project | Done. |
+
+Everything in this document is additive on top of the above.
+
+---
+
+## 3. The design in one picture
+
+Today the only thing that can mark a QRIS order paid is the webhook:
+
+```
+Pakasir ──POST──▶ /pakasir/webhook ──▶ transactionDetail() ──▶ mark paid, credit wallet
+```
+
+Pakasir cannot reach `localhost`, so locally the webhook never fires and the dialog spins forever.
+
+After this change there are two ways in, sharing one fulfilment path:
+
+```
+Pakasir ──POST──▶ /pakasir/webhook ─────────────┐
+                                                 ├──▶ PakasirFulfillmentService::fulfill()
+controller ──▶ simulatePayment() ──(flag on)─────┘        │
+                                                          ├─ transactionDetail() → must say "completed"
+                                                          └─ mark paid + credit wallet / activate plan
+```
+
+The important word is **sharing**. The "mark paid + credit wallet" code currently lives inside the
+webhook controller. It has to move into a service so the auto-pay path can call the *same* code.
+Copy-pasting it into the controllers instead would give you two places to fix every future bug,
+and money-handling code is the last place you want that.
+
+### Safety — this must never run in production
+
+Auto-pay marks an order paid without any money changing hands. Two independent guards:
+
+1. **An explicit env flag**, off by default: `PAKASIR_AUTO_SIMULATE=true`. Nobody sets that by
+   accident on a production box.
+2. **Pakasir's own word.** `transactionDetail()` returns `"is_sandbox": true` for sandbox
+   projects. The auto-pay path refuses to fulfil unless that field is literally `true`. So even if
+   someone did flip the flag on production with a live project, nothing gets credited.
+
+Both guards, always. Do not remove either one because "the other one covers it."
+
+---
+
+## 4. Files you will touch
+
+| File | Change |
+| --- | --- |
+| `config/services.php` | Add one config key |
+| `.env` | Add one line (not committed) |
+| `app/Services/PakasirService.php` | Add `simulatePayment()` |
+| `app/Services/PakasirFulfillmentService.php` | **New file.** Fulfilment logic moves here. |
+| `app/Http/Controllers/PakasirWebhookController.php` | Shrinks — delegates to the service |
+| `app/Http/Controllers/SubscriptionController.php` | Three lines after `createQris()` |
+| `app/Http/Controllers/BillingTopupController.php` | Three lines after `createQris()` |
+
+Nothing in `resources/js/`. The dialog already polls; it will simply see `paid` sooner.
+
+---
+
+## 5. Phase 1 — Config and env
+
+### `config/services.php`
+
+The `pakasir` block is at line 48. Add one key:
 
 ```php
-'api' => [
-    // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
-    \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
-    \Illuminate\Routing\Middleware\SubstituteBindings::class,
+'pakasir' => [
+    'base_url' => env('PAKASIR_BASE_URL', 'https://app.pakasir.com'),
+    'project' => env('PAKASIR_PROJECT'),
+    'api_key' => env('PAKASIR_API_KEY'),
+    'auto_simulate' => (bool) env('PAKASIR_AUTO_SIMULATE', false),
 ],
 ```
 
-So every poll returns **401**. And `checkStatus()` swallows it:
+The `(bool)` cast matters. Without it, `PAKASIR_AUTO_SIMULATE=false` in `.env` arrives as the
+string `"false"`, which PHP treats as truthy. Laravel's `env()` does convert the literal words
+`true`/`false`, but the cast makes the intent unmissable and protects against `0`/`1`/`""`.
 
-```js
-} catch {
-    // Transient failures are expected while polling; keep waiting.
-}
+### `.env`
+
+```bash
+PAKASIR_AUTO_SIMULATE=true
 ```
 
-The page polls forever, silently, and never notices the payment. If you build the dialog on this
-endpoint without fixing it, you will get a QR code that works, a webhook that fires correctly, a
-database row that says `paid` — and a dialog that spins until the user gives up. You will lose
-hours to it.
+Then clear config. **This project runs inside Docker** — artisan on your host shell cannot reach
+the database (`could not translate host name "postgres"`). Every artisan command in this document
+is run like this:
 
-### The fix: move the route to `web.php`
-
-Do **not** uncomment the Sanctum middleware. That changes CSRF behaviour for every API route and is
-a much bigger blast radius than this feature needs.
-
-Delete the route from `routes/api.php`:
-
-```php
-// DELETE this line
-Route::get('/payments/{orderId}/status', [PaymentStatusController::class, 'show']);
+```bash
+docker exec esign-app php artisan config:clear
 ```
-
-Also delete the now-unused `use App\Http\Controllers\Api\PaymentStatusController;` import at the
-top of that file.
-
-Add it to `routes/web.php`, inside the existing `Route::middleware('auth', 'verified')->group()`
-that starts at line 96 — put it next to the plan routes around line 264:
-
-```php
-Route::get('/payments/{orderId}/status', [PaymentStatusController::class, 'show'])
-    ->name('payments.status');
-```
-
-And import it at the top of `routes/web.php`:
-
-```php
-use App\Http\Controllers\Api\PaymentStatusController;
-```
-
-Leave the controller file in `app/Http/Controllers/Api/` — moving it is churn for no benefit.
-
-The frontend URL stays almost the same, minus the `/api` prefix: `/payments/{orderId}/status`.
 
 ---
 
-## 4. How the pieces fit together
+## 6. Phase 2 — `PakasirService::simulatePayment()`
 
-Same shape for both modes. Learn it once:
+**File:** `app/Services/PakasirService.php`
 
-```
-1. User picks QRIS, presses the button
-2. POST to the backend (plan.qr or billing.topups.store)
-3. Backend: create a pending DB row with a unique order_id
-4. Backend: call PakasirService::createQris()
-5. Backend: return JSON { orderId, amountIdr, qrString, expiredAt }
-6. Dialog: render qrString to a <canvas> with the qrcode package
-7. Dialog: poll GET /payments/{orderId}/status every 3 seconds
-8. User scans and pays
-9. Pakasir POSTs our webhook -> we verify -> mark row paid, credit wallet / activate plan
-10. The next poll sees "paid" -> dialog shows success, stops polling
-```
-
-Two order-id prefixes, so the webhook can tell them apart:
-
-- `SUB-{organizationId}-{timestamp}` — plan payment (already used by `payWithQr`)
-- `TOP-{organizationId}-{timestamp}` — wallet top-up (you will add this)
-
-### The amount trap — read this twice
-
-Pakasir only deals in **whole rupiah**. Both the webhook and `transactionDetail()` need the exact
-IDR figure we charged. Where that figure lives differs per table:
-
-| Table | Where the IDR amount lives | Why |
-| --- | --- | --- |
-| `subscription_payments` | the `amount` column | `payWithQr` stores `currency: 'IDR'`, `amount: $amountIdr` |
-| `wallet_topups` | `metadata['amount_idr']` — **you must write it** | The `amount` column holds the **USD** figure the user typed |
-
-If you compare the webhook's IDR amount against `wallet_topups.amount`, every top-up webhook will
-be rejected as a mismatch, because you will be comparing `150000` against `10`. This is the single
-most likely way to get this feature wrong.
-
----
-
-## 5. Phase 1 — Plan QRIS returns JSON
-
-**File:** `app/Http/Controllers/SubscriptionController.php`, `payWithQr()`, around lines 227–237.
-
-Everything above the `createQris()` call stays exactly as it is. Only the return changes.
-
-### Current
+Add this method after `transactionDetail()`. It is the same shape as `createQris()` with a
+different path:
 
 ```php
-$result = $pakasir->createQris($orderId, $amountIdr);
-
-$payload = $result['payment'] ?? [];
-
-return Inertia::render('Plan/Qr', [
-    'orderId' => $orderId,
-    'amountIdr' => $amountIdr,
-    'qrString' => $payload['payment_number'] ?? null,
-    'expiredAt' => $payload['expired_at'] ?? null,
-]);
-```
-
-### Replace with
-
-```php
-$result = $pakasir->createQris($orderId, $amountIdr);
-
-$payload = $result['payment'] ?? [];
-
-return response()->json([
-    'orderId' => $orderId,
-    'amountIdr' => $amountIdr,
-    'qrString' => $payload['payment_number'] ?? null,
-    'expiredAt' => $payload['expired_at'] ?? null,
-]);
-```
-
-That is the entire change — `Inertia::render('Plan/Qr', [...])` becomes `response()->json([...])`.
-
-### Also: the error return
-
-The exchange-rate failure earlier in this method (around line 205) still uses
-`back()->withErrors([...])`. `back()` is an Inertia redirect, and the dialog calls this with
-`axios`, so it will not produce a readable error. Change it to:
-
-```php
-return response()->json([
-    'message' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
-], 422);
-```
-
-The dialog reads `error.response.data.message`, which is exactly what the existing `catch` in
-`PaymentDialog.submit()` already does.
-
-Leave the `use Inertia\Inertia;` import alone — `index()` still uses it.
-
----
-
-## 6. Phase 2 — Top-up QRIS
-
-**File:** `app/Http/Controllers/BillingTopupController.php`
-
-This controller already computes the wallet credit, the FX rate and the pending `WalletTopup` row.
-Reuse all of it. You are adding one branch just before the Stripe section.
-
-### 6.1 Accept a `method` field
-
-In the `$request->validate([...])` block around line 37, add:
-
-```php
-'method' => [
-    'nullable',
-    'string',
-    'in:card,qris',
-],
-```
-
-Nullable, so existing card callers that send no `method` keep working.
-
-### 6.2 Add the QRIS branch
-
-Insert this **after** the `$topup` is created (after the `Log::info('...TOPUP CREATED', ...)` call
-around line 189) and **before** the `try {` that builds the Stripe PaymentIntent:
-
-```php
-if (($validated['method'] ?? 'card') === 'qris') {
-    $rate = $this->exchangeRateService->usdToIdr();
-
-    if (! $rate || $rate <= 0) {
-        return response()->json([
-            'message' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
-        ], 422);
-    }
-
-    $amountIdr = (int) round(($walletAmountUsdCents / 100) * $rate);
-    $orderId = 'TOP-'.$organization->id.'-'.now()->timestamp;
-
-    $topup->update([
-        'provider' => 'pakasir',
-        'order_id' => $orderId,
-        // The webhook and transactionDetail() both need the exact rupiah figure.
-        // wallet_topups.amount holds USD, so it cannot answer that.
-        'metadata' => array_merge($topup->metadata ?? [], [
-            'amount_idr' => $amountIdr,
-        ]),
-    ]);
-
-    $result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
-    $payload = $result['payment'] ?? [];
-
-    return response()->json([
-        'orderId' => $orderId,
-        'amountIdr' => $amountIdr,
-        'qrString' => $payload['payment_number'] ?? null,
-        'expiredAt' => $payload['expired_at'] ?? null,
-    ]);
-}
-```
-
-`$walletAmountUsdCents` is already in scope — it is computed further up and is the canonical
-USD-cent value whether the user typed USD or IDR. Derive the rupiah figure from it rather than from
-`$sourceAmount`, so both input currencies behave the same.
-
-Keep the comment above `metadata`. It is the non-obvious constraint from section 4.
-
----
-
-## 7. Phase 3 — Webhook handles top-ups
-
-**File:** `app/Http/Controllers/PakasirWebhookController.php`
-
-Today this only looks in `subscription_payments`. A top-up webhook arrives, finds no row, logs
-"unknown order", and the user's money sits in a `pending` row forever.
-
-### 7.1 Imports
-
-```php
-use App\Models\WalletTopup;
-use App\Services\WalletService;
-```
-
-### 7.2 Find the record in either table
-
-Replace the `$payment = SubscriptionPayment::where(...)` lookup and its `if (! $payment)` guard
-with:
-
-```php
-$payment = SubscriptionPayment::where('order_id', $orderId)->first();
-$topup = $payment ? null : WalletTopup::where('order_id', $orderId)->first();
-
-$record = $payment ?? $topup;
-
-if (! $record) {
-    Log::warning('Pakasir webhook for unknown order', ['order_id' => $orderId]);
-
-    return response()->json(['received' => true]);
-}
-
-// subscription_payments.amount is already IDR. wallet_topups.amount is USD,
-// so the rupiah figure lives in metadata (see BillingTopupController).
-$expectedIdr = $payment
-    ? (int) $payment->amount
-    : (int) ($topup->metadata['amount_idr'] ?? 0);
-```
-
-### 7.3 Update the validation guards
-
-The three guards (provider, amount, project) currently reference `$payment`. Point them at
-`$record` and `$expectedIdr`:
-
-```php
-if ($record->provider !== 'pakasir') {
-    Log::warning('Pakasir webhook for non-Pakasir payment', [
-        'order_id' => $orderId,
-        'provider' => $record->provider,
-    ]);
-
-    return response()->json(['received' => true]);
-}
-
-if ((int) $request->input('amount') !== $expectedIdr) {
-    Log::warning('Pakasir webhook amount mismatch', [
-        'order_id' => $orderId,
-        'expected' => $expectedIdr,
-        'received' => $request->input('amount'),
-    ]);
-
-    return response()->json(['received' => true]);
-}
-
-if ($request->input('project') !== config('services.pakasir.project')) {
-    Log::warning('Pakasir webhook project mismatch', [
-        'order_id' => $orderId,
-        'expected' => config('services.pakasir.project'),
-        'received' => $request->input('project'),
-    ]);
-
-    return response()->json(['received' => true]);
-}
-```
-
-### 7.4 Confirm with Pakasir using the rupiah figure
-
-```php
-$detail = $pakasir->transactionDetail($orderId, $expectedIdr);
-
-$transaction = $detail['transaction'] ?? [];
-$status = $transaction['status'] ?? null;
-
-if ($status !== 'completed') {
-    Log::info('Pakasir transaction not completed', [
-        'order_id' => $orderId,
-        'status' => $status,
-    ]);
-
-    return response()->json(['received' => true]);
-}
-```
-
-### 7.5 Branch the fulfilment
-
-The existing `DB::transaction(...)` block handles the plan case. Wrap it so top-ups take the wallet
-path instead:
-
-```php
-if ($payment) {
-    DB::transaction(function () use ($payment) {
-        $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
-
-        if ($payment->status === 'paid') {
-            return;
-        }
-
-        $payment->update(['status' => 'paid', 'paid_at' => now()]);
-
-        $payment->organization->subscription->update([
-            'plan' => $payment->plan,
-            'status' => 'active',
-            'provider' => 'pakasir',
-            'subscribed_at' => now(),
-            'expired_at' => now()->addDays(30),
+public function simulatePayment(string $orderId, int $amountIdr): array
+{
+    $response = Http::asJson()
+        ->post($this->baseUrl.'/api/paymentsimulation', [
+            'project' => $this->project,
+            'order_id' => $orderId,
+            'amount' => $amountIdr,
+            'api_key' => $this->apiKey,
         ]);
-    });
 
-    return response()->json(['received' => true]);
+    $response->throw();
+
+    return $response->json();
 }
-
-DB::transaction(function () use ($topup, $orderId) {
-    $topup = WalletTopup::lockForUpdate()->find($topup->id);
-
-    if ($topup->status === 'paid') {
-        return;
-    }
-
-    app(WalletService::class)->credit(
-        organization: $topup->organization,
-        sourceCurrency: $topup->currency,
-        sourceAmount: (float) $topup->amount,
-        exchangeRate: (float) $topup->exchange_rate,
-        amountUsdCents: (int) $topup->wallet_amount_usd_cents,
-        type: 'topup',
-        description: 'Wallet top-up via QRIS',
-        reference: $topup,
-        createdBy: $topup->created_by,
-        metadata: ['pakasir_order_id' => $orderId],
-    );
-
-    $topup->update(['status' => 'paid', 'paid_at' => now()]);
-});
-
-return response()->json(['received' => true]);
 ```
 
-The `status === 'paid'` early return inside the lock is the idempotency guard. Pakasir retries
-webhooks, so double delivery is normal, not hypothetical. Credit once or you hand out free money.
+On success Pakasir returns `{"success": true}`. On an unknown order it returns 404, and
+`->throw()` turns that into an exception — which is what you want, because it means
+`createQris()` did not run first.
 
-This mirrors `StripeWebhookController::handlePaymentIntentSucceeded()` (around line 291) almost
-exactly. If you are unsure about a `credit()` argument, read that method.
+Do not add any sandbox checks here. This class is a thin HTTP client and should stay that way.
 
 ---
 
-## 8. Phase 4 — Status endpoint covers top-ups
+## 7. Phase 3 — `PakasirFulfillmentService` (new file)
 
-**File:** `app/Http/Controllers/Api/PaymentStatusController.php`
+**File:** `app/Services/PakasirFulfillmentService.php`
 
-It currently only checks `SubscriptionPayment`, so a `TOP-` order id 404s and the dialog polls
-forever.
+This is the whole file. It is the "mark paid + credit wallet / activate plan" code lifted out of
+the webhook, with the two-table amount lookup folded in so callers cannot get it wrong.
 
 ```php
 <?php
 
-namespace App\Http\Controllers\Api;
+namespace App\Services;
 
-use App\Http\Controllers\Controller;
 use App\Models\SubscriptionPayment;
 use App\Models\WalletTopup;
-use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
-class PaymentStatusController extends Controller
+class PakasirFulfillmentService
 {
-    public function show(Request $request, string $orderId)
+    public function __construct(
+        protected PakasirService $pakasir,
+        protected WalletService $wallet,
+    ) {}
+
+    /**
+     * The rupiah figure Pakasir was asked to charge for this record.
+     *
+     * subscription_payments.amount is already IDR. wallet_topups.amount is the
+     * USD the user typed, so its rupiah figure lives in metadata.
+     */
+    public function amountIdr(SubscriptionPayment|WalletTopup $record): int
     {
+        return $record instanceof SubscriptionPayment
+            ? (int) $record->amount
+            : (int) ($record->metadata['amount_idr'] ?? 0);
+    }
+
+    /**
+     * Confirm with Pakasir that the order is completed, then mark it paid locally.
+     *
+     * Returns true when the record is (now) paid. Returns false when Pakasir has
+     * not completed it, or when $sandboxOnly is set and Pakasir does not report
+     * the transaction as sandbox. Safe to call twice: a paid record is a no-op.
+     */
+    public function fulfill(SubscriptionPayment|WalletTopup $record, bool $sandboxOnly = false): bool
+    {
+        $detail = $this->pakasir->transactionDetail($record->order_id, $this->amountIdr($record));
+        $transaction = $detail['transaction'] ?? [];
+
+        if (($transaction['status'] ?? null) !== 'completed') {
+            Log::info('Pakasir transaction not completed', [
+                'order_id' => $record->order_id,
+                'status' => $transaction['status'] ?? null,
+            ]);
+
+            return false;
+        }
+
+        if ($sandboxOnly && ($transaction['is_sandbox'] ?? false) !== true) {
+            Log::error('Refused to auto-fulfil a non-sandbox Pakasir transaction', [
+                'order_id' => $record->order_id,
+            ]);
+
+            return false;
+        }
+
+        if ($record instanceof SubscriptionPayment) {
+            $this->fulfillSubscription($record);
+        } else {
+            $this->fulfillTopup($record);
+        }
+
+        return true;
+    }
+
+    protected function fulfillSubscription(SubscriptionPayment $payment): void
+    {
+        DB::transaction(function () use ($payment) {
+            $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
+
+            if ($payment->status === 'paid') {
+                return;
+            }
+
+            $payment->update(['status' => 'paid', 'paid_at' => now()]);
+
+            $payment->organization->subscription->update([
+                'plan' => $payment->plan,
+                'status' => 'active',
+                'provider' => 'pakasir',
+                'subscribed_at' => now(),
+                'expired_at' => now()->addDays(30),
+            ]);
+        });
+    }
+
+    protected function fulfillTopup(WalletTopup $topup): void
+    {
+        DB::transaction(function () use ($topup) {
+            $topup = WalletTopup::lockForUpdate()->find($topup->id);
+
+            if ($topup->status === 'paid') {
+                return;
+            }
+
+            $this->wallet->credit(
+                organization: $topup->organization,
+                sourceCurrency: $topup->currency,
+                sourceAmount: (float) $topup->amount,
+                exchangeRate: (float) $topup->exchange_rate,
+                amountUsdCents: (int) $topup->wallet_amount_usd_cents,
+                type: 'topup',
+                description: 'Wallet top-up via QRIS',
+                reference: $topup,
+                createdBy: $topup->created_by,
+                metadata: ['pakasir_order_id' => $topup->order_id],
+            );
+
+            $topup->update(['status' => 'paid', 'paid_at' => now()]);
+        });
+    }
+}
+```
+
+Three things to notice, because they are the difference between "works" and "works safely":
+
+- **`lockForUpdate()` + the `status === 'paid'` early return** is the idempotency guard. Pakasir
+  retries webhooks, and with auto-pay on, the webhook *and* the controller may both try to fulfil
+  the same order. This guarantees the wallet is credited exactly once.
+- **`$sandboxOnly` is checked against `=== true`**, not truthiness. A missing field or a string
+  `"true"` must not pass. Money.
+- **The two `fulfill*` methods are lifted verbatim** from the current webhook. If you are tempted
+  to "improve" them while moving, don't. Move first, verify, then improve in a separate PR.
+
+Laravel resolves the two constructor dependencies automatically — no service-provider registration
+is needed.
+
+---
+
+## 8. Phase 4 — Webhook delegates to the service
+
+**File:** `app/Http/Controllers/PakasirWebhookController.php`
+
+The webhook keeps everything about *trusting an inbound request* (order lookup, provider/amount/
+project validation) and hands the *fulfilment* to the service. Replace the file with this:
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\SubscriptionPayment;
+use App\Models\WalletTopup;
+use App\Services\PakasirFulfillmentService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+
+class PakasirWebhookController extends Controller
+{
+    public function handle(Request $request, PakasirFulfillmentService $fulfillment)
+    {
+        $orderId = $request->input('order_id');
+
+        if (! $orderId) {
+            return response()->json(['error' => 'order_id missing'], 400);
+        }
+
         $record = SubscriptionPayment::where('order_id', $orderId)->first()
             ?? WalletTopup::where('order_id', $orderId)->first();
 
-        abort_unless(
-            $record && $record->organization_id === $request->user()?->organization_id,
-            404
-        );
+        if (! $record) {
+            Log::warning('Pakasir webhook for unknown order', ['order_id' => $orderId]);
 
-        return response()->json([
-            'status' => $record->status,
-            'paid_at' => $record->paid_at,
-        ]);
-    }
-}
-```
-
-Keep the `organization_id` check. It is what stops one org polling another org's order ids.
-
----
-
-## 9. Phase 5 — The dialog
-
-**File:** `resources/js/Components/payment/PaymentDialog.vue`
-
-### 9.1 Imports and state
-
-Add to the imports:
-
-```js
-import QRCode from "qrcode";
-```
-
-Add alongside the existing refs:
-
-```js
-const qrCanvas = ref(null);
-const qrString = ref("");
-const qrOrderId = ref("");
-const qrAmountIdr = ref(0);
-const qrLoading = ref(false);
-
-let qrPollTimer = null;
-```
-
-And a formatter:
-
-```js
-const formattedIdr = computed(() =>
-    new Intl.NumberFormat("id-ID", {
-        style: "currency",
-        currency: "IDR",
-        maximumFractionDigits: 0,
-    }).format(qrAmountIdr.value),
-);
-```
-
-### 9.2 Generating the QR
-
-```js
-async function generateQr() {
-    if (qrLoading.value) {
-        return;
-    }
-
-    qrLoading.value = true;
-    error.value = "";
-
-    try {
-        const { data } =
-            props.mode === "topup"
-                ? await window.axios.post(route("billing.topups.store"), {
-                      currency: "USD",
-                      amount: numericAmount.value,
-                      method: "qris",
-                  })
-                : await window.axios.post(route("plan.qr"), {
-                      plan: props.planKey ?? "pro",
-                  });
-
-        if (!data.qrString) {
-            fail("The payment provider did not return a QR code. Please try again.");
-            return;
+            return response()->json(['received' => true]);
         }
 
-        qrString.value = data.qrString;
-        qrOrderId.value = data.orderId;
-        qrAmountIdr.value = data.amountIdr;
+        if ($record->provider !== 'pakasir') {
+            Log::warning('Pakasir webhook for non-Pakasir payment', [
+                'order_id' => $orderId,
+                'provider' => $record->provider,
+            ]);
 
-        await nextTick();
-
-        // Fixed black-on-white: a QR needs maximum contrast to scan, so it
-        // keeps its own colours rather than following the theme.
-        await QRCode.toCanvas(qrCanvas.value, data.qrString, {
-            width: 240,
-            margin: 1,
-            color: { dark: "#08090a", light: "#ffffff" },
-        });
-
-        startQrPolling();
-    } catch (requestError) {
-        fail(requestError.response?.data?.message);
-    } finally {
-        qrLoading.value = false;
-    }
-}
-```
-
-`nextTick()` matters. The canvas sits behind `v-if`, so it does not exist in the DOM until Vue has
-re-rendered. Without the await, `qrCanvas.value` is `null` and nothing draws.
-
-### 9.3 Polling
-
-```js
-function startQrPolling() {
-    stopQrPolling();
-    qrPollTimer = window.setInterval(checkQrStatus, 3000);
-}
-
-function stopQrPolling() {
-    if (qrPollTimer) {
-        window.clearInterval(qrPollTimer);
-        qrPollTimer = null;
-    }
-}
-
-async function checkQrStatus() {
-    try {
-        const { data } = await window.axios.get(
-            `/payments/${qrOrderId.value}/status`,
-        );
-
-        if (data.status === "paid") {
-            stopQrPolling();
-
-            succeed(
-                props.mode === "topup"
-                    ? `We received ${formattedIdr.value}. Your balance is updated.`
-                    : `You are now on the ${plan.value?.label ?? "Pro"} plan for the next 30 days.`,
-            );
+            return response()->json(['received' => true]);
         }
-    } catch {
-        // Transient failures are expected while polling; keep waiting.
+
+        $expectedIdr = $fulfillment->amountIdr($record);
+
+        if ((int) $request->input('amount') !== $expectedIdr) {
+            Log::warning('Pakasir webhook amount mismatch', [
+                'order_id' => $orderId,
+                'expected' => $expectedIdr,
+                'received' => $request->input('amount'),
+            ]);
+
+            return response()->json(['received' => true]);
+        }
+
+        if ($request->input('project') !== config('services.pakasir.project')) {
+            Log::warning('Pakasir webhook project mismatch', [
+                'order_id' => $orderId,
+                'expected' => config('services.pakasir.project'),
+                'received' => $request->input('project'),
+            ]);
+
+            return response()->json(['received' => true]);
+        }
+
+        $fulfillment->fulfill($record);
+
+        return response()->json(['received' => true]);
     }
 }
 ```
 
-Note the URL has **no `/api` prefix** — that is the phase 3 route move.
+What changed: `use App\Services\PakasirService`, `DB`, and `WalletService` imports are gone; the
+two `DB::transaction` blocks are gone; `transactionDetail()` is no longer called here. The file
+drops from ~130 lines to ~60. The behaviour for real webhooks is **identical** — every guard is
+still there in the same order and still returns `received: true`.
 
-### 9.4 Cleanup
-
-The existing `watch(open, ...)` resets card state. Add the QR state to both branches, and stop the
-timer:
-
-```js
-watch(open, (isOpen) => {
-    if (isOpen) {
-        error.value = "";
-        amount.value = "";
-        method.value = "card";
-        status.value = "form";
-        resultMessage.value = "";
-        qrString.value = "";
-        qrOrderId.value = "";
-        qrAmountIdr.value = 0;
-        mountCard();
-        return;
-    }
-
-    stopQrPolling();
-
-    if (status.value === "success" && props.mode === "topup") {
-        router.reload({ only: ["wallet", "stats", "transactions"] });
-    }
-
-    processing.value = false;
-    unmountCard();
-});
-```
-
-Extend the unmount hook too — `onBeforeUnmount(unmountCard)` becomes:
-
-```js
-onBeforeUnmount(() => {
-    unmountCard();
-    stopQrPolling();
-});
-```
-
-A timer that outlives the dialog keeps polling a dead order id forever. Easy to miss, and it will
-not show up in manual testing.
-
-### 9.5 The QRIS tab markup
-
-Replace the placeholder block (the `<div v-show="method === 'qris'" ...>` with the `TODO` copy,
-around lines 418–426) with three states: before generating, after generating, and the always-on
-renewal warning for plan mode.
-
-```html
-<div v-show="method === 'qris'" class="space-y-4">
-    <!-- Before generating -->
-    <template v-if="!qrString">
-        <div v-if="mode === 'topup'" class="space-y-2">
-            <Label for="qris-amount">Amount</Label>
-
-            <div class="relative">
-                <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
-                    $
-                </span>
-
-                <Input
-                    id="qris-amount"
-                    v-model="amount"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="10.00"
-                    class="pl-8"
-                    :disabled="qrLoading"
-                />
-            </div>
-
-            <p class="text-xs text-muted-foreground">
-                You pay in rupiah at today's rate. Your wallet is credited in US dollars.
-            </p>
-        </div>
-
-        <div v-else class="rounded-lg border bg-card p-4">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs text-muted-foreground">Plan</p>
-                    <p class="mt-1 text-lg font-semibold">{{ plan?.label }}</p>
-                </div>
-
-                <div class="text-right">
-                    <p class="text-xs text-muted-foreground">Price</p>
-                    <p class="mt-1 text-lg font-semibold">{{ formattedPrice }}/month</p>
-                </div>
-            </div>
-        </div>
-    </template>
-
-    <!-- After generating -->
-    <div v-else class="flex flex-col items-center gap-4 py-2">
-        <div class="text-center">
-            <p class="text-xs text-muted-foreground">Amount due</p>
-            <p class="mt-1 text-2xl font-bold tracking-tight">{{ formattedIdr }}</p>
-        </div>
-
-        <div class="rounded-xl border bg-white p-4">
-            <canvas ref="qrCanvas" />
-        </div>
-
-        <div class="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 class="h-4 w-4 animate-spin" />
-            <span>Waiting for payment</span>
-        </div>
-    </div>
-
-    <!-- Renewal warning, plan mode only -->
-    <div v-if="mode === 'plan'" class="flex gap-3 rounded-lg border bg-muted/30 p-3">
-        <TriangleAlert class="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-
-        <div class="space-y-1">
-            <p class="text-xs font-medium">QRIS does not renew automatically</p>
-            <p class="text-xs leading-5 text-muted-foreground">
-                This one-off payment covers 30 days. You will need to pay again before it
-                expires, or your organization drops back to the Free plan.
-            </p>
-        </div>
-    </div>
-
-    <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
-</div>
-```
-
-`TriangleAlert`, `Loader2` and `QrCode` are already imported at the top of the file.
-
-### 9.6 The footer button
-
-The footer currently hard-disables the submit button on the QRIS tab
-(`:disabled="processing || method === 'qris' || !cardReady"`). That is what stops QRIS from
-working. Replace the `v-else` footer template with a branch per tab:
-
-```html
-<template v-else>
-    <Button
-        type="button"
-        variant="outline"
-        :disabled="processing || qrLoading"
-        @click="open = false"
-    >
-        Cancel
-    </Button>
-
-    <!-- QRIS -->
-    <Button
-        v-if="method === 'qris'"
-        type="button"
-        class="gap-2"
-        :disabled="qrLoading || !!qrString || (mode === 'topup' && numericAmount <= 0)"
-        @click="generateQr"
-    >
-        <Loader2 v-if="qrLoading" class="h-4 w-4 animate-spin" />
-        <QrCode v-else class="h-4 w-4" />
-
-        {{ qrLoading ? "Generating..." : qrString ? "Waiting for payment" : "Show QR code" }}
-    </Button>
-
-    <!-- Card -->
-    <Button
-        v-else
-        type="button"
-        class="gap-2"
-        :disabled="processing || !cardReady"
-        @click="submit"
-    >
-        <Loader2 v-if="processing" class="h-4 w-4 animate-spin" />
-        <CreditCard v-else class="h-4 w-4" />
-
-        {{ processing ? "Processing..." : "Continue" }}
-    </Button>
-</template>
-```
-
-The card button keeps `!cardReady` in its disabled condition. The QRIS button must **not** — the
-Stripe card element has nothing to do with QRIS, and gating on it would leave the QRIS tab dead
-whenever Stripe is slow or misconfigured.
+Note the webhook calls `fulfill($record)` with `$sandboxOnly` left at its default `false`. In
+production the webhook fulfils real, non-sandbox transactions. Only the auto-pay path passes
+`true`.
 
 ---
 
-## 10. Phase 6 — Delete the dead files
+## 9. Phase 5 — Auto-pay in the two controllers
 
-Once the dialog works end to end:
+Same three lines in both places, inserted **after** `createQris()` and **before** the
+`return response()->json([...])`.
 
-```bash
-rm resources/js/Components/plan/QrPaymentDialog.vue
-rm resources/js/Pages/Plan/Qr.vue
-```
-
-Then confirm nothing references them:
-
-```bash
-grep -rn "QrPaymentDialog\|Plan/Qr" resources/js/ app/
-```
-
-Expected output: nothing. If `Plan/Qr` still appears in `SubscriptionController.php`, phase 1 was
-not finished.
-
-Do this **last**. Keeping `Plan/Qr.vue` around while you work gives you a reference implementation
-of the canvas rendering and polling that is known to work.
-
----
-
-## 11. Verification
-
-### 11.1 Setup
-
-`.env` needs:
-
-```bash
-PAKASIR_BASE_URL=https://app.pakasir.com
-PAKASIR_PROJECT=ezsign
-PAKASIR_API_KEY=<from the Pakasir dashboard>
-```
-
-Then `php artisan config:clear`.
-
-Pakasir cannot reach localhost, so tunnel it:
-
-```bash
-ngrok http 8000
-```
-
-Set the webhook URL on the Pakasir dashboard (project → **Edit Proyek**) to
-`https://<your-tunnel>.ngrok-free.app/pakasir/webhook`.
-
-Keep a log tail open the whole time:
-
-```bash
-tail -f storage/logs/laravel.log
-```
-
-### 11.2 Top-up flow
-
-1. Log in as an organization **owner**. Both endpoints are owner-only; anyone else gets a 403 and
-   you will waste time wondering why the button does nothing.
-2. Billing page → **Top Up Wallet** → **QRIS** tab.
-3. Enter `10`, press **Show QR code**.
-4. A QR renders inside the dialog. The rupiah amount above it looks sane for $10.
-5. Note the order id (`TOP-...`) from the network response.
-6. Trigger the sandbox simulation: `POST https://app.pakasir.com/api/paymentsimulation` with your
-   project slug, that order id, the rupiah amount and your API key. Check the docs page for the
-   exact body.
-7. Within ~3 seconds the dialog flips to the success state.
-8. Close it. The wallet balance has gone up by about $10.
-
-### 11.3 Plan flow
-
-Same, from the Plan page → **Upgrade** → **QRIS** tab. Order id starts with `SUB-`. After payment
-the plan shows **Pro / active**.
-
-### 11.4 Database check
-
-```bash
-php artisan tinker
-```
+### `SubscriptionController::payWithQr()` — after line 237
 
 ```php
-$t = App\Models\WalletTopup::latest()->first();
-$t->status;                  // "paid"
-$t->provider;                // "pakasir"
-$t->order_id;                // "TOP-..."
-$t->metadata['amount_idr'];  // the rupiah figure — must not be null
-$t->wallet->balance_usd_cents;
+$result = $pakasir->createQris($orderId, $amountIdr);
+
+if (config('services.pakasir.auto_simulate')) {
+    $pakasir->simulatePayment($orderId, $amountIdr);
+    app(PakasirFulfillmentService::class)->fulfill($payment, sandboxOnly: true);
+}
+
+$payload = $result['payment'] ?? [];
 ```
 
-If `metadata['amount_idr']` is null, phase 2 is wrong and the webhook will have rejected the
-payment as an amount mismatch. Check the log for `Pakasir webhook amount mismatch`.
+Add the import at the top of the file:
 
-### 11.5 Idempotency
+```php
+use App\Services\PakasirFulfillmentService;
+```
 
-Fire the same webhook twice by hand and confirm the wallet is credited **once**:
+`$payment` is the `SubscriptionPayment` created a few lines above. It already has the
+`order_id`, so the service can look it up at Pakasir.
+
+### `BillingTopupController::store()` — inside the `if ($isQris)` branch, after line 233
+
+```php
+$result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
+
+if (config('services.pakasir.auto_simulate')) {
+    app(\App\Services\PakasirService::class)->simulatePayment($orderId, $amountIdr);
+    app(\App\Services\PakasirFulfillmentService::class)->fulfill($topup, sandboxOnly: true);
+}
+
+$payload = $result['payment'] ?? [];
+```
+
+`$topup` was updated with `provider`, `order_id` and `metadata.amount_idr` just above this, so
+`fulfill()` can find the rupiah figure. That update only works because of the `$fillable` fix in
+section 2 — it is why that fix is a prerequisite.
+
+### Why the order matters
+
+The QR **must** be created before the simulation (section 1). And fulfilment runs **before** the
+JSON is returned, so by the time the dialog renders the QR and fires its first status poll three
+seconds later, the row already says `paid`. That is what produces the "QR flashes, then success"
+experience.
+
+---
+
+## 10. Verification
+
+All artisan commands go through Docker. Log tail:
 
 ```bash
-curl -X POST https://<your-tunnel>.ngrok-free.app/pakasir/webhook \
+docker exec esign-app tail -f storage/logs/laravel.log
+```
+
+### 10.1 Flag on — the feature
+
+1. `.env`: `PAKASIR_AUTO_SIMULATE=true`, then `docker exec esign-app php artisan config:clear`.
+2. Log in as an organization **owner** (both endpoints are owner-only).
+3. Billing → **Top Up Wallet** → **QRIS** → enter `10` → **Show QR code**.
+4. QR appears. Within ~3 seconds the dialog flips to **Payment successful**.
+5. Close. Wallet balance has gone up by ~$10.
+6. Repeat from the Plan page → **Upgrade** → **QRIS**. Plan shows **Pro / active** afterwards.
+
+Database check:
+
+```bash
+docker exec esign-app php artisan tinker --execute="
+\$t = App\Models\WalletTopup::latest()->first();
+echo 'order_id: '.\$t->order_id.PHP_EOL;
+echo 'provider: '.\$t->provider.PHP_EOL;
+echo 'status:   '.\$t->status.PHP_EOL;
+echo 'balance:  '.\$t->wallet->balance_usd_cents.PHP_EOL;
+"
+```
+
+`order_id` starts with `TOP-`, `provider` is `pakasir`, `status` is `paid`. If `order_id` is
+null, you are looking at a row from before the `$fillable` fix — make a fresh top-up.
+
+### 10.2 Flag off — nothing changed
+
+1. `.env`: `PAKASIR_AUTO_SIMULATE=false`, `config:clear`.
+2. Show a QR. It stays on **Waiting for payment**. This is correct — it is today's behaviour.
+3. Confirm the webhook path still works end-to-end without the flag. Grab the order id and
+   amount from the row, then simulate at Pakasir and deliver the webhook by hand:
+
+```bash
+# 1) tell Pakasir the order is paid
+curl -s -X POST https://app.pakasir.com/api/paymentsimulation \
   -H "Content-Type: application/json" \
-  -d '{"order_id":"TOP-...","amount":<rupiah>,"project":"ezsign","status":"completed"}'
+  -d '{"project":"ezsign","order_id":"TOP-...","amount":17813,"api_key":"<your key>"}'
+
+# 2) deliver the webhook Pakasir would have sent
+curl -s -X POST http://localhost:8000/pakasir/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"TOP-...","amount":17813,"project":"ezsign","status":"completed"}'
 ```
 
-Run it twice. `balance_usd_cents` must be identical after the second call. This is the test that
-protects real money — do not skip it.
+The dialog flips to success on its next poll. This proves the refactored webhook still fulfils.
+`/pakasir/webhook` is CSRF-exempt (`VerifyCsrfToken::$except`) so the plain `curl` is accepted.
 
-### 11.6 Card regression
+### 10.3 Idempotency — protects real money
 
-Run one card top-up and one card plan upgrade. Phase 2 touched the shared validation block and
-phase 5 rewrote the footer, so both card paths need a look before you call this done.
+With the flag on, make one top-up (auto-fulfilled). Then deliver the webhook for that same order
+by hand, as in 10.2 step 2. Run it twice. `balance_usd_cents` must not move on either call.
 
-### 11.7 Build
+### 10.4 The sandbox guard
+
+This is hard to test without a live project, so test the code path directly:
 
 ```bash
-npm run build
-php artisan test
+docker exec esign-app php artisan tinker --execute="
+\$t = App\Models\WalletTopup::where('status','pending')->whereNotNull('order_id')->latest()->first();
+\$svc = app(App\Services\PakasirFulfillmentService::class);
+var_dump(\$svc->fulfill(\$t, sandboxOnly: true));
+"
 ```
 
----
+Against the sandbox project this prints `bool(true)` (Pakasir reports `is_sandbox: true`). Now
+read the `is_sandbox` check in `fulfill()` and convince yourself that a response without that
+field, or with `"is_sandbox": "true"` as a string, returns `false` and logs the refusal.
 
-## 12. Traps
+### 10.5 Build and syntax
 
-**The 401 polling trap.** Section 3. If the dialog spins forever but the database says `paid`, this
-is why. Check the browser Network tab for 401s on the status endpoint.
+```bash
+docker exec esign-app php -l app/Services/PakasirFulfillmentService.php
+docker exec esign-app php -l app/Http/Controllers/PakasirWebhookController.php
+npm run build
+```
 
-**The IDR-vs-USD amount trap.** Section 4. If top-up webhooks log `Pakasir webhook amount mismatch`,
-you are comparing rupiah against dollars.
-
-**Do not gate the QRIS button on `cardReady`.** Section 9.6.
-
-**Do not modify `PakasirService.php`.** It returns the API response as-is, on purpose. The wrapper
-keys (`payment`, `transaction`) get unwrapped at the call site so the code reads the same shape the
-docs show. Unwrapping in the service hides that from every caller.
-
-**Do not uncomment the Sanctum middleware** as a shortcut for section 3. It changes CSRF handling
-for every API route.
-
-**Rounding.** `(int) round(...)` for rupiah, always. Pakasir rejects decimals, and a float that
-arrives as `149999.99999` will not match the webhook's `150000`.
-
-**`nextTick()` before drawing the canvas.** Section 9.2.
-
-**Reuse the top-up amount logic.** `BillingTopupController` already handles USD and IDR input, the
-FX lookup and the wallet-credit maths. Add a branch, do not write a parallel path.
+`php artisan test` currently fails on every test with the `postgres` hostname error regardless of
+your changes — it is a test-environment problem, not yours. Do not chase it in this PR.
 
 ---
 
-## 13. Definition of done
+## 11. Traps
 
-- [ ] Status route moved from `routes/api.php` to `routes/web.php`; polling returns 200, not 401
-- [ ] `payWithQr()` returns JSON; its error path returns a 422 with a `message`
-- [ ] `BillingTopupController` accepts `method: "qris"` and returns the QR payload
-- [ ] `wallet_topups.metadata['amount_idr']` is written on every QRIS top-up
-- [ ] Webhook resolves orders from both `subscription_payments` and `wallet_topups`
-- [ ] Webhook credits the wallet for `TOP-` orders and activates the plan for `SUB-` orders
-- [ ] `PaymentStatusController` resolves both tables
-- [ ] QR renders **inside** the dialog; the user never navigates away
-- [ ] Dialog flips to success within ~3s of payment, in both modes
-- [ ] Polling stops on success, on close, and on unmount
-- [ ] Duplicate webhook credits the wallet exactly once
-- [ ] Card top-up and card plan upgrade still work
-- [ ] `QrPaymentDialog.vue` and `Pages/Plan/Qr.vue` deleted, no references remain
-- [ ] `npm run build` and `php artisan test` pass
+**Deleting `createQris()`.** Section 1. The simulation needs the transaction to exist.
+
+**Putting the sandbox check in `PakasirService`.** That class is a dumb HTTP client. The
+safety logic belongs in the fulfilment service, where the `transactionDetail()` response is
+actually inspected.
+
+**Copy-pasting the fulfilment into the controllers** instead of extracting the service. You will
+end up with three copies of money-handling code. The refactor in phases 3–4 is not optional.
+
+**Calling `fulfill()` without `sandboxOnly: true` from the controllers.** The webhook is the only
+caller that should fulfil non-sandbox transactions.
+
+**Running artisan on the host.** `php artisan ...` on your machine cannot reach the database.
+Always `docker exec esign-app php artisan ...`.
+
+**Forgetting `config:clear`** after touching `.env`. Symptoms: the flag appears to do nothing.
+
+**Truthiness on `is_sandbox`.** It is `=== true`. Not `if ($transaction['is_sandbox'])`.
+
+**Changing the webhook's guards while moving code.** Phase 4 is a move, not a rewrite. If the
+provider / amount / project checks are not byte-for-byte what they were, you have drifted.
 
 ---
 
-## 14. Scope
+## 12. Definition of done
 
-The six phases above. Nothing else.
+- [ ] `config('services.pakasir.auto_simulate')` exists, defaults to `false`, is cast to bool
+- [ ] `PakasirService::simulatePayment()` exists and throws on a 4xx
+- [ ] `PakasirFulfillmentService` exists with `amountIdr()` and `fulfill()`
+- [ ] Webhook delegates to the service; no `DB::transaction` remains in the controller
+- [ ] Webhook behaviour for real deliveries is unchanged (10.2 passes)
+- [ ] Both controllers auto-simulate + fulfil when the flag is on, with `sandboxOnly: true`
+- [ ] `createQris()` is still called first in both controllers
+- [ ] Flag on: dialog flips to success within ~3s for top-up and for plan
+- [ ] Flag off: dialog waits, exactly as before
+- [ ] Duplicate fulfilment credits the wallet exactly once (10.3)
+- [ ] `npm run build` passes; both new/changed PHP files pass `php -l`
+- [ ] `PAKASIR_AUTO_SIMULATE` is **not** set to `true` in any committed file
+
+---
+
+## 13. Scope
+
+Five phases above. Nothing else.
 
 Leave alone:
 
-- **Stripe.** Untouched, except for confirming the card path still works.
-- **QR expiry countdown.** `expiredAt` comes back from the API and is returned to the dialog, but
-  nothing renders it. Wiring up a countdown is a separate task.
-- **`BillingTopupController`'s logging style.** Heavier than the rest of the codebase. Not yours to
-  clean up in this PR.
-- **Plan expiry.** QRIS plans get 30 days from `now()` in the webhook, hardcoded rather than read
-  from plan config. Known, out of scope.
+- **The dialog.** No "sandbox mode" banner, no different success copy. The flip to success is
+  the signal. A banner is a reasonable follow-up, not this PR.
+- **`expired_at` / QR countdown.** Still unrendered. Separate task.
+- **The `postgres` test failures.** Environment, not code.
+- **ngrok / webhook URL on the Pakasir dashboard.** Auto-pay exists precisely so you do not need
+  them for local testing. Leave whatever is configured there as-is.
+- **Stripe.** Untouched.
 
-If a step seems to need a new migration, stop and re-read section 2 — `provider` and `order_id`
-already exist on `wallet_topups`. If you still think you need one, ask before writing it.
+If you think the feature needs a change to `PaymentDialog.vue`, re-read section 9's last
+paragraph. It should not.
