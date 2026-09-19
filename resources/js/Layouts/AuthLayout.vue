@@ -10,6 +10,12 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
     <div
         class="grid min-h-screen bg-gradient-to-br from-background via-background to-muted/40 lg:grid-cols-2"
     >
+        <a
+            href="#main-content"
+            class="absolute -top-8 left-4 z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:top-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+            Skip to main content
+        </a>
         <!-- LEFT -->
 
         <div
@@ -84,7 +90,7 @@ import DashboardPreviewCarousel from "@/Components/landing/DashboardPreviewCarou
 
         <!-- RIGHT -->
 
-        <div class="flex items-center justify-center p-6 md:p-12">
+        <div id="main-content" class="flex items-center justify-center p-6 md:p-12">
             <FadeIn :duration="800" direction="left">
                 <slot />
             </FadeIn>

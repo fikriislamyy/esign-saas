@@ -43,6 +43,13 @@ function toggleSidebar() {
 
 <template>
     <div class="bg-background">
+        <a
+            href="#main-content"
+            class="absolute -top-8 left-4 z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:top-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+            Skip to main content
+        </a>
+
         <div class="flex min-h-screen">
             <AppSidebar :collapsed="collapsed" :hide-text="hideSidebarText" />
 
@@ -55,7 +62,7 @@ function toggleSidebar() {
                     @toggle-sidebar="toggleSidebar"
                 />
 
-                <main class="flex-1 overflow-y-auto bg-muted/20">
+                <main id="main-content" class="flex-1 overflow-y-auto bg-muted/20">
                     <div class="mx-auto w-full max-w-7xl p-4 lg:p-8">
                         <slot />
                     </div>
