@@ -26,12 +26,44 @@ class PakasirWebhookController extends Controller
             return response()->json(['received' => true]);
         }
 
+        if ($payment->provider !== 'pakasir') {
+            Log::warning('Pakasir webhook for non-Pakasir payment', [
+                'order_id' => $orderId,
+                'provider' => $payment->provider,
+            ]);
+
+            return response()->json(['received' => true]);
+        }
+
+        if ((int) $request->input('amount') !== (int) $payment->amount) {
+            Log::warning('Pakasir webhook amount mismatch', [
+                'order_id' => $orderId,
+                'expected' => (int) $payment->amount,
+                'received' => $request->input('amount'),
+            ]);
+
+            return response()->json(['received' => true]);
+        }
+
+        if ($request->input('project') !== config('services.pakasir.project')) {
+            Log::warning('Pakasir webhook project mismatch', [
+                'order_id' => $orderId,
+                'expected' => config('services.pakasir.project'),
+                'received' => $request->input('project'),
+            ]);
+
+            return response()->json(['received' => true]);
+        }
+
         $detail = $pakasir->transactionDetail($orderId, (int) $payment->amount);
 
-        if (($detail['status'] ?? null) !== 'completed') {
+        $transaction = $detail['transaction'] ?? [];
+        $status = $transaction['status'] ?? null;
+
+        if ($status !== 'completed') {
             Log::info('Pakasir transaction not completed', [
                 'order_id' => $orderId,
-                'status' => $detail['status'] ?? null,
+                'status' => $status,
             ]);
 
             return response()->json(['received' => true]);

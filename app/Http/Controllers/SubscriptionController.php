@@ -226,11 +226,13 @@ class SubscriptionController extends Controller
 
         $result = $pakasir->createQris($orderId, $amountIdr);
 
+        $payload = $result['payment'] ?? [];
+
         return Inertia::render('Plan/Qr', [
             'orderId' => $orderId,
             'amountIdr' => $amountIdr,
-            'qrString' => $result['payment_number'] ?? null,
-            'expiredAt' => $result['expired_at'] ?? null,
+            'qrString' => $payload['payment_number'] ?? null,
+            'expiredAt' => $payload['expired_at'] ?? null,
         ]);
     }
 }
