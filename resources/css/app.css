@@ -171,7 +171,7 @@
     --secondary-foreground: 218 20.5% 85%;
 
     --muted: 223 9% 15%;              /* Graphite */
-    --muted-foreground: 219 6.4% 57%; /* Fog        #8a8f98 */
+    --muted-foreground: 219 6.4% 57%; /* Fog        #8a8f98 — ~4.5:1 on graphite */
 
     --accent: 223 9% 15%;
     --accent-foreground: 218 20.5% 85%;
