@@ -14,6 +14,8 @@ class WalletTopup extends Model
         'amount',
         'exchange_rate',
         'wallet_amount_usd_cents',
+        'provider',
+        'order_id',
         'stripe_checkout_session_id',
         'stripe_payment_intent_id',
         'status',

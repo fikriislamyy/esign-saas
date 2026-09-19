@@ -11,6 +11,7 @@ use App\Services\StripeService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 
@@ -238,10 +239,16 @@ class SubscriptionController extends Controller
 
         $payload = $result['payment'] ?? [];
 
+        // The sandbox QR Pakasir returns is a placeholder no wallet can pay, so
+        // encode a link that stands in for the scan instead.
+        $qrString = config('services.pakasir.auto_simulate')
+            ? URL::temporarySignedRoute('pakasir.sandbox-pay', now()->addHour(), ['orderId' => $orderId])
+            : ($payload['payment_number'] ?? null);
+
         return response()->json([
             'orderId' => $orderId,
             'amountIdr' => $amountIdr,
-            'qrString' => $payload['payment_number'] ?? null,
+            'qrString' => $qrString,
             'expiredAt' => $payload['expired_at'] ?? null,
         ]);
     }

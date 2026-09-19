@@ -231,12 +231,19 @@ class BillingTopupController extends Controller
             ]);
 
             $result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
+
             $payload = $result['payment'] ?? [];
+
+            // The sandbox QR Pakasir returns is a placeholder no wallet can pay, so
+            // encode a link that stands in for the scan instead.
+            $qrString = config('services.pakasir.auto_simulate')
+                ? \Illuminate\Support\Facades\URL::temporarySignedRoute('pakasir.sandbox-pay', now()->addHour(), ['orderId' => $orderId])
+                : ($payload['payment_number'] ?? null);
 
             return response()->json([
                 'orderId' => $orderId,
                 'amountIdr' => $amountIdr,
-                'qrString' => $payload['payment_number'] ?? null,
+                'qrString' => $qrString,
                 'expiredAt' => $payload['expired_at'] ?? null,
             ]);
         }
