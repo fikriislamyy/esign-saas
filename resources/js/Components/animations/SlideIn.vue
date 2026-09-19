@@ -24,11 +24,19 @@ const props = defineProps({
 });
 
 const visible = ref(false);
+const prefersReducedMotion = ref(
+    typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+);
 
 onMounted(() => {
-    setTimeout(() => {
+    if (prefersReducedMotion.value) {
         visible.value = true;
-    }, props.delay);
+    } else {
+        setTimeout(() => {
+            visible.value = true;
+        }, props.delay);
+    }
 });
 
 const transform = computed(() => {
@@ -53,7 +61,7 @@ const transform = computed(() => {
 <template>
     <div
         :style="{
-            transition: `all ${duration}ms ease`,
+            transition: prefersReducedMotion ? 'none' : `all ${duration}ms ease`,
             opacity: visible ? 1 : 0,
             transform,
         }"
