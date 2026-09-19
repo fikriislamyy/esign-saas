@@ -62,7 +62,7 @@ const features = {
                             <img
                                 src="/storage/images/dashboard-preview-1.png"
                                 alt="Feature preview"
-                                class="aspect-[16/10] rounded-xl border object-cover"
+                                class="aspect-[16/10] rounded-xl border object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
                             />
                         </CardContent>
                     </Card>

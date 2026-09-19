@@ -113,7 +113,7 @@ const completionColor = computed(() => {
                     :key="item.name"
                     @mouseenter="activeStatus = item.name"
                     @mouseleave="activeStatus = null"
-                    class="relative flex items-center justify-between rounded-xl border p-4 transition-all duration-200 cursor-pointer"
+                    class="relative flex items-center justify-between rounded-xl border p-4 transition-[background-color,box-shadow] duration-200 cursor-pointer"
                     :class="[
                         activeStatus === item.name
                             ? 'border-accent-ink shadow-md scale-[1.02]'
@@ -127,7 +127,7 @@ const completionColor = computed(() => {
                             class="absolute bottom-0 left-0 h-1 w-full overflow-hidden rounded-b-xl"
                         >
                             <div
-                                class="h-full transition-all duration-300"
+                                class="h-full transition-[width] duration-300"
                                 :style="{
                                     width: percentage(item.value) + '%',
                                     background: item.color,

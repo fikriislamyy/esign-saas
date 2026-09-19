@@ -116,6 +116,8 @@ class DocumentController extends Controller
             403
         );
 
+        abort_if($document->status === 'expired', 410, 'This document has expired and its file was removed.');
+
         $document->load([
             'uploader',
             'organization',
@@ -464,6 +466,8 @@ class DocumentController extends Controller
             403
         );
 
+        abort_if($document->status === 'expired', 410, 'This document has expired and its file was removed.');
+
         $filePath = $document->signed_path;
 
         if (! $filePath) {
@@ -494,6 +498,8 @@ class DocumentController extends Controller
             $document->organization_id === $request->user()->organization_id,
             403
         );
+
+        abort_if($document->status === 'expired', 410, 'This document has expired and its file was removed.');
 
         $filePath = $document->signed_path;
 

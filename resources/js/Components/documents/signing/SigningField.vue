@@ -38,7 +38,7 @@ const style = computed(() => ({
 <template>
     <button
         type="button"
-        class="absolute flex items-center justify-center overflow-hidden rounded-lg border-2 border-border bg-muted text-muted-foreground shadow-sm transition-all duration-200 hover:bg-muted hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
+        class="absolute flex items-center justify-center overflow-hidden rounded-lg border-2 border-border bg-muted text-muted-foreground shadow-sm transition-[background-color,box-shadow] duration-200 hover:bg-muted hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
         :class="{
             'border-border bg-muted': field.signature,
             'animate-pulse border-border': isActive && !field.signature,
@@ -51,7 +51,7 @@ const style = computed(() => ({
         <img
             v-if="field.signature"
             :src="field.signature"
-            class="pointer-events-none absolute inset-0 h-full w-full object-contain p-1"
+            class="pointer-events-none absolute inset-0 h-full w-full object-contain p-1 outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
             alt="Signature"
         />
 

@@ -39,7 +39,7 @@ const organization = computed(() => page.props.auth.organization);
                 ? 'flex h-full flex-col bg-card'
                 : 'hidden lg:flex flex-col border-r border-border/50 bg-card lg:sticky lg:top-0 lg:h-screen lg:self-start lg:shrink-0',
 
-            'transition-all duration-300 ease-in-out',
+            'transition-[max-height,opacity] duration-300 ease-in-out',
 
             collapsed ? 'w-[72px]' : 'w-[280px]',
         ]"

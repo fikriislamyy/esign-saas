@@ -64,7 +64,7 @@ const viewAll = () => {
                 <div
                     v-for="document in documents"
                     :key="document.id"
-                    class="group flex min-w-0 items-start gap-3 rounded-xl px-3 py-4 transition-all duration-200 hover:bg-muted/40 hover:shadow-sm"
+                    class="group flex min-w-0 items-start gap-3 rounded-xl px-3 py-4 transition-[background-color,box-shadow] duration-150 hover:bg-muted/40 hover:shadow-sm"
                 >
                     <!-- Document -->
 
@@ -105,7 +105,7 @@ const viewAll = () => {
                         <Button
                             variant="ghost"
                             size="icon"
-                            class="shrink-0 rounded-full transition-all hover:bg-primary/10 hover:text-accent-ink"
+                            class="shrink-0 rounded-full transition-[background-color,color] hover:bg-primary/10 hover:text-accent-ink"
                             @click="viewDocument(document.id)"
                         >
                             <Eye class="h-4 w-4" />

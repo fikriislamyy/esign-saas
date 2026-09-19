@@ -1,5 +1,5 @@
 <script setup>
-import { XIcon } from "@lucide/vue";
+import { XIcon } from "lucide-vue-next";
 
 import { reactiveOmit } from "@vueuse/core";
 import {

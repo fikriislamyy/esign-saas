@@ -1,5 +1,5 @@
 <script setup>
-import { MoreHorizontalIcon } from "@lucide/vue";
+import { MoreHorizontalIcon } from "lucide-vue-next";
 
 import { cn } from "@/lib/utils";
 

@@ -3,7 +3,7 @@ import { cva } from "class-variance-authority";
 export { default as Badge } from "./Badge.vue";
 
 export const badgeVariants = cva(
-    "h-6 gap-1 rounded-sm border border-transparent px-2.5 py-0.5 text-xs font-medium transition-all has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&>svg]:size-3! group/badge inline-flex w-fit shrink-0 items-center justify-center overflow-hidden whitespace-nowrap focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [&>svg]:pointer-events-none",
+    "h-6 gap-1 rounded-sm border border-transparent px-2.5 py-0.5 text-xs font-medium transition-[background-color,color,border-color] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&>svg]:size-3! group/badge inline-flex w-fit shrink-0 items-center justify-center overflow-hidden whitespace-nowrap focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [&>svg]:pointer-events-none",
     {
         variants: {
             variant: {

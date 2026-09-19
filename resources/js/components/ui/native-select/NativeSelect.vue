@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronDownIcon } from "@lucide/vue";
+import { ChevronDownIcon } from "lucide-vue-next";
 
 import { reactiveOmit, useVModel } from "@vueuse/core";
 import { cn } from "@/lib/utils";

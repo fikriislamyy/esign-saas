@@ -256,7 +256,7 @@ onUnmounted(() => {
                                                     ]
                                                 "
                                                 alt="EZSign dashboard preview"
-                                                class="absolute inset-0 h-full w-full object-cover"
+                                                class="absolute inset-0 h-full w-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
                                             />
                                         </Transition>
 
@@ -271,7 +271,7 @@ onUnmounted(() => {
                                                 ) in dashboardPreviews"
                                                 :key="index"
                                                 type="button"
-                                                class="h-1.5 rounded-full transition-all duration-300"
+                                                class="h-1.5 rounded-full transition-[background-color] duration-300"
                                                 :class="
                                                     activePreview === index
                                                         ? 'w-6 bg-primary'

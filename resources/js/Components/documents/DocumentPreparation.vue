@@ -67,7 +67,7 @@ const isReady = computed(() => {
 
             <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div
-                    class="h-full rounded-full bg-primary transition-all"
+                    class="h-full rounded-full bg-primary transition-[width]"
                     :style="{ width: `${completion}%` }"
                 />
             </div>

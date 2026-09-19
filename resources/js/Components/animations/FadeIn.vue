@@ -122,7 +122,9 @@ const styleObject = computed(() => ({
         filter ${props.duration}ms ${props.easing}
     `,
 
-    willChange: "opacity, transform, filter",
+    // Only hint the compositor before the element animates in. Holding this
+    // after the transition keeps a GPU layer alive for nothing.
+    willChange: visible.value ? "auto" : "opacity, transform, filter",
 }));
 
 onMounted(() => {

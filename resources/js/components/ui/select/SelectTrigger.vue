@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronDownIcon } from "@lucide/vue";
+import { ChevronDownIcon } from "lucide-vue-next";
 
 import { reactiveOmit } from "@vueuse/core";
 import { SelectIcon, SelectTrigger, useForwardProps } from "reka-ui";

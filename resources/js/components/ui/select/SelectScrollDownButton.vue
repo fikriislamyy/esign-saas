@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronDownIcon } from "@lucide/vue";
+import { ChevronDownIcon } from "lucide-vue-next";
 
 import { reactiveOmit } from "@vueuse/core";
 import { SelectScrollDownButton, useForwardProps } from "reka-ui";
