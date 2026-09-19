@@ -116,7 +116,7 @@ const submit = () => {
 
                     <div class="pt-2">
                         <Button @click="submit" :disabled="form.processing" class="w-full sm:w-auto">
-                            Save Changes
+                            Save changes
                         </Button>
                     </div>
                 </CardContent>

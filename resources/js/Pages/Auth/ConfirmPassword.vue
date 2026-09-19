@@ -18,11 +18,11 @@ const submit = () => {
 
 <template>
     <GuestLayout>
-        <Head title="Confirm Password" />
+        <Head title="Confirm password" />
 
         <div class="space-y-6">
             <div class="space-y-2">
-                <h1 class="text-2xl font-bold">Confirm Password</h1>
+                <h1 class="text-2xl font-bold">Confirm password</h1>
                 <p class="text-sm text-muted-foreground">
                     This is a secure area of the application. Please confirm your password before continuing.
                 </p>

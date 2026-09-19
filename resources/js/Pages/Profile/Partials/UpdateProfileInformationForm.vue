@@ -81,7 +81,7 @@ const form = useForm({
 
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
             <Button type="submit" :disabled="form.processing" class="w-full sm:w-auto">
-                Save Changes
+                Save changes
             </Button>
 
             <Transition

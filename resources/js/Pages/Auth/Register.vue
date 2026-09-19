@@ -312,10 +312,10 @@ const submit = () => {
                             </p>
                         </div>
 
-                        <!-- Confirm Password -->
+                        <!-- Confirm password -->
                         <div class="space-y-2">
                             <Label for="confirm_password">
-                                Confirm Password
+                                Confirm password
                             </Label>
 
                             <div class="relative">
