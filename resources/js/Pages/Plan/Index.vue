@@ -206,12 +206,6 @@ function paymentVariant(status) {
     return map[status] ?? "secondary";
 }
 
-function contactSales() {
-    const email = props.plans?.enterprise?.contact_email;
-
-    window.location.href = `mailto:${email}?subject=Enterprise plan enquiry`;
-}
-
 function downgrade() {
     const confirmed = window.confirm(
         "Downgrade to Free? Your Pro subscription will be cancelled and Free plan limits apply immediately.",
@@ -330,9 +324,10 @@ function handlePlanSelected(planKey) {
 
                             <template v-else-if="subscription.plan === 'pro'">
                                 <Button
+                                    as="a"
+                                    :href="$page.props.salesMailto"
                                     variant="outline"
                                     class="w-full gap-2 sm:min-w-48"
-                                    @click="contactSales"
                                 >
                                     <Mail class="h-4 w-4" />
                                     Contact sales
@@ -354,9 +349,10 @@ function handlePlanSelected(planKey) {
 
                             <template v-else>
                                 <Button
+                                    as="a"
+                                    :href="$page.props.salesMailto"
                                     variant="outline"
                                     class="w-full gap-2 sm:min-w-48"
-                                    @click="contactSales"
                                 >
                                     <Mail class="h-4 w-4" />
                                     Contact sales
