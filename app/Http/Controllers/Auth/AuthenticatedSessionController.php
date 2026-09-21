@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Providers\RouteServiceProvider;
+use App\Services\LoginOtpService;
 use App\Services\RecaptchaService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -36,13 +37,20 @@ class AuthenticatedSessionController extends Controller
     /**
      * Handle an incoming authentication request.
      */
-    public function store(LoginRequest $request): RedirectResponse
+    public function store(LoginRequest $request, LoginOtpService $otp): RedirectResponse
     {
-        $request->authenticate();
+        $user = $request->authenticate();
 
-        $request->session()->regenerate();
+        $request->session()->put('login_otp', [
+            'user_id' => $user->id,
+            'remember' => $request->boolean('remember'),
+        ]);
 
-        return redirect()->intended(RouteServiceProvider::HOME);
+        if ($otp->retryAfter($user) === 0) {
+            $otp->send($user);
+        }
+
+        return redirect()->route('login.otp');
     }
 
     /**

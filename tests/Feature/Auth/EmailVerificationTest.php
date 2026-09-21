@@ -75,8 +75,11 @@ class EmailVerificationTest extends TestCase
             'organization_name' => 'Test Organization',
             'name' => 'Test User',
             'email' => 'test@example.com',
-            'password' => 'password',
-            'password_confirmation' => 'password',
+            'country_code' => 'ID',
+            'phone_number' => '+62 812 3456 7890',
+            'terms' => 'on',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
         ]);
 
         Mail::assertSent(EmailVerificationOtpMail::class, fn ($mail) => $mail->hasTo('test@example.com'));

@@ -1,757 +1,970 @@
-# Templates: delete action and a 5-template limit
+# Email OTP as a second step on every login
 
 ## 1. What we are building, in one paragraph
 
-Two related things. First, a user can **delete a template**: the row in `templates` goes, every
-row in `template_signature_fields` that belongs to it goes, and the PDF file in storage goes.
-Second, **every organisation can hold at most 5 templates**, on every plan, free or paid. When an
-organisation already has 5, the upload box on the Templates page is replaced by a message saying
-to delete one first, and the server rejects the upload even if someone bypasses the page.
+Today `POST /login` with the right password logs the user in. After this change it does not.
+Instead it remembers *who* passed the password check in the session, generates a 6-digit code,
+stores a hash of that code in **Redis with a 10-minute expiry**, emails the code, and sends the
+browser to a new page `/login/otp`. Only when the user types the right code does the app call
+`Auth::login()`. Resending the code is rate limited two ways: once per 60 seconds, and at most 5
+sends per 10 minutes. Typing the wrong code 5 times burns the code and the user must request a
+new one. Nothing else about the app changes: registration, password reset, the `auth` middleware,
+and every test that uses `actingAs()` stay exactly as they are.
 
-The two halves depend on each other. A hard limit with no way to delete is a dead end; a delete
-button with no limit is just a feature. Build the delete first (Phases 1–3), then the limit
-(Phases 4–6), so that at no point is a user stuck.
+```
+ POST /login  ──password ok──▶ session: login_otp = {user_id, remember}
+                              redis:   login_otp:{user_id}:hash  (TTL 600 s)
+                              mail:    "Your sign-in code: 123456"
+                              302 ──▶ GET /login/otp  (shows the code form)
+
+ POST /login/otp {otp} ──code ok──▶ Auth::login(user, remember) ──▶ 302 /dashboard
+                       ──wrong───▶ attempts+1, error under the input (5 strikes = code deleted)
+
+ POST /login/otp/resend ──not in cooldown, under the cap──▶ new code, new mail, status banner
+                        ──too soon / too many──────────────▶ error "wait N seconds"
+```
 
 ## 2. Things you must not do
 
-- **Do not** delete `template_signature_fields` rows by hand in the controller with a loop or a
-  `->signatureFields()->delete()` call. The database already does it. Section 3 explains; the
-  test in 8.2 proves it. Extra deletion code is not wrong, it is noise that suggests the author
-  did not know about the cascade.
-- **Do not** put the limit only in the Vue page. Hiding the upload box is a courtesy. The server
-  check in Phase 5 is the rule.
-- **Do not** make the limit vary by plan, and **do not** read it from `.env`. The task says 5 for
-  everyone. It goes in `config/plans.php` under each plan's `limits`, with the same value three
-  times, because that is where every other limit lives and where `PlanService` reads them.
-- **Do not** put the Delete button in the table row. It goes on the template's own page, behind a
-  confirmation dialog that names the template. Section 6.1 explains the reasoning; you may
-  disagree, but do it there first.
-- **Do not** use `window.confirm()`. `PendingInvitations.vue` does, and it is the one place in
-  the app that does. There is a proper `AlertDialog` component in `components/ui/alert-dialog`
-  that nothing uses yet. This feature is where it gets used.
-- **Do not** soft-delete. `Template` has no `SoftDeletes` trait and no `deleted_at` column. A
-  deleted template is gone.
+- **Do not log the user in before the code is verified.** No `Auth::attempt()` and no
+  `Auth::login()` anywhere in the password step. The whole design rests on the user being a
+  *guest* until `/login/otp` succeeds; that is what keeps every `auth`-protected route safe
+  without adding a single new middleware.
+- **Do not add a middleware to the `auth` route groups.** That is the other way to build 2FA
+  ("log in, then block until verified"). It would break the 33 `actingAs()` calls across 9 test
+  files, and it is not this plan.
+- **Do not store the plain code in Redis.** Store `Hash::make($otp)` and compare with
+  `Hash::check()`, exactly like [SigningOtpService](app/Services/SigningOtpService.php) does.
+  If Redis is ever read by the wrong person, hashes are useless to them; plain codes are a login.
+- **Do not put the code anywhere except the email.** Not in the session, not in a cookie, not in
+  the URL, not in an Inertia prop, not in a `Log::info()`. The test gets the code by calling the
+  service directly, not by reading it from the response.
+- **Do not use the `Cache` facade.** The default cache driver in this project is `file`
+  ([.env](.env) `CACHE_DRIVER="file"`). The task says Redis; use
+  `Illuminate\Support\Facades\Redis`. Do not change `CACHE_DRIVER` or `SESSION_DRIVER` "while you
+  are at it" — that is a deployment change with its own risks.
+- **Do not reuse `EmailVerificationOtpMail`.** Its body says "finish creating your EZSign
+  account", which is wrong for a login. Make a new mailable and template (they are copies with
+  different words).
+- **Do not add "skip", "trust this device", or "remember this browser for 30 days".** The task
+  is *every* login. Those are separate features.
+- **Do not add reCAPTCHA to the OTP page.** The password step already has it; the OTP page is
+  protected by the code itself and by the attempt limit.
+- **Do not touch tests that use `actingAs()`.** They deliberately skip the login form. Only
+  [AuthenticationTest.php](tests/Feature/Auth/AuthenticationTest.php) posts to `/login`, and it is
+  updated in Phase 6.
 
 ## 3. How the pieces already fit together
 
-Read these before writing anything.
-
 | You need to | Look at | What you will see |
 | --- | --- | --- |
-| Check a template belongs to the caller | [TemplateController.php:56-59](app/Http/Controllers/TemplateController.php#L56-L59) | `abort_unless($template->organization_id === $request->user()->organization_id, 403)` — every method does this |
-| Talk to the file store | [TemplateController.php:87](app/Http/Controllers/TemplateController.php#L87) | `Storage::disk(env('DOCUMENTS_DISK', 'documents'))` — same disk, same env key, every time |
-| See how a plan limit is defined | [config/plans.php](config/plans.php) | `'limits' => ['documents' => [...], 'members' => 3, 'storage_bytes' => ...]` per plan |
-| See how a plan limit is checked | [PlanService.php](app/Services/PlanService.php) `canAddMember()` | `$limit === null \|\| used < $limit` — null means unlimited |
-| See how a limit blocks an upload | [DocumentController.php:66-73](app/Http/Controllers/DocumentController.php#L66-L73) | `if (! $planService->canUploadDocument(...)) return back()->withErrors(['file' => '...'])` |
-| See how usage reaches the Plan page | `PlanService::usage()` → `SubscriptionController::index()` → `Pages/Plan/Index.vue` `quotas` | An array per quota with `used`, `limit`, `formatter`, `caption` |
-| See a destructive action on a page header | [Pages/Templates/Show.vue](resources/js/Pages/Templates/Show.vue) `#actions` slot | Preview and Prepare buttons; Delete goes beside them |
+| The login routes | [routes/auth.php:14-24](routes/auth.php#L14-L24) | `GET/POST login` inside `Route::middleware('guest')`. Your three new routes go in this same group |
+| What `POST /login` does now | [AuthenticatedSessionController.php:39-46](app/Http/Controllers/Auth/AuthenticatedSessionController.php#L39-L46) | `$request->authenticate()` then `regenerate()` then `redirect()->intended(HOME)` |
+| Where the password is actually checked | [LoginRequest.php:44-56](app/Http/Requests/Auth/LoginRequest.php#L44-L56) | `Auth::attempt(...)` — this is the line that logs the user in and must change |
+| An OTP service that uses `Hash::make` and a 5-attempt cap | [SigningOtpService.php](app/Services/SigningOtpService.php) | Same rules we want, but stored in a DB row. Ours goes in Redis |
+| An OTP service with a 10-minute constant | [EmailVerificationOtpService.php](app/Services/EmailVerificationOtpService.php) | `public const EXPIRES_IN_MINUTES = 10;` — copy the naming style |
+| A mailable that carries `$user` and `$otp` | [EmailVerificationOtpMail.php](app/Mail/EmailVerificationOtpMail.php) | 20 lines; copy it, rename, change subject and view |
+| The email HTML you will copy | [email-verification-otp.blade.php](resources/views/emails/email-verification-otp.blade.php) | Inline-styled table-free HTML with the code in big digits |
+| A controller that validates a 6-digit code | [VerifyEmailController.php](app/Http/Controllers/Auth/VerifyEmailController.php) | `'otp' => ['required', 'digits:6']` and `ValidationException::withMessages(['otp' => …])` |
+| The Vue page you will copy | [VerifyEmail.vue](resources/js/Pages/Auth/VerifyEmail.vue) | Code input, verify button, resend button with a 60 s countdown, status banner |
+| Where `HOME` lives | [RouteServiceProvider.php:20](app/Providers/RouteServiceProvider.php#L20) | `public const HOME = '/dashboard';` |
+| Redis connection config | [config/database.php:122-140](config/database.php#L122-L140) | client `phpredis`, prefix `ezsign_database_` added to every key automatically |
+| Redis in Docker | [docker-compose.yml:46-53](docker-compose.yml#L46-L53) and [docker/php/Dockerfile:20-21](docker/php/Dockerfile#L20-L21) | Container `esign-redis`; `pecl install redis` in the PHP image. `.env` has `REDIS_HOST="redis"` |
+| The existing login test | [AuthenticationTest.php:21-32](tests/Feature/Auth/AuthenticationTest.php#L21-L32) | Asserts `assertAuthenticated()` after `POST /login`. That assertion becomes wrong and is rewritten |
 
-**The cascade.** Open
-[the `template_signature_fields` migration](database/migrations/2026_09_14_162857_create_template_signature_fields_table.php)
-and find:
+**Three framework facts this plan depends on.**
+
+1. `Auth::validate($credentials)` checks a password **without** logging anyone in, and
+   `Auth::getLastAttempted()` then returns the matching user. Both exist on Laravel 10's
+   `SessionGuard` ([vendor: SessionGuard.php:277](vendor/laravel/framework/src/Illuminate/Auth/SessionGuard.php#L277)).
+2. `Auth::login($user, $remember)` does everything `Auth::attempt()` did after the password check:
+   sets the session, issues the remember cookie when `$remember` is true, fires the `Login` event.
+3. The `Redis` facade with phpredis passes commands straight through: `Redis::setex($key, $ttl,
+   $value)`, `Redis::get`, `Redis::incr`, `Redis::expire`, `Redis::ttl`, `Redis::del`. The key
+   prefix from `config/database.php` is applied for you — write `login_otp:…`, never the prefix.
+   Always import it as `use Illuminate\Support\Facades\Redis;` — inside a namespace a bare
+   `Redis` does not resolve, and in tinker a bare `\Redis` is phpredis's own class, not the facade.
+
+## 4. The design — done for you
+
+Paste from this section. The reasoning is here so you can judge edge cases, not so you can redo it.
+
+### 4.1 Redis keys
+
+All keys are per user, all expire on their own. Nothing needs a cleanup job.
+
+| Key | Value | TTL | Written by | Read by |
+| --- | --- | --- | --- | --- |
+| `login_otp:{user_id}:hash` | `Hash::make($otp)` | 600 s (10 min) | `generate()` | `verify()` |
+| `login_otp:{user_id}:attempts` | integer, wrong-code count | 600 s | `verify()` (`INCR`) | `verify()` |
+| `login_otp:{user_id}:cooldown` | `1` | 60 s | `generate()` | `retryAfter()` |
+| `login_otp:{user_id}:sends` | integer, codes sent in this window | 600 s from the **first** send | `generate()` (`INCR`) | `retryAfter()` |
+
+`generate()` deletes `attempts` (a new code gets a fresh 5 tries) but **not** `sends` or
+`cooldown` — those are the rate limit and must survive a regenerate.
+
+### 4.2 Session key
 
 ```php
-$table->foreignUuid('template_id')
-    ->constrained()
-    ->cascadeOnDelete();
+session('login_otp') === ['user_id' => '9c1e…', 'remember' => false]
 ```
 
-`cascadeOnDelete()` is a PostgreSQL foreign-key rule. When a `templates` row is deleted, Postgres
-itself deletes every `template_signature_fields` row with that `template_id`, in the same
-statement, before Laravel gets control back. So `$template->delete()` **is** the deletion of the
-fields. You do not write a second line. The test in 8.2 asserts the fields are gone and will
-pass with the one-line delete.
+Written by `AuthenticatedSessionController::store()` after the password passes. Read by every
+method of `LoginOtpController`. Forgotten the moment the code is verified. If it is absent, every
+OTP route redirects to `/login` — that is the only "are you allowed here" check the OTP page needs.
 
-Nothing else references `templates`. `documents` has no `template_id` column (checked: the only
-foreign key to `templates` in any migration is the one above). So deleting a template cannot
-orphan a document.
+### 4.3 Rate limits, all of them
 
-## 4. Phase 1 — the route and the controller method
+| What | Limit | Where enforced | Already exists? |
+| --- | --- | --- | --- |
+| Wrong password | 5 per email+IP, then lockout | `LoginRequest::ensureIsNotRateLimited()` | Yes, untouched |
+| Wrong code | 5 per code, then the code is deleted | `LoginOtpService::verify()` via `attempts` key | New |
+| Resend too soon | 1 per 60 s per user | `LoginOtpService::retryAfter()` via `cooldown` key | New |
+| Resend too often | 5 per 10 min per user | `LoginOtpService::retryAfter()` via `sends` key | New |
+| First send on `POST /login` | Same cooldown and cap as resend | `store()` calls `retryAfter()` before sending | New |
 
-### 4.1 Route: `routes/web.php`
+That last row matters. `LoginRequest` only counts *failed* passwords, so without it someone who
+knows a password could `POST /login` in a loop and email-bomb the account. With it, a correct
+password inside the cooldown just lands on the OTP page — the code sent a moment ago is still
+valid, so nothing is lost.
 
-Inside the `auth, verified` group, after the `templates.pdf` route (line 236):
+25 guesses per 10 minutes (5 codes × 5 tries) against a 6-digit code is a 0.0025% chance. Good
+enough; do not add more.
 
-```php
-Route::delete('/templates/{template}', [TemplateController::class, 'destroy'])
-    ->name('templates.destroy');
-```
+### 4.4 Why a code sent to the same inbox also verifies the email
 
-`Route::delete`, not `post`. Inertia's `router.delete()` sends a real `DELETE` request, and the
-verb is what makes the URL `/templates/{id}` mean "remove" rather than "show".
+Users who registered but never verified their email would otherwise get **two** codes on login:
+ours, then the `verified` middleware's on `/verify-email`. A login code proves inbox access,
+which is exactly what email verification proves. So on a successful code, if
+`! $user->hasVerifiedEmail()`, mark it verified and fire the `Verified` event — the same four lines
+[VerifyEmailController.php:37-39](app/Http/Controllers/Auth/VerifyEmailController.php#L37-L39)
+already runs. Registration itself still goes through `/verify-email` (it never touches `/login`).
 
-### 4.2 Controller: `app/Http/Controllers/TemplateController.php`
+### 4.5 Copy
 
-Add after `pdf()`:
+Email subject: **Your EZSign sign-in code**
 
-```php
-public function destroy(Request $request, Template $template)
-{
-    abort_unless(
-        $template->organization_id === $request->user()->organization_id,
-        403
-    );
+Email body, in order: heading "Confirm it's you" · "Hello {name}," · "Someone just signed in to
+EZSign with your password. Enter the code below to finish signing in. It expires in 10 minutes." ·
+the code · "Enter this code on the sign-in page to continue." · "If this wasn't you, change your
+password now — someone else knows it."
 
-    $path = $template->file_path;
+Page title: **Check your email** · description: "Enter the 6-digit code we sent to
+**{email}**. It expires in 10 minutes." · button: "Verify and sign in" · resend: "Resend code" /
+"Resend in {n}s" · secondary link: "Use a different account" → `/login` · banner after resend:
+"New code sent" / "Check your inbox for the latest code."
 
-    $template->delete();
+Error messages (the user reads these, keep them exact):
+- wrong or expired code: `The code is invalid or has expired. Request a new one below.`
+- resend blocked: `Please wait {n} seconds before requesting another code.`
 
-    if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
-        Log::warning('Template file was not removed from storage', [
-            'template_id' => $template->id,
-            'path' => $path,
-        ]);
-    }
+## 5. Step by step
 
-    return redirect()
-        ->route('templates.index')
-        ->with('status', 'Template deleted.');
-}
-```
+Work in this order. Each phase ends with something you can run. Commands run inside the app
+container: prefix them with `docker exec esign-app` (or `docker exec -it esign-app bash` once).
 
-Add `use Illuminate\Support\Facades\Log;` to the imports at the top.
-
-Why this order and shape:
-
-- **Ownership check first**, copied from every other method in the file. Without it, anyone who
-  guesses a UUID can delete another organisation's template.
-- **Save `$path` before `delete()`.** After `$template->delete()` the model is still in memory
-  and `$template->file_path` would still work, but reading a property off a deleted model is the
-  kind of thing that looks like a bug to the next reader. Copy it out first.
-- **Database row first, file second.** If the file deletion fails (S3 is down, credentials
-  expired), you are left with a file in storage that nothing points to. That costs a few
-  kilobytes and is invisible to the user. The other order — file first, then row — fails the
-  other way: a row that points at a file that no longer exists, so the template still appears in
-  the list, and opening it 404s. The orphan file is the lesser harm.
-- **`Storage::delete()` returns `false` rather than throwing** when it cannot remove the file.
-  Without the `if`, that failure is silent. The log line means an orphaned file is at least
-  findable later.
-- **Redirect to the index**, because the page the user was on (the template's own page) no
-  longer exists. `with('status', ...)` is the same flash the login page uses.
-
-### 4.3 Quick check
+### Phase 0 — prove Redis is reachable (5 minutes)
 
 ```bash
-docker exec esign-app php artisan route:list --name=templates.destroy
+docker exec esign-app php -r "echo extension_loaded('redis') ? 'phpredis OK' : 'phpredis MISSING', PHP_EOL;"
+docker exec esign-app php artisan tinker --execute "var_dump(Illuminate\Support\Facades\Redis::connection()->ping());"
 ```
 
-One line, `DELETE templates/{template}`. If it says `GET` or is missing, re-read 4.1.
+Expected: `phpredis OK` and `bool(true)` (or the string `+PONG`). If the first line says MISSING,
+rebuild the image (`docker compose build app`). If the second fails, `docker compose up -d redis`.
+Do not continue until both pass — every later phase and every test needs this.
 
-## 5. Phase 2 — the Delete button
+### Phase 1 — the service (Redis only, no HTTP)
 
-### 5.1 Why the Show page and not the table
-
-The table on `/templates` has one action per row, an eye icon that opens the template. Putting a
-trash icon next to it means a destructive action one pixel from a harmless one, on a row the user
-may be scanning past. The Show page already has a header with Preview and Prepare; it is where
-the user has confirmed which template they are looking at. Delete belongs there, behind a dialog
-that says the template's name and how many signature fields go with it. One place, one
-confirmation, no accidental clicks in a list.
-
-### 5.2 `resources/js/Pages/Templates/Show.vue`
-
-**Imports.** Add to the existing ones:
-
-```js
-import { router } from "@inertiajs/vue3";
-import { Trash2 } from "lucide-vue-next";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-```
-
-`Head` and `Link` are already imported from `@inertiajs/vue3`; add `router` to that same line
-rather than a second import. `LayoutTemplate, Eye, FilePenLine` are already imported from
-`lucide-vue-next`; add `Trash2` to that line.
-
-**Script.** After `previewTemplate()`:
-
-```js
-const confirmingDelete = ref(false);
-
-function deleteTemplate() {
-    confirmingDelete.value = false;
-
-    router.delete(route("templates.destroy", props.template.id), {
-        onStart: () => showLoading("Deleting template..."),
-        onFinish: () => hideLoading(),
-    });
-}
-```
-
-Add `import { ref } from "vue";` at the top. `showLoading` and `hideLoading` are already
-destructured from `useFeedback()` in this file.
-
-The server redirects to `/templates` on success, so there is no `onSuccess` here; Inertia follows
-the redirect and the Templates page renders. If the server returns 403, Inertia shows its error
-modal, which is correct for a case that should never happen from the UI.
-
-**Template.** In the `#actions` slot, after the Prepare button:
-
-```vue
-<Button variant="destructive" @click="confirmingDelete = true">
-    <Trash2 class="mr-2 h-4 w-4" />
-    Delete
-</Button>
-```
-
-And after the closing `</PageHeader>`, still inside the `<FadeIn>`:
-
-```vue
-<AlertDialog v-model:open="confirmingDelete">
-    <AlertDialogContent>
-        <AlertDialogHeader>
-            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
-            <AlertDialogDescription>
-                "{{ template.name }}" and its
-                {{ template.signature_fields_count }}
-                signature field{{ template.signature_fields_count === 1 ? "" : "s" }}
-                will be permanently removed. This cannot be undone.
-            </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction @click="deleteTemplate">
-                Delete template
-            </AlertDialogAction>
-        </AlertDialogFooter>
-    </AlertDialogContent>
-</AlertDialog>
-```
-
-`template.signature_fields_count` is already there: `TemplateController::show()` calls
-`loadCount('signatureFields')` before rendering. The dialog tells the user exactly what is about
-to go, by name and by count. "Are you sure?" with no specifics is not a confirmation, it is a
-speed bump.
-
-### 5.3 Build and try it
-
-```bash
-npm run build
-```
-
-Open any template, click Delete. Dialog appears with the right name and count. Cancel closes it.
-Delete again, confirm: loading overlay, then you land on `/templates` and the template is gone
-from the list.
-
-## 6. Phase 3 — tests for delete
-
-No factory exists for `Template`. Create rows directly with `Template::create()`; the model fills
-its own UUID. The organisation and user setup is the same as `DocumentUploadTest.php`, which you
-can open for reference.
-
-### 6.1 New file: `tests/Feature/TemplateDeleteTest.php`
+Create `app/Services/LoginOtpService.php`:
 
 ```php
 <?php
 
-namespace Tests\Feature;
+namespace App\Services;
 
-use App\Models\Organization;
-use App\Models\Template;
-use App\Models\TemplateSignatureField;
+use App\Mail\LoginOtpMail;
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Storage;
-use Tests\TestCase;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Redis;
 
-class TemplateDeleteTest extends TestCase
+class LoginOtpService
 {
-    use RefreshDatabase;
+    public const EXPIRES_IN_SECONDS = 600;
+    public const RESEND_COOLDOWN_SECONDS = 60;
+    public const MAX_SENDS_PER_WINDOW = 5;
+    public const MAX_VERIFY_ATTEMPTS = 5;
 
-    private User $user;
-    private Organization $organization;
-
-    protected function setUp(): void
+    public function send(User $user): void
     {
-        parent::setUp();
+        $otp = $this->generate($user);
 
-        Storage::fake('documents');
-
-        $this->organization = Organization::create(['name' => 'Acme']);
-
-        $this->user = User::factory()->create([
-            'organization_id' => $this->organization->id,
-            'role' => 'owner',
-        ]);
+        Mail::to($user->email)->send(new LoginOtpMail($user, $otp));
     }
 
-    private function templateFor(Organization $organization, string $name = 'nda'): Template
+    public function generate(User $user): string
     {
-        $path = "templates/{$name}.pdf";
+        $otp = (string) random_int(100000, 999999);
 
-        Storage::disk('documents')->put($path, '%PDF-1.4 fake');
+        Redis::setex($this->key($user, 'hash'), self::EXPIRES_IN_SECONDS, Hash::make($otp));
+        Redis::del($this->key($user, 'attempts'));
+        Redis::setex($this->key($user, 'cooldown'), self::RESEND_COOLDOWN_SECONDS, 1);
 
-        return Template::create([
-            'organization_id' => $organization->id,
-            'name' => $name,
-            'file_path' => $path,
-            'file_size' => 14,
-            'mime_type' => 'application/pdf',
-        ]);
+        if ((int) Redis::incr($this->key($user, 'sends')) === 1) {
+            Redis::expire($this->key($user, 'sends'), self::EXPIRES_IN_SECONDS);
+        }
+
+        return $otp;
     }
 
-    public function test_deleting_a_template_removes_the_row_its_fields_and_its_file(): void
+    public function verify(User $user, string $otp): bool
     {
-        $template = $this->templateFor($this->organization);
+        $hash = Redis::get($this->key($user, 'hash'));
 
-        TemplateSignatureField::create([
-            'template_id' => $template->id,
-            'page' => 1, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
-        ]);
-        TemplateSignatureField::create([
-            'template_id' => $template->id,
-            'page' => 2, 'x' => 10, 'y' => 10, 'width' => 100, 'height' => 40,
-        ]);
+        if (! $hash) {
+            return false;
+        }
 
-        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
+        $attempts = (int) Redis::incr($this->key($user, 'attempts'));
+        Redis::expire($this->key($user, 'attempts'), self::EXPIRES_IN_SECONDS);
 
-        $response->assertRedirect('/templates');
-        $this->assertDatabaseMissing('templates', ['id' => $template->id]);
-        $this->assertDatabaseCount('template_signature_fields', 0);
-        Storage::disk('documents')->assertMissing('templates/nda.pdf');
+        if ($attempts > self::MAX_VERIFY_ATTEMPTS) {
+            $this->forget($user);
+
+            return false;
+        }
+
+        if (! Hash::check($otp, $hash)) {
+            return false;
+        }
+
+        $this->forget($user);
+
+        return true;
     }
 
-    public function test_a_template_from_another_organisation_cannot_be_deleted(): void
+    // 0 when a code may be sent now, otherwise seconds until it may.
+    public function retryAfter(User $user): int
     {
-        $other = Organization::create(['name' => 'Rival']);
-        $template = $this->templateFor($other);
+        $cooldown = (int) Redis::ttl($this->key($user, 'cooldown'));
 
-        $response = $this->actingAs($this->user)->delete("/templates/{$template->id}");
+        if ($cooldown > 0) {
+            return $cooldown;
+        }
 
-        $response->assertForbidden();
-        $this->assertDatabaseHas('templates', ['id' => $template->id]);
-        Storage::disk('documents')->assertExists('templates/nda.pdf');
+        if ((int) Redis::get($this->key($user, 'sends')) >= self::MAX_SENDS_PER_WINDOW) {
+            return max(1, (int) Redis::ttl($this->key($user, 'sends')));
+        }
+
+        return 0;
     }
 
-    public function test_a_guest_cannot_delete_a_template(): void
+    private function forget(User $user): void
     {
-        $template = $this->templateFor($this->organization);
+        Redis::del($this->key($user, 'hash'), $this->key($user, 'attempts'));
+    }
 
-        $this->delete("/templates/{$template->id}")->assertRedirect('/login');
-
-        $this->assertDatabaseHas('templates', ['id' => $template->id]);
+    private function key(User $user, string $suffix): string
+    {
+        return "login_otp:{$user->id}:{$suffix}";
     }
 }
 ```
 
-The first test is the whole feature in one assertion block: row gone, fields gone (there were
-two, now there are zero), file gone. It passes with the one-line `$template->delete()` from 4.2,
-which is the proof that the cascade does the fields. If you added a manual fields-delete line
-"to be safe", remove it, rerun, and watch this test still pass.
+Notes for reading it:
+- `Redis::ttl` returns `-2` for a missing key and `-1` for a key with no expiry; `> 0` covers both.
+- `verify()` counts the attempt **before** comparing, so a wrong 5th guess and a right 6th guess
+  both fail. That is the point.
+- `send()` is the only method controllers should call to deliver a code. `generate()` is public
+  so tests can get the code without reading an email.
 
-### 6.2 Run
+Quick check (the mailable does not exist yet, so only `generate`/`verify`):
 
 ```bash
-docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php
+docker exec esign-app php artisan tinker --execute "
+\$u = App\Models\User::first();
+\$s = app(App\Services\LoginOtpService::class);
+\$code = \$s->generate(\$u);
+var_dump(\$s->verify(\$u, '000000'), \$s->verify(\$u, \$code), \$s->verify(\$u, \$code), \$s->retryAfter(\$u));
+"
 ```
 
-Three green.
-
-## 7. Phase 4 — the limit in config and `PlanService`
-
-### 7.1 `config/plans.php`
-
-Add `'templates' => 5,` to the `limits` array of **all three** plans. Free:
-
-```php
-'limits' => [
-    'documents' => ['limit' => 3, 'period' => 'week'],
-    'templates' => 5,
-    'members' => 3,
-    'storage_bytes' => 100 * 1024 * 1024,        // 100 MB
-],
-```
-
-Same line in `pro` and in `enterprise`. Yes, the same number three times, and yes, enterprise
-gets `5` rather than `null`. The task says every plan. If that changes later, it is a one-line
-edit per plan in the one file that holds every other limit, which is exactly why it lives here
-and not in a constant somewhere.
-
-### 7.2 `app/Services/PlanService.php`
-
-Add `use App\Models\Template;` to the imports. Then three additions, each shaped like its
-`members` neighbour:
-
-```php
-public function templatesUsed(Organization $organization): int
-{
-    return Template::query()
-        ->where('organization_id', $organization->id)
-        ->count();
-}
-
-public function canAddTemplate(Organization $organization): bool
-{
-    $limit = $this->limits($organization)['templates'];
-
-    return $limit === null
-        || $this->templatesUsed($organization) < $limit;
-}
-```
-
-And in `usage()`, add a `templates` entry between `documents` and `members`:
-
-```php
-'templates' => [
-    'used' => $this->templatesUsed($organization),
-    'limit' => $limits['templates'],
-],
-```
-
-The `$limit === null` branch is there because every other `can*()` method has it and the Plan
-page's `percentOf()` already treats `null` as unlimited. Nothing sets it to `null` today. Keep
-the branch anyway; it is the convention, and removing it would make this method the odd one out.
-
-Note that unlike documents, templates have no period. A document quota resets every week or
-month; a template quota is "how many exist right now". That is why `templatesUsed()` has no
-`created_at` filter and why the config entry is a bare `5`, not `['limit' => 5, 'period' => …]`.
-
-## 8. Phase 5 — enforce the limit on upload
-
-### 8.1 `app/Http/Controllers/TemplateController.php` — `store()`
-
-After `validate()` and before `$file->store(...)`:
-
-```php
-$organization = $request->user()->organization;
-
-if (! app(PlanService::class)->canAddTemplate($organization)) {
-    return back()->withErrors([
-        'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
-    ]);
-}
-```
-
-Add `use App\Services\PlanService;` to the imports.
-
-The check sits **before** `$file->store()`, not after. If it came after, a rejected upload would
-still have written the PDF to S3 before returning the error. `DocumentController::store()` does
-it in the same order for the same reason.
-
-The error goes on the `file` key because that is the key `UploadCard.vue` and `Templates/Index.vue`
-already read (`errors.file ?? errors.template ?? …`). Reuse the channel; do not invent a new
-key the page would have to learn about.
-
-### 8.2 `TemplateController::index()` — tell the page where it stands
-
-The page needs to know the count and the limit so it can hide the upload box. Add one prop:
-
-```php
-$planService = app(PlanService::class);
-$organization = $request->user()->organization;
-
-return Inertia::render('Templates/Index', [
-    'templates' => $templates,
-    'templateQuota' => [
-        'used' => $planService->templatesUsed($organization),
-        'limit' => $planService->limits($organization)['templates'],
-    ],
-]);
-```
-
-Use `templatesUsed()` rather than `$templates->count()`. They are equal today, but if the index
-query ever gains a filter (search, pagination), the count the page shows must stay the count the
-server enforces.
-
-## 9. Phase 6 — the page at the limit
-
-### 9.1 `resources/js/Pages/Templates/Index.vue`
-
-Add the prop:
-
-```js
-const props = defineProps({
-    templates: Array,
-    templateQuota: Object,
-});
-```
-
-(It is currently `defineProps({ templates: Array })` with no `const props =`; add the
-assignment so you can read it in script.)
-
-Add a computed and the import for it:
-
-```js
-import { computed } from "vue";
-
-const atLimit = computed(
-    () =>
-        props.templateQuota.limit !== null &&
-        props.templateQuota.used >= props.templateQuota.limit,
-);
-```
-
-Then in the template, replace the Upload section's `<UploadCard :form="form" @upload="submit" />`
-with:
-
-```vue
-<div
-    v-if="atLimit"
-    class="rounded-xl border border-dashed p-10 text-center"
->
-    <LayoutTemplate class="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
-
-    <h3 class="font-medium">Template limit reached</h3>
-
-    <p class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-        Your organization can store up to
-        {{ templateQuota.limit }} templates. Delete one below to upload
-        another.
-    </p>
-</div>
-
-<UploadCard v-else :form="form" @upload="submit" />
-```
-
-And change the section's description to show progress:
-
-```vue
-<PageSection
-    title="Upload Template"
-    :description="`${templateQuota.used} of ${templateQuota.limit} templates used.`"
->
-```
-
-`LayoutTemplate` is already imported in this file for the page header.
-
-The `v-if="atLimit"` box is styled to match `FileDropzone`'s dashed border so the page keeps its
-shape; the drop zone is replaced by an explanation in the same place, not removed leaving a gap.
-
-"Delete one below" is accurate: the templates table is the next section down, each row opens the
-template, and the Delete button is on that page. Do not add a delete control to this notice.
-
-### 9.2 `resources/js/Pages/Plan/Index.vue` — show it with the other quotas
-
-The `quotas` computed lists documents, members and storage. Add templates after documents:
-
-```js
-{
-    key: "templates",
-    label: "Templates",
-    icon: LayoutTemplate,
-    used: props.usage.templates.used,
-    limit: props.usage.templates.limit,
-    formatter: formatCount,
-    caption: "Stored right now, on every plan",
-},
-```
-
-Add `LayoutTemplate` to the `lucide-vue-next` import. `usage.templates` is already arriving from
-`PlanService::usage()` after 7.2; this just renders it. No controller change.
-
-### 9.3 Build and look
+Expected: `false, true, false, <a number near 60>`. Then look at the keys:
 
 ```bash
-npm run build
+docker exec esign-redis redis-cli --scan --pattern '*login_otp*'
+docker exec esign-redis redis-cli TTL "ezsign_database_login_otp:<paste-the-uuid>:cooldown"
 ```
 
-With fewer than 5 templates: `/templates` shows the drop zone and "N of 5 templates used" under
-the Upload heading. `/plan` shows a Templates card next to Documents.
+You should see `cooldown` and `sends` (the hash was deleted by the successful verify). The
+prefix `ezsign_database_` is `Str::slug(APP_NAME).'_database_'` — if `APP_NAME` differs, the
+`--scan` output shows you the real one.
 
-Upload until you have 5. The drop zone is replaced by "Template limit reached". Open a template,
-delete it, land back on `/templates`: the drop zone is back and the caption says "4 of 5".
+### Phase 2 — the email
 
-## 10. Phase 7 — tests for the limit
+Create `app/Mail/LoginOtpMail.php` — a copy of
+[EmailVerificationOtpMail.php](app/Mail/EmailVerificationOtpMail.php) with three edits: the class
+name, the subject `'Your EZSign sign-in code'`, and the view `'emails.login-otp'`.
 
-### 10.1 New file: `tests/Feature/TemplateLimitTest.php`
+Create `resources/views/emails/login-otp.blade.php` — a copy of
+[email-verification-otp.blade.php](resources/views/emails/email-verification-otp.blade.php) with
+the text replaced by the copy in 4.5. Six strings change: `<title>`, the `<h2>`, the first
+paragraph, the small label above the code, the line under the code, and the last paragraph. Keep
+every `style=""` attribute as it is.
+
+Check it renders:
+
+```bash
+docker exec esign-app php artisan tinker --execute "
+\$u = App\Models\User::first();
+Illuminate\Support\Facades\Mail::to(\$u->email)->send(new App\Mail\LoginOtpMail(\$u, '123456'));
+echo 'sent';
+"
+```
+
+Open Mailpit at http://localhost:8025 and read it. Subject, heading, the "change your password"
+line, and `123456` in big digits.
+
+### Phase 3 — the controller and routes
+
+Create `app/Http/Controllers/Auth/LoginOtpController.php`:
 
 ```php
 <?php
 
-namespace Tests\Feature;
+namespace App\Http\Controllers\Auth;
 
-use App\Models\Organization;
-use App\Models\Template;
+use App\Http\Controllers\Controller;
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
-use Tests\TestCase;
+use App\Providers\RouteServiceProvider;
+use App\Services\LoginOtpService;
+use Illuminate\Auth\Events\Verified;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
+use Inertia\Inertia;
+use Inertia\Response;
 
-class TemplateLimitTest extends TestCase
+class LoginOtpController extends Controller
 {
-    use RefreshDatabase;
+    public function __construct(
+        private LoginOtpService $otp
+    ) {}
 
-    private User $user;
-    private Organization $organization;
-
-    protected function setUp(): void
+    public function create(Request $request): Response|RedirectResponse
     {
-        parent::setUp();
+        $user = $this->pendingUser($request);
 
-        Storage::fake('documents');
+        if (! $user) {
+            return redirect()->route('login');
+        }
 
-        $this->organization = Organization::create(['name' => 'Acme']);
-
-        $this->user = User::factory()->create([
-            'organization_id' => $this->organization->id,
-            'role' => 'owner',
+        return Inertia::render('Auth/LoginOtp', [
+            'email' => $user->email,
+            'status' => session('status'),
+            'resendAfter' => $this->otp->retryAfter($user),
         ]);
     }
 
-    private function seedTemplates(int $count): void
+    public function store(Request $request): RedirectResponse
     {
-        for ($i = 1; $i <= $count; $i++) {
-            Template::create([
-                'organization_id' => $this->organization->id,
-                'name' => "template-{$i}",
-                'file_path' => "templates/template-{$i}.pdf",
-                'file_size' => 1024,
-                'mime_type' => 'application/pdf',
+        $user = $this->pendingUser($request);
+
+        if (! $user) {
+            return redirect()->route('login');
+        }
+
+        $request->validate([
+            'otp' => ['required', 'digits:6'],
+        ]);
+
+        if (! $this->otp->verify($user, $request->otp)) {
+            throw ValidationException::withMessages([
+                'otp' => 'The code is invalid or has expired. Request a new one below.',
             ]);
         }
+
+        $remember = (bool) $request->session()->get('login_otp.remember');
+        $request->session()->forget('login_otp');
+
+        Auth::login($user, $remember);
+        $request->session()->regenerate();
+
+        if (! $user->hasVerifiedEmail()) {
+            $user->markEmailAsVerified();
+            event(new Verified($user));
+        }
+
+        return redirect()->intended(RouteServiceProvider::HOME);
     }
 
-    private function pdf(): UploadedFile
+    public function resend(Request $request): RedirectResponse
     {
-        return UploadedFile::fake()->createWithContent('new.pdf', "%PDF-1.4\n".str_repeat('a', 1000));
+        $user = $this->pendingUser($request);
+
+        if (! $user) {
+            return redirect()->route('login');
+        }
+
+        $wait = $this->otp->retryAfter($user);
+
+        if ($wait > 0) {
+            throw ValidationException::withMessages([
+                'otp' => "Please wait {$wait} seconds before requesting another code.",
+            ]);
+        }
+
+        $this->otp->send($user);
+
+        return back()->with('status', 'login-code-sent');
     }
 
-    public function test_the_fifth_template_is_accepted(): void
+    private function pendingUser(Request $request): ?User
     {
-        $this->seedTemplates(4);
+        $id = $request->session()->get('login_otp.user_id');
 
-        $this->actingAs($this->user)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-
-        $this->assertDatabaseCount('templates', 5);
-    }
-
-    public function test_the_sixth_template_is_rejected(): void
-    {
-        $this->seedTemplates(5);
-
-        $response = $this->actingAs($this->user)->post('/templates', ['file' => $this->pdf()]);
-
-        $response->assertSessionHasErrors([
-            'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
-        ]);
-        $this->assertDatabaseCount('templates', 5);
-        Storage::disk('documents')->assertMissing('templates/new.pdf');
-    }
-
-    public function test_deleting_one_makes_room_for_another(): void
-    {
-        $this->seedTemplates(5);
-        $victim = Template::where('name', 'template-3')->first();
-
-        $this->actingAs($this->user)->delete("/templates/{$victim->id}");
-
-        $this->actingAs($this->user)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-
-        $this->assertDatabaseCount('templates', 5);
-    }
-
-    public function test_the_limit_is_per_organisation(): void
-    {
-        $this->seedTemplates(5);
-
-        $other = Organization::create(['name' => 'Rival']);
-        $otherUser = User::factory()->create([
-            'organization_id' => $other->id,
-            'role' => 'owner',
-        ]);
-
-        $this->actingAs($otherUser)
-            ->post('/templates', ['file' => $this->pdf()])
-            ->assertSessionHasNoErrors();
-    }
-
-    public function test_the_templates_page_reports_the_quota(): void
-    {
-        $this->seedTemplates(2);
-
-        $this->actingAs($this->user)
-            ->get('/templates')
-            ->assertInertia(fn ($page) => $page
-                ->where('templateQuota.used', 2)
-                ->where('templateQuota.limit', 5)
-            );
+        return $id ? User::find($id) : null;
     }
 }
 ```
 
-The `assertMissing('templates/new.pdf')` in the sixth-template test is the check for 8.1's
-ordering. If the limit check were after `$file->store()`, the file would exist even though the
-row does not, and this line would fail. Note the stored filename is generated by Laravel, not
-`new.pdf`, so strictly this asserts that *no* file with that name was written; the stronger
-check is `assertDirectoryEmpty('templates')` if your Laravel version has it, but the count
-assertion above already proves no row was created.
+Add the routes to [routes/auth.php](routes/auth.php) inside the existing
+`Route::middleware('guest')->group(...)`, right after the two `login` lines:
 
-### 10.2 Run everything
+```php
+    Route::get('login/otp', [LoginOtpController::class, 'create'])
+                ->name('login.otp');
+
+    Route::post('login/otp', [LoginOtpController::class, 'store'])
+                ->name('login.otp.verify');
+
+    Route::post('login/otp/resend', [LoginOtpController::class, 'resend'])
+                ->name('login.otp.resend');
+```
+
+and the import at the top: `use App\Http\Controllers\Auth\LoginOtpController;`
+
+Why `guest`: [RedirectIfAuthenticated](app/Http/Middleware/RedirectIfAuthenticated.php) sends
+anyone already logged in to `/dashboard`, which is exactly right for an OTP page. Why no
+`throttle:` middleware: the service already limits per user, and per-IP throttling would punish
+an office sharing one IP.
+
+Check: `docker exec esign-app php artisan route:list --name=login.otp` lists three routes.
+
+### Phase 4 — stop logging in at the password step
+
+**[LoginRequest.php](app/Http/Requests/Auth/LoginRequest.php)** — change `authenticate()` to check
+without logging in and to return the user:
+
+```php
+    public function authenticate(): User
+    {
+        $this->ensureIsNotRateLimited();
+
+        if (! Auth::validate($this->only('email', 'password'))) {
+            RateLimiter::hit($this->throttleKey());
+
+            throw ValidationException::withMessages([
+                'email' => trans('auth.failed'),
+            ]);
+        }
+
+        RateLimiter::clear($this->throttleKey());
+
+        return Auth::getLastAttempted();
+    }
+```
+
+Add `use App\Models\User;` to the imports. The `remember` value is no longer read here; the
+controller reads it.
+
+**[AuthenticatedSessionController.php](app/Http/Controllers/Auth/AuthenticatedSessionController.php)** —
+replace `store()`:
+
+```php
+    public function store(LoginRequest $request, LoginOtpService $otp): RedirectResponse
+    {
+        $user = $request->authenticate();
+
+        $request->session()->put('login_otp', [
+            'user_id' => $user->id,
+            'remember' => $request->boolean('remember'),
+        ]);
+
+        if ($otp->retryAfter($user) === 0) {
+            $otp->send($user);
+        }
+
+        return redirect()->route('login.otp');
+    }
+```
+
+Add `use App\Services\LoginOtpService;`. The old `$request->session()->regenerate()` and
+`redirect()->intended(...)` move to `LoginOtpController::store()` — they belong after the
+*real* login. `redirect()->intended()` still works there because Laravel stores the intended URL
+in the session, and the session survives the OTP step.
+
+Check by hand: `npm run build`, open http://localhost:8000/login, sign in. You must land on
+`/login/otp`, **not** the dashboard, and a code must be in Mailpit. Visiting
+http://localhost:8000/dashboard now must bounce you to `/login` — you are still a guest.
+
+### Phase 5 — the page
+
+Create `resources/js/Pages/Auth/LoginOtp.vue`. It is
+[VerifyEmail.vue](resources/js/Pages/Auth/VerifyEmail.vue) with the email coming from a prop
+(there is no logged-in user to read it from), different route names, a countdown that starts at
+the server's `resendAfter`, a visible error for a blocked resend, and "Use a different account"
+instead of "Sign out":
+
+```vue
+<script setup>
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Head, Link, useForm } from "@inertiajs/vue3";
+import AuthLayout from "@/Layouts/AuthLayout.vue";
+import { ShieldCheck, MailCheck, RefreshCcw, ArrowLeft } from "lucide-vue-next";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+const props = defineProps({
+    email: String,
+    status: String,
+    resendAfter: Number,
+});
+
+const form = useForm({ otp: "" });
+const resendForm = useForm({});
+const resendCooldown = ref(0);
+let timer = null;
+
+const startCooldown = (seconds) => {
+    clearInterval(timer);
+    resendCooldown.value = seconds;
+
+    if (seconds <= 0) {
+        return;
+    }
+
+    timer = setInterval(() => {
+        resendCooldown.value--;
+
+        if (resendCooldown.value <= 0) {
+            clearInterval(timer);
+        }
+    }, 1000);
+};
+
+onMounted(() => startCooldown(props.resendAfter ?? 0));
+onBeforeUnmount(() => clearInterval(timer));
+
+const verify = () => form.post(route("login.otp.verify"));
+
+const resend = () => {
+    if (resendCooldown.value > 0) {
+        return;
+    }
+
+    resendForm.post(route("login.otp.resend"), {
+        preserveScroll: true,
+        onSuccess: () => startCooldown(60),
+    });
+};
+
+const codeSent = computed(() => props.status === "login-code-sent");
+</script>
+
+<template>
+    <Head title="Check your email" />
+
+    <AuthLayout>
+        <Card class="w-full max-w-md rounded-2xl border shadow-xl bg-background/95">
+            <CardHeader class="items-center text-center space-y-5">
+                <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+                    <ShieldCheck class="h-10 w-10 text-accent-ink" />
+                </div>
+
+                <div>
+                    <CardTitle class="text-3xl font-bold">
+                        Check your email
+                    </CardTitle>
+
+                    <CardDescription class="mt-2 text-base">
+                        Enter the 6-digit code we sent to <span class="font-semibold text-foreground">{{ email }}</span>. It expires in 10 minutes.
+                    </CardDescription>
+                </div>
+            </CardHeader>
+
+            <CardContent class="space-y-6">
+                <div
+                    v-if="codeSent"
+                    class="rounded-xl border border-emerald-200 bg-pulse-green/15 p-4"
+                >
+                    <div class="flex gap-3">
+                        <MailCheck class="mt-0.5 h-5 w-5 text-pulse-green" />
+
+                        <div>
+                            <p class="font-medium text-pulse-green">
+                                New code sent
+                            </p>
+
+                            <p class="mt-1 text-sm text-pulse-green">
+                                Check your inbox for the latest code.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <form @submit.prevent="verify" class="space-y-4">
+                    <div class="space-y-2">
+                        <Input
+                            v-model="form.otp"
+                            inputmode="numeric"
+                            maxlength="6"
+                            autocomplete="one-time-code"
+                            placeholder="000000"
+                            autofocus
+                            class="text-center text-2xl tracking-[0.5em]"
+                        />
+
+                        <p
+                            v-if="form.errors.otp"
+                            class="text-sm text-destructive text-center"
+                        >
+                            {{ form.errors.otp }}
+                        </p>
+                    </div>
+
+                    <Button
+                        type="submit"
+                        class="w-full"
+                        :disabled="form.processing || form.otp.length !== 6"
+                    >
+                        Verify and sign in
+                    </Button>
+                </form>
+
+                <div class="text-center">
+                    <p class="text-sm text-muted-foreground">
+                        Didn't receive the code?
+                    </p>
+
+                    <Button
+                        variant="ghost"
+                        class="mt-1"
+                        :disabled="resendForm.processing || resendCooldown > 0"
+                        @click="resend"
+                    >
+                        <RefreshCcw class="mr-2 h-4 w-4" />
+
+                        {{
+                            resendCooldown > 0
+                                ? `Resend in ${resendCooldown}s`
+                                : "Resend code"
+                        }}
+                    </Button>
+
+                    <p
+                        v-if="resendForm.errors.otp"
+                        class="mt-2 text-sm text-destructive"
+                    >
+                        {{ resendForm.errors.otp }}
+                    </p>
+                </div>
+
+                <Link
+                    :href="route('login')"
+                    class="flex w-full items-center justify-center rounded-lg border py-2.5 text-sm font-medium transition hover:bg-muted"
+                >
+                    <ArrowLeft class="mr-2 h-4 w-4" />
+
+                    Use a different account
+                </Link>
+            </CardContent>
+        </Card>
+    </AuthLayout>
+</template>
+```
+
+Two things that are easy to miss:
+- Errors from `resendForm.post(...)` land in `resendForm.errors`, not `form.errors`. The
+  original `VerifyEmail.vue` never shows them; this page does, under the resend button.
+- The countdown starts from `resendAfter` (the server's real number) so the button is disabled
+  correctly even after a page refresh. After a successful resend it restarts at 60, which is
+  `RESEND_COOLDOWN_SECONDS`. If you change one, change the other.
+
+`route('login.otp.verify')` works because [app.blade.php:33](resources/views/app.blade.php#L33)
+has `@routes` — Ziggy picks up new routes on the next page load, no generation step.
+
+[Login.vue](resources/js/Pages/Auth/Login.vue) needs **no change**. Inertia follows the redirect
+to `/login/otp` and renders the new page.
+
+Run `npm run build` and do the browser checks in section 6 before writing tests.
+
+### Phase 6 — tests
+
+**Fix the one test that is now wrong.** In
+[AuthenticationTest.php](tests/Feature/Auth/AuthenticationTest.php), replace
+`test_users_can_authenticate_using_the_login_screen` with:
+
+```php
+    public function test_a_correct_password_sends_a_code_instead_of_logging_in(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+
+        $response = $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ]);
+
+        $this->assertGuest();
+        $response->assertRedirect('/login/otp');
+        $response->assertSessionHas('login_otp.user_id', $user->id);
+        Mail::assertSent(LoginOtpMail::class, fn ($mail) => $mail->hasTo($user->email));
+    }
+```
+
+Add `use App\Mail\LoginOtpMail;` and `use Illuminate\Support\Facades\Mail;`. Leave the other
+three tests alone.
+
+**Create `tests/Feature/Auth/LoginOtpTest.php`.** Each test starts by putting the user in the
+"password passed" state with `withSession(['login_otp' => [...]])` and getting a code from the
+service — the same way `EmailVerificationTest` calls `generate()` instead of reading an email.
+Tests talk to the real Redis in Docker; user ids are random UUIDs, so tests never collide with
+each other or with your dev session.
+
+```php
+<?php
+
+namespace Tests\Feature\Auth;
+
+use App\Mail\LoginOtpMail;
+use App\Models\User;
+use App\Providers\RouteServiceProvider;
+use App\Services\LoginOtpService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Redis;
+use Tests\TestCase;
+
+class LoginOtpTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private function pending(User $user, bool $remember = false): static
+    {
+        return $this->withSession([
+            'login_otp' => ['user_id' => $user->id, 'remember' => $remember],
+        ]);
+    }
+
+    public function test_the_otp_page_redirects_to_login_when_nothing_is_pending(): void
+    {
+        $this->get('/login/otp')->assertRedirect('/login');
+        $this->post('/login/otp', ['otp' => '123456'])->assertRedirect('/login');
+        $this->post('/login/otp/resend')->assertRedirect('/login');
+    }
+
+    public function test_the_otp_page_renders_for_a_pending_login(): void
+    {
+        $user = User::factory()->create();
+
+        $this->pending($user)->get('/login/otp')->assertOk();
+    }
+
+    public function test_a_correct_code_logs_the_user_in(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertAuthenticatedAs($user);
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        $response->assertSessionMissing('login_otp');
+    }
+
+    public function test_remember_me_survives_the_otp_step(): void
+    {
+        // The factory fills remember_token with a random string, so start from null.
+        $user = User::factory()->create(['remember_token' => null]);
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $this->pending($user, remember: true)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertAuthenticatedAs($user);
+        $this->assertNotNull($user->fresh()->remember_token);
+    }
+
+    public function test_a_wrong_code_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => '000000']);
+
+        $this->assertGuest();
+        $response->assertSessionHasErrors('otp');
+        $response->assertSessionHas('login_otp.user_id', $user->id);
+    }
+
+    public function test_a_code_that_is_gone_from_redis_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+        Redis::del("login_otp:{$user->id}:hash");
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertGuest();
+        $response->assertSessionHasErrors('otp');
+    }
+
+    public function test_five_wrong_guesses_burn_the_code(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+
+        for ($i = 0; $i < 5; $i++) {
+            $this->pending($user)->post('/login/otp', ['otp' => '000000']);
+        }
+
+        $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertGuest();
+    }
+
+    public function test_resend_is_blocked_inside_the_cooldown(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasErrors('otp');
+        Mail::assertNothingSent();
+    }
+
+    public function test_resend_sends_a_new_code_after_the_cooldown(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+        Redis::del("login_otp:{$user->id}:cooldown");
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasNoErrors();
+        $response->assertSessionHas('status', 'login-code-sent');
+        Mail::assertSent(LoginOtpMail::class, 1);
+    }
+
+    public function test_resend_is_blocked_after_five_sends(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        $service = app(LoginOtpService::class);
+
+        for ($i = 0; $i < 5; $i++) {
+            $service->generate($user);
+        }
+        Redis::del("login_otp:{$user->id}:cooldown");
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasErrors('otp');
+        Mail::assertNothingSent();
+    }
+
+    public function test_a_correct_code_also_verifies_an_unverified_email(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => null]);
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertTrue($user->fresh()->hasVerifiedEmail());
+    }
+
+    public function test_a_logged_in_user_is_sent_away_from_the_otp_page(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)->get('/login/otp')->assertRedirect(RouteServiceProvider::HOME);
+    }
+}
+```
+
+Why `Redis::del(...)` in two tests: cooldown and expiry are real clock time in Redis, so
+`travel()` cannot fake them. Deleting the key is the honest equivalent of "60 seconds passed".
+The prefix is added by the connection, so the test writes the bare key.
+
+Run:
 
 ```bash
-docker exec esign-app php artisan test tests/Feature/TemplateDeleteTest.php tests/Feature/TemplateLimitTest.php
+docker exec esign-app php artisan test tests/Feature/Auth
 docker exec esign-app php artisan test
 ```
 
-Eight new tests green. The full suite has the same two pre-existing registration failures as
-before and no new ones. (`TemplateUploadTest` from the previous change also still passes: its
-`setUp` starts with zero templates, so the limit never triggers.)
+All of `tests/Feature/Auth` must pass. In the full run, the only failures allowed are ones that
+already fail on `main` before your branch (check with `git stash` if unsure — at the time of
+writing there are 4 pre-existing failures in `TemplateUploadTest` and a TCPDF warning; none of
+them touch auth).
 
-## 11. Verification checklist
+## 6. Manual checks before you open the PR
 
-Tick each only if you saw it happen.
+Run `npm run build` first. Mailpit is at http://localhost:8025.
 
-**Delete:**
-
-- [ ] `route:list --name=templates.destroy` shows a `DELETE` route
-- [ ] Template page has a red Delete button beside Preview and Prepare
-- [ ] Clicking it opens a dialog naming the template and its field count
-- [ ] Cancel closes the dialog, nothing deleted
-- [ ] Confirm: loading overlay, land on `/templates`, template gone from the list
-- [ ] In the database: `select count(*) from template_signature_fields where template_id = '<id>'` is 0
-- [ ] In S3 (or the local disk if `DOCUMENTS_DISK` is local): the file is gone
-- [ ] `TemplateDeleteTest` — 3 pass
-
-**Limit:**
-
-- [ ] `config/plans.php` has `'templates' => 5` under free, pro **and** enterprise
-- [ ] `/templates` with fewer than 5: drop zone visible, "N of 5 templates used"
-- [ ] `/templates` with exactly 5: drop zone replaced by "Template limit reached"
-- [ ] Delete one, return to `/templates`: drop zone back, "4 of 5"
-- [ ] `/plan` shows a Templates card with the same numbers
-- [ ] With 5 templates, POST a sixth via the test or curl: rejected, no new row, no new file
-- [ ] `TemplateLimitTest` — 5 pass
-- [ ] Full suite: no new failures
-
-## 12. Common ways this goes wrong
-
-| Symptom | Cause | Fix |
+| # | Do | Expect |
 | --- | --- | --- |
-| `template_signature_fields` rows survive the delete | You are not on Postgres, or the migration was edited | Check `DB_CONNECTION=pgsql` and that the migration still has `cascadeOnDelete()` |
-| Delete works, file still in S3, no log line | Forgot the `if (! Storage::…->delete())` wrapper | 4.2 |
-| Delete works, file still in S3, log line present | S3 credentials or permissions | Not a code bug; the log line is doing its job |
-| Dialog does not open | `confirmingDelete` not a `ref`, or `v-model:open` missing | 5.2 |
-| Dialog shows "undefined signature fields" | Reading `signature_fields_count` on a page that did not `loadCount` | Only `show()` loads it; the dialog lives on the Show page |
-| 405 Method Not Allowed on delete | Route registered as `post` or `get` | 4.1 |
-| Sixth upload rejected but file appears in S3 | Limit check placed after `$file->store()` | 8.1 |
-| Sixth upload accepted | `'templates'` key missing from the plan the org is on | 7.1, all three plans |
-| Page always shows the drop zone | `templateQuota` prop not passed from `index()` | 8.2 |
-| Page never shows the drop zone | `atLimit` compares `used > limit` instead of `>=` | 9.1 |
-| Plan page crashes: cannot read `templates` of undefined | `usage()` not updated | 7.2 |
-| `TemplateUploadTest` starts failing | It seeds 0 templates; if it fails, the limit is reading the wrong org or counting globally | `templatesUsed()` must filter by `organization_id` |
+| 1 | Log in with a correct password | Land on `/login/otp`, page shows your email, resend button reads "Resend in ~60s" |
+| 2 | Open a new tab → http://localhost:8000/dashboard | Redirected to `/login`. You are not logged in yet |
+| 3 | Mailpit | One email, subject "Your EZSign sign-in code", code in big digits, "change your password" line present |
+| 4 | Type a wrong code | Red text "The code is invalid or has expired. Request a new one below." Still on the page |
+| 5 | Type the right code | Dashboard. Refresh: still logged in |
+| 6 | Log out, log in again with **Remember me** ticked, pass the code, close the browser fully, reopen | Still logged in (remember cookie set at the OTP step) |
+| 7 | Log out, log in, then refresh the OTP page | Countdown continues from the real remaining seconds, not from 60 |
+| 8 | Wait for the countdown to hit 0, click Resend | Green "New code sent" banner, a second email in Mailpit, countdown restarts at 60 |
+| 9 | Right after step 8: `docker exec esign-redis redis-cli --scan --pattern '*login_otp*'`, then `TTL` the `cooldown` key and `GET` the `sends` key | `cooldown` TTL is close to 60 and counting down; `sends` is `2`. (The refusal itself is covered by `test_resend_is_blocked_inside_the_cooldown` — the button is disabled in the UI, so you cannot trigger it by hand) |
+| 10 | Enter a wrong code 5 times, then the right one | Rejected. Resend, use the new code → logged in |
+| 11 | `docker exec esign-redis redis-cli --scan --pattern '*login_otp*'` after step 5 | No `hash` or `attempts` key for your user; `cooldown` (if under 60 s) and `sends` may remain and expire on their own |
+| 12 | Register a brand-new account | Unchanged: straight to `/verify-email` with **one** email (the registration code). No login code |
+| 13 | Log out, log in as an account whose email is **not** verified, pass the code | Dashboard directly, no `/verify-email` page, `email_verified_at` now set |
+| 14 | While on `/login/otp`, click "Use a different account", log in as someone else | Their code, their email on the page, their dashboard |
 
-## 13. Definition of done
+## 7. Definition of done
 
-- `DELETE /templates/{id}` removes the row, its signature fields (via cascade) and its file,
-  for the owner's organisation only.
-- The Show page has a Delete button behind a dialog that names the template and its field count.
-- `config/plans.php` gives every plan `'templates' => 5`; `PlanService` exposes
-  `templatesUsed()`, `canAddTemplate()` and a `templates` entry in `usage()`.
-- `POST /templates` rejects a sixth template before writing anything to storage.
-- The Templates page replaces the drop zone with an explanation at the limit, and the Plan page
-  shows the quota.
-- Eight new tests pass; the full suite has no new failures.
-- No migration, no new dependency, no soft-delete, no manual deletion of field rows.
+- [ ] Phase 0 commands both succeed on a fresh `docker compose up`
+- [ ] `POST /login` with a correct password leaves the user a guest (`assertGuest()` in the test)
+- [ ] `login_otp:{id}:hash` in Redis is a bcrypt hash (`$2y$…`), never six digits, with `TTL` ≤ 600
+- [ ] Resend blocked inside 60 s and after 5 sends; both covered by tests
+- [ ] 5 wrong guesses invalidate the code; covered by a test
+- [ ] `remember` still works; covered by a test
+- [ ] Unverified users are verified by the login code; covered by a test
+- [ ] `tests/Feature/Auth` green; full suite has no new failures
+- [ ] All 14 manual checks pass
+- [ ] `grep -rn "Auth::attempt" app/` returns nothing
+- [ ] The code never appears in `storage/logs/laravel.log`, the session, or an Inertia prop
+- [ ] No changes to `.env`, `config/cache.php`, `config/session.php`, or any `auth`-group route
+
+## 8. Files you will touch
+
+| File | Change |
+| --- | --- |
+| `app/Services/LoginOtpService.php` | new |
+| `app/Mail/LoginOtpMail.php` | new |
+| `resources/views/emails/login-otp.blade.php` | new |
+| `app/Http/Controllers/Auth/LoginOtpController.php` | new |
+| `resources/js/Pages/Auth/LoginOtp.vue` | new |
+| `tests/Feature/Auth/LoginOtpTest.php` | new |
+| `routes/auth.php` | +3 routes, +1 import |
+| `app/Http/Requests/Auth/LoginRequest.php` | `authenticate()` uses `Auth::validate`, returns `User` |
+| `app/Http/Controllers/Auth/AuthenticatedSessionController.php` | `store()` sends a code instead of logging in |
+| `tests/Feature/Auth/AuthenticationTest.php` | one test rewritten |
+
+Ten files, roughly 450 lines, most of it copy-and-edit. One PR, one commit is fine. Suggested
+title: `feat(auth): require an emailed one-time code on every login`. In the PR body, list which
+of the 14 manual checks you ran and paste the `redis-cli TTL` output from check 11.

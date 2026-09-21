@@ -32,7 +32,7 @@ const badges = ["256-bit encryption", "Audit trail", "OTP verified", "GDPR ready
 </script>
 
 <template>
-    <LandingSection id="security" eyebrow="Security" title="Built for trust" subtitle="Every signature is verified, encrypted and auditable.">
+    <LandingSection id="security" eyebrow="Security" title="How we verify who signed" subtitle="Every signature is verified, encrypted and auditable.">
         <div class="grid gap-6 sm:grid-cols-2">
             <FadeIn v-for="card in cards" :key="card.title" type="scale">
                 <Card>
