@@ -1,791 +1,970 @@
-# Landing page SEO for "digital signature"
+# Email OTP as a second step on every login
 
 ## 1. What we are building, in one paragraph
 
-Make the landing page rank for **digital signature** with **small and individual business owners**
-as the audience. The strategy work (which questions to answer, what searchers want, the heading
-structure, the copy) is done in section 4 — you paste it, you do not invent it. The engineering
-work is getting that content in front of crawlers, which today see almost nothing, and telling
-them which pages are public and which are private.
+Today `POST /login` with the right password logs the user in. After this change it does not.
+Instead it remembers *who* passed the password check in the session, generates a 6-digit code,
+stores a hash of that code in **Redis with a 10-minute expiry**, emails the code, and sends the
+browser to a new page `/login/otp`. Only when the user types the right code does the app call
+`Auth::login()`. Resending the code is rate limited two ways: once per 60 seconds, and at most 5
+sends per 10 minutes. Typing the wrong code 5 times burns the code and the user must request a
+new one. Nothing else about the app changes: registration, password reset, the `auth` middleware,
+and every test that uses `actingAs()` stay exactly as they are.
 
-Measured on the current build with `curl -s http://localhost:8000/`:
+```
+ POST /login  ──password ok──▶ session: login_otp = {user_id, remember}
+                              redis:   login_otp:{user_id}:hash  (TTL 600 s)
+                              mail:    "Your sign-in code: 123456"
+                              302 ──▶ GET /login/otp  (shows the code form)
 
-| What a crawler needs | In the raw HTML today |
-| --- | --- |
-| `<title>` with the keyword | `EZSign` (just the app name) |
-| `<meta name="description">` | none |
-| `<link rel="canonical">` | none |
-| Open Graph / Twitter tags (link previews in Slack, WhatsApp, X) | none |
-| `<h1>` | none — it is typed out letter by letter by JavaScript after load |
-| Structured data (`application/ld+json`) | none |
-| Body text | an empty `<div id="app">` plus a JSON blob |
-| `robots.txt` | allows everything, including `/dashboard`, `/documents` and private `/sign/{token}` links |
-| `sitemap.xml` | none |
+ POST /login/otp {otp} ──code ok──▶ Auth::login(user, remember) ──▶ 302 /dashboard
+                       ──wrong───▶ attempts+1, error under the input (5 strikes = code deleted)
 
-Googlebot runs JavaScript, so the body eventually gets rendered. The head tags do not: bots that
-generate link previews never run JavaScript, and Google's own snippet comes from the head. So the
-head is rendered server-side in Blade (Phase 1), the H1 becomes real text (Phase 2), the new
-content goes in as a Vue section (Phase 3), and robots/sitemap/noindex tell crawlers where to look
-(Phase 4).
+ POST /login/otp/resend ──not in cooldown, under the cap──▶ new code, new mail, status banner
+                        ──too soon / too many──────────────▶ error "wait N seconds"
+```
 
 ## 2. Things you must not do
 
-- **Do not** set up Inertia SSR. It needs a Node process in production, a second Vite build and
-  supervisor changes. Everything a non-JavaScript bot needs is in the head, and this plan renders
-  the head in Blade. SSR is the next step *only if* Search Console later shows the body missing.
-- **Do not** repeat the keyword. Three or four natural uses of "digital signature" in ~200 words
-  of body copy is right. Ten is a penalty. The copy in 4.4 has the density already; paste it as-is.
-- **Do not** add `Review` or `AggregateRating` structured data for the testimonials. They are
-  three first-name-and-initial quotes with no company. Google treats self-serving review markup
-  as spam, and there is nothing to back the quotes up.
-- **Do not** claim things the product does not do. In particular: no "SOC 2", no "GDPR
-  compliant", no "bank-level encryption". The copy in 4.4 claims only what the code does:
-  email one-time passcode, a certificate-based signature on the finished PDF, a record of who
-  signed and when.
-- **Do not** put pricing figures in the new SEO section. The landing page's pricing card and
-  `config/plans.php` currently disagree (Phase 5 fixes that). The SEO copy says "free to start",
-  which is true, and nothing more.
-- **Do not** hardcode the domain anywhere except `public/robots.txt` (which is a static file
-  and has no choice). Everything else reads `config('app.url')`.
-- **Do not** `noindex` the landing page. The default this plan introduces is "noindex unless
-  the route passed `meta`" — the landing route passes it. Check with curl in section 11.
+- **Do not log the user in before the code is verified.** No `Auth::attempt()` and no
+  `Auth::login()` anywhere in the password step. The whole design rests on the user being a
+  *guest* until `/login/otp` succeeds; that is what keeps every `auth`-protected route safe
+  without adding a single new middleware.
+- **Do not add a middleware to the `auth` route groups.** That is the other way to build 2FA
+  ("log in, then block until verified"). It would break the 33 `actingAs()` calls across 9 test
+  files, and it is not this plan.
+- **Do not store the plain code in Redis.** Store `Hash::make($otp)` and compare with
+  `Hash::check()`, exactly like [SigningOtpService](app/Services/SigningOtpService.php) does.
+  If Redis is ever read by the wrong person, hashes are useless to them; plain codes are a login.
+- **Do not put the code anywhere except the email.** Not in the session, not in a cookie, not in
+  the URL, not in an Inertia prop, not in a `Log::info()`. The test gets the code by calling the
+  service directly, not by reading it from the response.
+- **Do not use the `Cache` facade.** The default cache driver in this project is `file`
+  ([.env](.env) `CACHE_DRIVER="file"`). The task says Redis; use
+  `Illuminate\Support\Facades\Redis`. Do not change `CACHE_DRIVER` or `SESSION_DRIVER` "while you
+  are at it" — that is a deployment change with its own risks.
+- **Do not reuse `EmailVerificationOtpMail`.** Its body says "finish creating your EZSign
+  account", which is wrong for a login. Make a new mailable and template (they are copies with
+  different words).
+- **Do not add "skip", "trust this device", or "remember this browser for 30 days".** The task
+  is *every* login. Those are separate features.
+- **Do not add reCAPTCHA to the OTP page.** The password step already has it; the OTP page is
+  protected by the code itself and by the attempt limit.
+- **Do not touch tests that use `actingAs()`.** They deliberately skip the login form. Only
+  [AuthenticationTest.php](tests/Feature/Auth/AuthenticationTest.php) posts to `/login`, and it is
+  updated in Phase 6.
 
 ## 3. How the pieces already fit together
 
 | You need to | Look at | What you will see |
 | --- | --- | --- |
-| Find the landing route | [routes/web.php:38-40](routes/web.php#L38-L40) | A closure inside the `guest` group: `Inertia::render('Landing')` |
-| See the root HTML every page uses | [resources/views/app.blade.php](resources/views/app.blade.php) | `<title inertia>` and `@inertiaHead`; no meta tags |
-| See how the client composes the tab title | [resources/js/app.js:17](resources/js/app.js#L17) | `title: (title) => \`${title} - ${appName}\`` — the client **appends** " - EZSign" |
-| See the H1 | [Landing.vue:154-161](resources/js/Pages/Landing.vue#L154-L161) | `<h1><Typewriter text="Secure Digital Signing for Modern Teams" /></h1>` |
-| See how a landing section is built | [LandingSection.vue](resources/js/Components/landing/LandingSection.vue) | Props `id`, `eyebrow`, `title`, `subtitle`, `muted`; renders the `<h2>` for you |
-| See a section that uses it | [HowItWorks.vue](resources/js/Components/landing/HowItWorks.vue) | `<LandingSection id="how-it-works" eyebrow="…" title="…">` with `<h3>` cards inside |
-| See how page-level values reach Vue | [HandleInertiaRequests.php:74](app/Http/Middleware/HandleInertiaRequests.php#L74) | `'recaptchaSiteKey' => config(...)` shared as a prop |
-| See the plan limits that pricing copy must match | [config/plans.php](config/plans.php) | free: 3 documents/**week**, 3 members; pro: $10/month |
-| See the FAQ data shape | [Faq.vue:5-32](resources/js/Components/landing/Faq.vue#L5-L32) | `const faqs = [{ q, a }, …]` |
+| The login routes | [routes/auth.php:14-24](routes/auth.php#L14-L24) | `GET/POST login` inside `Route::middleware('guest')`. Your three new routes go in this same group |
+| What `POST /login` does now | [AuthenticatedSessionController.php:39-46](app/Http/Controllers/Auth/AuthenticatedSessionController.php#L39-L46) | `$request->authenticate()` then `regenerate()` then `redirect()->intended(HOME)` |
+| Where the password is actually checked | [LoginRequest.php:44-56](app/Http/Requests/Auth/LoginRequest.php#L44-L56) | `Auth::attempt(...)` — this is the line that logs the user in and must change |
+| An OTP service that uses `Hash::make` and a 5-attempt cap | [SigningOtpService.php](app/Services/SigningOtpService.php) | Same rules we want, but stored in a DB row. Ours goes in Redis |
+| An OTP service with a 10-minute constant | [EmailVerificationOtpService.php](app/Services/EmailVerificationOtpService.php) | `public const EXPIRES_IN_MINUTES = 10;` — copy the naming style |
+| A mailable that carries `$user` and `$otp` | [EmailVerificationOtpMail.php](app/Mail/EmailVerificationOtpMail.php) | 20 lines; copy it, rename, change subject and view |
+| The email HTML you will copy | [email-verification-otp.blade.php](resources/views/emails/email-verification-otp.blade.php) | Inline-styled table-free HTML with the code in big digits |
+| A controller that validates a 6-digit code | [VerifyEmailController.php](app/Http/Controllers/Auth/VerifyEmailController.php) | `'otp' => ['required', 'digits:6']` and `ValidationException::withMessages(['otp' => …])` |
+| The Vue page you will copy | [VerifyEmail.vue](resources/js/Pages/Auth/VerifyEmail.vue) | Code input, verify button, resend button with a 60 s countdown, status banner |
+| Where `HOME` lives | [RouteServiceProvider.php:20](app/Providers/RouteServiceProvider.php#L20) | `public const HOME = '/dashboard';` |
+| Redis connection config | [config/database.php:122-140](config/database.php#L122-L140) | client `phpredis`, prefix `ezsign_database_` added to every key automatically |
+| Redis in Docker | [docker-compose.yml:46-53](docker-compose.yml#L46-L53) and [docker/php/Dockerfile:20-21](docker/php/Dockerfile#L20-L21) | Container `esign-redis`; `pecl install redis` in the PHP image. `.env` has `REDIS_HOST="redis"` |
+| The existing login test | [AuthenticationTest.php:21-32](tests/Feature/Auth/AuthenticationTest.php#L21-L32) | Asserts `assertAuthenticated()` after `POST /login`. That assertion becomes wrong and is rewritten |
 
-**Two Inertia facts this plan depends on.**
+**Three framework facts this plan depends on.**
 
-`Inertia::render(...)->withViewData([...])` passes variables to `app.blade.php` — server-side,
-in the HTML, before any JavaScript. That is how the head tags get there. It exists in the
-installed `inertia-laravel` 0.6.11.
+1. `Auth::validate($credentials)` checks a password **without** logging anyone in, and
+   `Auth::getLastAttempted()` then returns the matching user. Both exist on Laravel 10's
+   `SessionGuard` ([vendor: SessionGuard.php:277](vendor/laravel/framework/src/Illuminate/Auth/SessionGuard.php#L277)).
+2. `Auth::login($user, $remember)` does everything `Auth::attempt()` did after the password check:
+   sets the session, issues the remember cookie when `$remember` is true, fires the `Login` event.
+3. The `Redis` facade with phpredis passes commands straight through: `Redis::setex($key, $ttl,
+   $value)`, `Redis::get`, `Redis::incr`, `Redis::expire`, `Redis::ttl`, `Redis::del`. The key
+   prefix from `config/database.php` is applied for you — write `login_otp:…`, never the prefix.
+   Always import it as `use Illuminate\Support\Facades\Redis;` — inside a namespace a bare
+   `Redis` does not resolve, and in tinker a bare `\Redis` is phpredis's own class, not the facade.
 
-The client-side `<Head>` component only manages elements that carry the `inertia` attribute.
-Meta tags we write in Blade *without* that attribute are left alone after hydration. The one
-element that has it, `<title inertia>`, gets replaced by the client — so Blade must compose the
-title with the same " - EZSign" suffix `app.js` adds, or the title will flicker from one string
-to another.
+## 4. The design — done for you
 
-## 4. The SEO strategy — done for you
+Paste from this section. The reasoning is here so you can judge edge cases, not so you can redo it.
 
-You paste from this section. The reasoning is here so you can judge edge cases, not so you can
-redo it.
+### 4.1 Redis keys
 
-### 4.1 Sub-question analysis
+All keys are per user, all expire on their own. Nothing needs a cleanup job.
 
-What a small business owner actually needs answered before they trust a digital signature tool
-with a real contract. Each is mapped to where on the page it is answered.
+| Key | Value | TTL | Written by | Read by |
+| --- | --- | --- | --- | --- |
+| `login_otp:{user_id}:hash` | `Hash::make($otp)` | 600 s (10 min) | `generate()` | `verify()` |
+| `login_otp:{user_id}:attempts` | integer, wrong-code count | 600 s | `verify()` (`INCR`) | `verify()` |
+| `login_otp:{user_id}:cooldown` | `1` | 60 s | `generate()` | `retryAfter()` |
+| `login_otp:{user_id}:sends` | integer, codes sent in this window | 600 s from the **first** send | `generate()` (`INCR`) | `retryAfter()` |
 
-| # | Sub-question | Answered by |
-| --- | --- | --- |
-| 1 | Is a digital signature legally binding for my contracts? | New section, H3 "Is a digital signature legally binding?" |
-| 2 | What is the difference between a digital and an electronic signature, and which is this? | New section, H3 "Digital signature vs. electronic signature" |
-| 3 | How do I know the right person signed, not whoever had the link? | Security section (retitled "How we verify who signed") |
-| 4 | Can the document be changed after it is signed? Would I know? | New section, para 1; new FAQ entry |
-| 5 | Does my client need an account, an app or a special device? | Existing FAQ "Do signers need an account?" |
-| 6 | What does it cost, and is there a free plan? | Pricing section (facts fixed in Phase 5) |
-| 7 | What files can I use? | Existing FAQ "What file types can I upload?" |
-| 8 | How long does it take from upload to signed? | How-it-works section (three steps) |
-| 9 | What do I get at the end — where is my proof? | New section, para 1; existing "Verify & sign" step |
-| 10 | Can I reuse the same contract for every client? | Existing pricing bullet "Templates"; not expanded here |
-| 11 | Where are my documents stored and who can see them? | New FAQ entry |
+`generate()` deletes `attempts` (a new code gets a fresh 5 tries) but **not** `sends` or
+`cooldown` — those are the rate limit and must survive a regenerate.
 
-Excluded on purpose: the history of digital signatures, how public-key cryptography works,
-vendor comparison tables, compliance acronyms. A small business owner does not need any of it to
-decide, and each one dilutes the page.
+### 4.2 Session key
 
-### 4.2 Search intent and page structure
-
-**"digital signature" is mixed intent, leaning informational.** Most people typing the bare
-phrase want to know what one is and whether it counts. A significant minority are looking for a
-tool ("digital signature software", "free digital signature", "sign PDF online"). Almost nobody is
-ready to pay this second.
-
-**Structure that serves both:** a product landing page whose first scroll answers the
-informational question. Hero (commercial, keyword in H1) → "What is a digital signature?"
-(informational, ~200 words, sub-questions 1, 2, 4, 9) → How it works (8) → How we verify who
-signed (3) → Use cases → Pricing (6) → FAQ (5, 7, 11). The informational block sits second, not
-buried at the bottom, because it is what qualifies the page for the larger share of the query.
-
-Long-tail phrases folded in naturally, never forced: "digital signature for small business",
-"legally binding", "sign a PDF online", "free to start".
-
-### 4.3 Content blueprint
-
-Headings only. Existing sections keep their H3s; only the ones marked *new* or *retitle* change.
-
-```
-H1  Digital Signature Software for Small Business                      (Phase 2 — replaces the typewriter)
-
-H2  What is a digital signature?                                       (Phase 3 — new section)
-    H3  Digital signature vs. electronic signature
-    H3  Is a digital signature legally binding?
-
-H2  Sign a document in three steps                                     (existing HowItWorks — unchanged)
-    H3  Upload your PDF
-    H3  Add signers & send
-    H3  Verify & sign
-
-H2  How we verify who signed                                           (Phase 3 — retitle from "Built for trust")
-    H3  Access & Authentication                                        (existing)
-    H3  Compliance & Audit                                             (existing)
-
-H2  One tool for every agreement                                       (existing UseCases — unchanged)
-
-H2  Start free. Scale when you're ready.                               (existing Pricing — bullets fixed in Phase 5)
-
-H2  Frequently asked questions                                         (existing Faq — two entries added in Phase 3)
+```php
+session('login_otp') === ['user_id' => '9c1e…', 'remember' => false]
 ```
 
-### 4.4 The copy
+Written by `AuthenticatedSessionController::store()` after the password passes. Read by every
+method of `LoginOtpController`. Forgotten the moment the code is verified. If it is absent, every
+OTP route redirects to `/login` — that is the only "are you allowed here" check the OTP page needs.
 
-**Head strings** (go in `config/seo.php`, Phase 1). Title is 46 characters; the client appends
-" - EZSign" for 55. Description is 139 characters.
+### 4.3 Rate limits, all of them
 
-```
-title:        Digital Signature Software for Small Business
-description:  Get contracts signed online with a legally binding digital signature. Your clients sign from an email link, no account needed. Free to start.
-```
+| What | Limit | Where enforced | Already exists? |
+| --- | --- | --- | --- |
+| Wrong password | 5 per email+IP, then lockout | `LoginRequest::ensureIsNotRateLimited()` | Yes, untouched |
+| Wrong code | 5 per code, then the code is deleted | `LoginOtpService::verify()` via `attempts` key | New |
+| Resend too soon | 1 per 60 s per user | `LoginOtpService::retryAfter()` via `cooldown` key | New |
+| Resend too often | 5 per 10 min per user | `LoginOtpService::retryAfter()` via `sends` key | New |
+| First send on `POST /login` | Same cooldown and cap as resend | `store()` calls `retryAfter()` before sending | New |
 
-**Hero** (Phase 2). H1 then the paragraph under it.
+That last row matters. `LoginRequest` only counts *failed* passwords, so without it someone who
+knows a password could `POST /login` in a loop and email-bomb the account. With it, a correct
+password inside the cooldown just lands on the OTP page — the code sent a moment ago is still
+valid, so nothing is lost.
 
-```
-H1: Digital Signature Software for Small Business
+25 guesses per 10 minutes (5 codes × 5 tries) against a 6-digit code is a 0.0025% chance. Good
+enough; do not add more.
 
-Send a contract, your client signs it in the browser, and you get back a
-PDF that proves who signed and that nothing changed afterwards. No account
-needed for signers. Free to start.
-```
+### 4.4 Why a code sent to the same inbox also verifies the email
 
-**"What is a digital signature?" section** (Phase 3). This is the drafted main-topic section:
-one H2, two H3s, three short paragraphs, about 230 words. "digital signature" appears four times
-in the body, which is where it should be.
+Users who registered but never verified their email would otherwise get **two** codes on login:
+ours, then the `verified` middleware's on `/verify-email`. A login code proves inbox access,
+which is exactly what email verification proves. So on a successful code, if
+`! $user->hasVerifiedEmail()`, mark it verified and fire the `Verified` event — the same four lines
+[VerifyEmailController.php:37-39](app/Http/Controllers/Auth/VerifyEmailController.php#L37-L39)
+already runs. Registration itself still goes through `/verify-email` (it never touches `/login`).
 
-```
-H2: What is a digital signature?
+### 4.5 Copy
 
-A digital signature is a way to sign a document online so that two things
-can be proven later: who signed it, and that nothing in it has changed
-since. Instead of printing, signing with a pen and scanning, you send the
-PDF by email. Your client opens the link, confirms their identity with a
-one-time code, and signs in the browser. When everyone has signed, the PDF
-is sealed with a certificate, so any PDF reader can check that it has not
-been altered.
+Email subject: **Your EZSign sign-in code**
 
-H3: Digital signature vs. electronic signature
+Email body, in order: heading "Confirm it's you" · "Hello {name}," · "Someone just signed in to
+EZSign with your password. Enter the code below to finish signing in. It expires in 10 minutes." ·
+the code · "Enter this code on the sign-in page to continue." · "If this wasn't you, change your
+password now — someone else knows it."
 
-An electronic signature is any mark that shows agreement: a typed name, a
-drawn squiggle, a ticked box. A digital signature goes further. It records
-who signed and when, and it locks the document so that later edits can be
-detected. EZSign does both. Every signer is verified by an email code, and
-every finished document carries a certificate-based digital signature and a
-record of who signed it.
+Page title: **Check your email** · description: "Enter the 6-digit code we sent to
+**{email}**. It expires in 10 minutes." · button: "Verify and sign in" · resend: "Resend code" /
+"Resend in {n}s" · secondary link: "Use a different account" → `/login` · banner after resend:
+"New code sent" / "Check your inbox for the latest code."
 
-H3: Is a digital signature legally binding?
+Error messages (the user reads these, keep them exact):
+- wrong or expired code: `The code is invalid or has expired. Request a new one below.`
+- resend blocked: `Please wait {n} seconds before requesting another code.`
 
-In most countries, yes, provided the signer's identity was verified, the
-signer clearly intended to sign, and the signed document cannot be changed
-without detection. EZSign records all three. A few document types still
-require a notary or ink by law, such as some wills, deeds and court filings.
-Check the rules where you live for those.
-```
+## 5. Step by step
 
-Every claim above maps to code: the one-time code is `SigningOtpService`; the certificate seal is
-`$pdf->setSignature(...)` at [SigningController.php:465](app/Http/Controllers/SigningController.php#L465),
-which throws if no certificate is configured, so every finished PDF has it; "who signed and when"
-is `signers.signed_at`.
+Work in this order. Each phase ends with something you can run. Commands run inside the app
+container: prefix them with `docker exec esign-app` (or `docker exec -it esign-app bash` once).
 
-**Two new FAQ entries** (Phase 3):
+### Phase 0 — prove Redis is reachable (5 minutes)
 
-```
-q: Can a signed PDF be changed afterwards?
-a: Not without it showing. When the last person signs, EZSign seals the PDF with a certificate. Open it in Adobe Reader or any PDF viewer with a signature panel and it will tell you whether the file has been modified since signing.
-
-q: Where are my documents stored?
-a: In private cloud storage that only your organization's members can reach through the app. Signers see only the document they were sent, through their own link.
+```bash
+docker exec esign-app php -r "echo extension_loaded('redis') ? 'phpredis OK' : 'phpredis MISSING', PHP_EOL;"
+docker exec esign-app php artisan tinker --execute "var_dump(Illuminate\Support\Facades\Redis::connection()->ping());"
 ```
 
-## 5. Phase 1 — render the head tags server-side
+Expected: `phpredis OK` and `bool(true)` (or the string `+PONG`). If the first line says MISSING,
+rebuild the image (`docker compose build app`). If the second fails, `docker compose up -d redis`.
+Do not continue until both pass — every later phase and every test needs this.
 
-### 5.1 New file: `config/seo.php`
+### Phase 1 — the service (Redis only, no HTTP)
+
+Create `app/Services/LoginOtpService.php`:
 
 ```php
 <?php
 
-return [
+namespace App\Services;
 
-    'landing' => [
-        'title' => 'Digital Signature Software for Small Business',
-        'description' => 'Get contracts signed online with a legally binding digital signature. Your clients sign from an email link, no account needed. Free to start.',
-        'image' => '/storage/images/dashboard-preview-3.png',
-    ],
+use App\Mail\LoginOtpMail;
+use App\Models\User;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Redis;
 
-];
-```
-
-The image is the light-theme dashboard screenshot already used on the page. Link previews want
-1200×630; that file is a different shape and will be cropped. Good enough for now; if a designer
-exports a proper `public/images/og-image.png` later, this is the one line to change.
-
-### 5.2 New file: `app/Http/Controllers/LandingController.php`
-
-Replace the route closure with a controller so the meta-building has a home.
-
-```php
-<?php
-
-namespace App\Http\Controllers;
-
-use Inertia\Inertia;
-
-class LandingController extends Controller
+class LoginOtpService
 {
-    public function __invoke()
+    public const EXPIRES_IN_SECONDS = 600;
+    public const RESEND_COOLDOWN_SECONDS = 60;
+    public const MAX_SENDS_PER_WINDOW = 5;
+    public const MAX_VERIFY_ATTEMPTS = 5;
+
+    public function send(User $user): void
     {
-        $seo = config('seo.landing');
-        $base = rtrim(config('app.url'), '/');
+        $otp = $this->generate($user);
 
-        $meta = [
-            'title' => $seo['title'],
-            'description' => $seo['description'],
-            'canonical' => $base.'/',
-            'image' => $base.$seo['image'],
-            'jsonLd' => [
-                '@context' => 'https://schema.org',
-                '@type' => 'SoftwareApplication',
-                'name' => config('app.name'),
-                'applicationCategory' => 'BusinessApplication',
-                'operatingSystem' => 'Web',
-                'url' => $base.'/',
-                'description' => $seo['description'],
-                'offers' => [
-                    '@type' => 'Offer',
-                    'price' => '0',
-                    'priceCurrency' => 'USD',
-                ],
-            ],
-        ];
+        Mail::to($user->email)->send(new LoginOtpMail($user, $otp));
+    }
 
-        return Inertia::render('Landing', ['meta' => $meta])
-            ->withViewData(['meta' => $meta]);
+    public function generate(User $user): string
+    {
+        $otp = (string) random_int(100000, 999999);
+
+        Redis::setex($this->key($user, 'hash'), self::EXPIRES_IN_SECONDS, Hash::make($otp));
+        Redis::del($this->key($user, 'attempts'));
+        Redis::setex($this->key($user, 'cooldown'), self::RESEND_COOLDOWN_SECONDS, 1);
+
+        if ((int) Redis::incr($this->key($user, 'sends')) === 1) {
+            Redis::expire($this->key($user, 'sends'), self::EXPIRES_IN_SECONDS);
+        }
+
+        return $otp;
+    }
+
+    public function verify(User $user, string $otp): bool
+    {
+        $hash = Redis::get($this->key($user, 'hash'));
+
+        if (! $hash) {
+            return false;
+        }
+
+        $attempts = (int) Redis::incr($this->key($user, 'attempts'));
+        Redis::expire($this->key($user, 'attempts'), self::EXPIRES_IN_SECONDS);
+
+        if ($attempts > self::MAX_VERIFY_ATTEMPTS) {
+            $this->forget($user);
+
+            return false;
+        }
+
+        if (! Hash::check($otp, $hash)) {
+            return false;
+        }
+
+        $this->forget($user);
+
+        return true;
+    }
+
+    // 0 when a code may be sent now, otherwise seconds until it may.
+    public function retryAfter(User $user): int
+    {
+        $cooldown = (int) Redis::ttl($this->key($user, 'cooldown'));
+
+        if ($cooldown > 0) {
+            return $cooldown;
+        }
+
+        if ((int) Redis::get($this->key($user, 'sends')) >= self::MAX_SENDS_PER_WINDOW) {
+            return max(1, (int) Redis::ttl($this->key($user, 'sends')));
+        }
+
+        return 0;
+    }
+
+    private function forget(User $user): void
+    {
+        Redis::del($this->key($user, 'hash'), $this->key($user, 'attempts'));
+    }
+
+    private function key(User $user, string $suffix): string
+    {
+        return "login_otp:{$user->id}:{$suffix}";
     }
 }
 ```
 
-The same `$meta` goes two places on purpose. `withViewData` puts it in the Blade head. The page
-prop puts it in Vue so `<Head :title>` can set the same title after hydration (5.5). One array,
-two consumers, no drift.
+Notes for reading it:
+- `Redis::ttl` returns `-2` for a missing key and `-1` for a key with no expiry; `> 0` covers both.
+- `verify()` counts the attempt **before** comparing, so a wrong 5th guess and a right 6th guess
+  both fail. That is the point.
+- `send()` is the only method controllers should call to deliver a code. `generate()` is public
+  so tests can get the code without reading an email.
 
-`config('app.url')` rather than `url('/')`: behind Render's proxy the request scheme can read as
-`http`, and a canonical that says `http://` when the site is `https://` is a wrong canonical.
-`APP_URL` is deterministic. Confirm on Render that `APP_URL` is `https://<your domain>` with no
-trailing slash.
-
-### 5.3 `routes/web.php`
-
-Replace lines 38–40:
-
-```php
-Route::get('/', LandingController::class)->name('landing');
-```
-
-Add `use App\Http\Controllers\LandingController;` with the other imports. The route stays inside
-the `guest` group; Googlebot is never logged in, so it always gets the landing page.
-
-### 5.4 `resources/views/app.blade.php`
-
-Replace the single `<title inertia>` line with this block:
-
-```blade
-@php($meta = $meta ?? null)
-
-@if ($meta)
-    <title inertia>{{ $meta['title'] }} - {{ config('app.name') }}</title>
-    <meta name="description" content="{{ $meta['description'] }}">
-    <link rel="canonical" href="{{ $meta['canonical'] }}">
-
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="{{ config('app.name') }}">
-    <meta property="og:title" content="{{ $meta['title'] }}">
-    <meta property="og:description" content="{{ $meta['description'] }}">
-    <meta property="og:url" content="{{ $meta['canonical'] }}">
-    <meta property="og:image" content="{{ $meta['image'] }}">
-
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="{{ $meta['title'] }}">
-    <meta name="twitter:description" content="{{ $meta['description'] }}">
-    <meta name="twitter:image" content="{{ $meta['image'] }}">
-
-    <script type="application/ld+json">@json($meta['jsonLd'])</script>
-@else
-    <title inertia>{{ config('app.name', 'Laravel') }}</title>
-    <meta name="robots" content="noindex, nofollow">
-@endif
-```
-
-Read the `@if` as a rule: **a route that passes `meta` is public; every other page is
-`noindex`.** Today only the landing route passes it, so login, register, dashboard, signing links
-and everything else become noindex with no per-page work. When a second public page is added (a
-pricing page, a blog post), its controller passes `meta` and it is indexed.
-
-`@json` escapes `<` as `<`, so the JSON can never close the `<script>` tag early. Do not
-swap it for `{!! json_encode(...) !!}`.
-
-The title is `{{ $meta['title'] }} - {{ config('app.name') }}` because [app.js:17](resources/js/app.js#L17)
-appends " - EZSign" on the client. Blade must produce the identical string or the tab title
-changes a moment after load.
-
-### 5.5 `resources/js/Pages/Landing.vue`
-
-Add the prop and use it in `<Head>`:
-
-```js
-defineProps({
-    meta: Object,
-});
-```
-
-```vue
-<Head :title="meta.title" />
-```
-
-Replace the existing `<Head title="EZSign — Send, sign and track documents online" />` at
-[line 89](resources/js/Pages/Landing.vue#L89). Pass the *bare* title — `app.js` adds the suffix.
-
-### 5.6 Check
+Quick check (the mailable does not exist yet, so only `generate`/`verify`):
 
 ```bash
-curl -s http://localhost:8000/ | grep -E '<title|name="description"|rel="canonical"|og:title|ld\+json'
-curl -s http://localhost:8000/login | grep -E '<title|name="robots"'
+docker exec esign-app php artisan tinker --execute "
+\$u = App\Models\User::first();
+\$s = app(App\Services\LoginOtpService::class);
+\$code = \$s->generate(\$u);
+var_dump(\$s->verify(\$u, '000000'), \$s->verify(\$u, \$code), \$s->verify(\$u, \$code), \$s->retryAfter(\$u));
+"
 ```
 
-First command: five matches, title reads `Digital Signature Software for Small Business - EZSign`.
-Second: title `EZSign`, and `<meta name="robots" content="noindex, nofollow">`.
+Expected: `false, true, false, <a number near 60>`. Then look at the keys:
 
-## 6. Phase 2 — a real H1
-
-### 6.1 `resources/js/Pages/Landing.vue`
-
-At [lines 154–161](resources/js/Pages/Landing.vue#L154-L161), replace:
-
-```vue
-<h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
-    <Typewriter text="Secure Digital Signing for Modern Teams" />
-</h1>
+```bash
+docker exec esign-redis redis-cli --scan --pattern '*login_otp*'
+docker exec esign-redis redis-cli TTL "ezsign_database_login_otp:<paste-the-uuid>:cooldown"
 ```
 
-with:
+You should see `cooldown` and `sends` (the hash was deleted by the successful verify). The
+prefix `ezsign_database_` is `Str::slug(APP_NAME).'_database_'` — if `APP_NAME` differs, the
+`--scan` output shows you the real one.
 
-```vue
-<h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
-    Digital Signature Software for Small Business
-</h1>
+### Phase 2 — the email
+
+Create `app/Mail/LoginOtpMail.php` — a copy of
+[EmailVerificationOtpMail.php](app/Mail/EmailVerificationOtpMail.php) with three edits: the class
+name, the subject `'Your EZSign sign-in code'`, and the view `'emails.login-otp'`.
+
+Create `resources/views/emails/login-otp.blade.php` — a copy of
+[email-verification-otp.blade.php](resources/views/emails/email-verification-otp.blade.php) with
+the text replaced by the copy in 4.5. Six strings change: `<title>`, the `<h2>`, the first
+paragraph, the small label above the code, the line under the code, and the last paragraph. Keep
+every `style=""` attribute as it is.
+
+Check it renders:
+
+```bash
+docker exec esign-app php artisan tinker --execute "
+\$u = App\Models\User::first();
+Illuminate\Support\Facades\Mail::to(\$u->email)->send(new App\Mail\LoginOtpMail(\$u, '123456'));
+echo 'sent';
+"
 ```
 
-Then replace the paragraph under it (the one beginning "Create, send, sign and manage
-documents…") with the hero paragraph from 4.4:
+Open Mailpit at http://localhost:8025 and read it. Subject, heading, the "change your password"
+line, and `123456` in big digits.
 
-```vue
-<p class="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
-    Send a contract, your client signs it in the browser, and you get back a
-    PDF that proves who signed and that nothing changed afterwards. No account
-    needed for signers. Free to start.
-</p>
+### Phase 3 — the controller and routes
+
+Create `app/Http/Controllers/Auth/LoginOtpController.php`:
+
+```php
+<?php
+
+namespace App\Http\Controllers\Auth;
+
+use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Providers\RouteServiceProvider;
+use App\Services\LoginOtpService;
+use Illuminate\Auth\Events\Verified;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class LoginOtpController extends Controller
+{
+    public function __construct(
+        private LoginOtpService $otp
+    ) {}
+
+    public function create(Request $request): Response|RedirectResponse
+    {
+        $user = $this->pendingUser($request);
+
+        if (! $user) {
+            return redirect()->route('login');
+        }
+
+        return Inertia::render('Auth/LoginOtp', [
+            'email' => $user->email,
+            'status' => session('status'),
+            'resendAfter' => $this->otp->retryAfter($user),
+        ]);
+    }
+
+    public function store(Request $request): RedirectResponse
+    {
+        $user = $this->pendingUser($request);
+
+        if (! $user) {
+            return redirect()->route('login');
+        }
+
+        $request->validate([
+            'otp' => ['required', 'digits:6'],
+        ]);
+
+        if (! $this->otp->verify($user, $request->otp)) {
+            throw ValidationException::withMessages([
+                'otp' => 'The code is invalid or has expired. Request a new one below.',
+            ]);
+        }
+
+        $remember = (bool) $request->session()->get('login_otp.remember');
+        $request->session()->forget('login_otp');
+
+        Auth::login($user, $remember);
+        $request->session()->regenerate();
+
+        if (! $user->hasVerifiedEmail()) {
+            $user->markEmailAsVerified();
+            event(new Verified($user));
+        }
+
+        return redirect()->intended(RouteServiceProvider::HOME);
+    }
+
+    public function resend(Request $request): RedirectResponse
+    {
+        $user = $this->pendingUser($request);
+
+        if (! $user) {
+            return redirect()->route('login');
+        }
+
+        $wait = $this->otp->retryAfter($user);
+
+        if ($wait > 0) {
+            throw ValidationException::withMessages([
+                'otp' => "Please wait {$wait} seconds before requesting another code.",
+            ]);
+        }
+
+        $this->otp->send($user);
+
+        return back()->with('status', 'login-code-sent');
+    }
+
+    private function pendingUser(Request $request): ?User
+    {
+        $id = $request->session()->get('login_otp.user_id');
+
+        return $id ? User::find($id) : null;
+    }
+}
 ```
 
-Why the typewriter goes: an H1 that is empty at load and fills in over two seconds is an H1 a
-crawler may snapshot half-written. The H1 is the single most weighted on-page element; it is
-not the place for an effect. The `<FadeIn>` wrappers around it can stay: opacity does not remove
-text from the DOM.
+Add the routes to [routes/auth.php](routes/auth.php) inside the existing
+`Route::middleware('guest')->group(...)`, right after the two `login` lines:
 
-### 6.2 Delete the component
+```php
+    Route::get('login/otp', [LoginOtpController::class, 'create'])
+                ->name('login.otp');
 
-`Typewriter.vue` has no other user (checked with grep). Remove the import at
-[line 24](resources/js/Pages/Landing.vue#L24) and delete
-`resources/js/Components/Typewriter.vue`. Run `grep -rn Typewriter resources/js` afterwards; it
-must print nothing.
+    Route::post('login/otp', [LoginOtpController::class, 'store'])
+                ->name('login.otp.verify');
 
-## 7. Phase 3 — the content
+    Route::post('login/otp/resend', [LoginOtpController::class, 'resend'])
+                ->name('login.otp.resend');
+```
 
-### 7.1 New file: `resources/js/Components/landing/WhatIsDigitalSignature.vue`
+and the import at the top: `use App\Http\Controllers\Auth\LoginOtpController;`
+
+Why `guest`: [RedirectIfAuthenticated](app/Http/Middleware/RedirectIfAuthenticated.php) sends
+anyone already logged in to `/dashboard`, which is exactly right for an OTP page. Why no
+`throttle:` middleware: the service already limits per user, and per-IP throttling would punish
+an office sharing one IP.
+
+Check: `docker exec esign-app php artisan route:list --name=login.otp` lists three routes.
+
+### Phase 4 — stop logging in at the password step
+
+**[LoginRequest.php](app/Http/Requests/Auth/LoginRequest.php)** — change `authenticate()` to check
+without logging in and to return the user:
+
+```php
+    public function authenticate(): User
+    {
+        $this->ensureIsNotRateLimited();
+
+        if (! Auth::validate($this->only('email', 'password'))) {
+            RateLimiter::hit($this->throttleKey());
+
+            throw ValidationException::withMessages([
+                'email' => trans('auth.failed'),
+            ]);
+        }
+
+        RateLimiter::clear($this->throttleKey());
+
+        return Auth::getLastAttempted();
+    }
+```
+
+Add `use App\Models\User;` to the imports. The `remember` value is no longer read here; the
+controller reads it.
+
+**[AuthenticatedSessionController.php](app/Http/Controllers/Auth/AuthenticatedSessionController.php)** —
+replace `store()`:
+
+```php
+    public function store(LoginRequest $request, LoginOtpService $otp): RedirectResponse
+    {
+        $user = $request->authenticate();
+
+        $request->session()->put('login_otp', [
+            'user_id' => $user->id,
+            'remember' => $request->boolean('remember'),
+        ]);
+
+        if ($otp->retryAfter($user) === 0) {
+            $otp->send($user);
+        }
+
+        return redirect()->route('login.otp');
+    }
+```
+
+Add `use App\Services\LoginOtpService;`. The old `$request->session()->regenerate()` and
+`redirect()->intended(...)` move to `LoginOtpController::store()` — they belong after the
+*real* login. `redirect()->intended()` still works there because Laravel stores the intended URL
+in the session, and the session survives the OTP step.
+
+Check by hand: `npm run build`, open http://localhost:8000/login, sign in. You must land on
+`/login/otp`, **not** the dashboard, and a code must be in Mailpit. Visiting
+http://localhost:8000/dashboard now must bounce you to `/login` — you are still a guest.
+
+### Phase 5 — the page
+
+Create `resources/js/Pages/Auth/LoginOtp.vue`. It is
+[VerifyEmail.vue](resources/js/Pages/Auth/VerifyEmail.vue) with the email coming from a prop
+(there is no logged-in user to read it from), different route names, a countdown that starts at
+the server's `resendAfter`, a visible error for a blocked resend, and "Use a different account"
+instead of "Sign out":
 
 ```vue
 <script setup>
-import LandingSection from "@/Components/landing/LandingSection.vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Head, Link, useForm } from "@inertiajs/vue3";
+import AuthLayout from "@/Layouts/AuthLayout.vue";
+import { ShieldCheck, MailCheck, RefreshCcw, ArrowLeft } from "lucide-vue-next";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+const props = defineProps({
+    email: String,
+    status: String,
+    resendAfter: Number,
+});
+
+const form = useForm({ otp: "" });
+const resendForm = useForm({});
+const resendCooldown = ref(0);
+let timer = null;
+
+const startCooldown = (seconds) => {
+    clearInterval(timer);
+    resendCooldown.value = seconds;
+
+    if (seconds <= 0) {
+        return;
+    }
+
+    timer = setInterval(() => {
+        resendCooldown.value--;
+
+        if (resendCooldown.value <= 0) {
+            clearInterval(timer);
+        }
+    }, 1000);
+};
+
+onMounted(() => startCooldown(props.resendAfter ?? 0));
+onBeforeUnmount(() => clearInterval(timer));
+
+const verify = () => form.post(route("login.otp.verify"));
+
+const resend = () => {
+    if (resendCooldown.value > 0) {
+        return;
+    }
+
+    resendForm.post(route("login.otp.resend"), {
+        preserveScroll: true,
+        onSuccess: () => startCooldown(60),
+    });
+};
+
+const codeSent = computed(() => props.status === "login-code-sent");
 </script>
 
 <template>
-    <LandingSection
-        id="what-is-a-digital-signature"
-        eyebrow="The basics"
-        title="What is a digital signature?"
-    >
-        <div class="mx-auto max-w-3xl space-y-10">
-            <p class="text-lg leading-8 text-muted-foreground">
-                A digital signature is a way to sign a document online so that
-                two things can be proven later: who signed it, and that nothing
-                in it has changed since. Instead of printing, signing with a pen
-                and scanning, you send the PDF by email. Your client opens the
-                link, confirms their identity with a one-time code, and signs in
-                the browser. When everyone has signed, the PDF is sealed with a
-                certificate, so any PDF reader can check that it has not been
-                altered.
-            </p>
+    <Head title="Check your email" />
 
-            <div class="grid gap-8 md:grid-cols-2">
-                <div>
-                    <h3 class="text-lg font-semibold">
-                        Digital signature vs. electronic signature
-                    </h3>
-
-                    <p class="mt-3 leading-7 text-muted-foreground">
-                        An electronic signature is any mark that shows
-                        agreement: a typed name, a drawn squiggle, a ticked box.
-                        A digital signature goes further. It records who signed
-                        and when, and it locks the document so that later edits
-                        can be detected. EZSign does both. Every signer is
-                        verified by an email code, and every finished document
-                        carries a certificate-based digital signature and a
-                        record of who signed it.
-                    </p>
+    <AuthLayout>
+        <Card class="w-full max-w-md rounded-2xl border shadow-xl bg-background/95">
+            <CardHeader class="items-center text-center space-y-5">
+                <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+                    <ShieldCheck class="h-10 w-10 text-accent-ink" />
                 </div>
 
                 <div>
-                    <h3 class="text-lg font-semibold">
-                        Is a digital signature legally binding?
-                    </h3>
+                    <CardTitle class="text-3xl font-bold">
+                        Check your email
+                    </CardTitle>
 
-                    <p class="mt-3 leading-7 text-muted-foreground">
-                        In most countries, yes, provided the signer's identity
-                        was verified, the signer clearly intended to sign, and
-                        the signed document cannot be changed without detection.
-                        EZSign records all three. A few document types still
-                        require a notary or ink by law, such as some wills, deeds
-                        and court filings. Check the rules where you live for
-                        those.
+                    <CardDescription class="mt-2 text-base">
+                        Enter the 6-digit code we sent to <span class="font-semibold text-foreground">{{ email }}</span>. It expires in 10 minutes.
+                    </CardDescription>
+                </div>
+            </CardHeader>
+
+            <CardContent class="space-y-6">
+                <div
+                    v-if="codeSent"
+                    class="rounded-xl border border-emerald-200 bg-pulse-green/15 p-4"
+                >
+                    <div class="flex gap-3">
+                        <MailCheck class="mt-0.5 h-5 w-5 text-pulse-green" />
+
+                        <div>
+                            <p class="font-medium text-pulse-green">
+                                New code sent
+                            </p>
+
+                            <p class="mt-1 text-sm text-pulse-green">
+                                Check your inbox for the latest code.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <form @submit.prevent="verify" class="space-y-4">
+                    <div class="space-y-2">
+                        <Input
+                            v-model="form.otp"
+                            inputmode="numeric"
+                            maxlength="6"
+                            autocomplete="one-time-code"
+                            placeholder="000000"
+                            autofocus
+                            class="text-center text-2xl tracking-[0.5em]"
+                        />
+
+                        <p
+                            v-if="form.errors.otp"
+                            class="text-sm text-destructive text-center"
+                        >
+                            {{ form.errors.otp }}
+                        </p>
+                    </div>
+
+                    <Button
+                        type="submit"
+                        class="w-full"
+                        :disabled="form.processing || form.otp.length !== 6"
+                    >
+                        Verify and sign in
+                    </Button>
+                </form>
+
+                <div class="text-center">
+                    <p class="text-sm text-muted-foreground">
+                        Didn't receive the code?
+                    </p>
+
+                    <Button
+                        variant="ghost"
+                        class="mt-1"
+                        :disabled="resendForm.processing || resendCooldown > 0"
+                        @click="resend"
+                    >
+                        <RefreshCcw class="mr-2 h-4 w-4" />
+
+                        {{
+                            resendCooldown > 0
+                                ? `Resend in ${resendCooldown}s`
+                                : "Resend code"
+                        }}
+                    </Button>
+
+                    <p
+                        v-if="resendForm.errors.otp"
+                        class="mt-2 text-sm text-destructive"
+                    >
+                        {{ resendForm.errors.otp }}
                     </p>
                 </div>
-            </div>
-        </div>
-    </LandingSection>
+
+                <Link
+                    :href="route('login')"
+                    class="flex w-full items-center justify-center rounded-lg border py-2.5 text-sm font-medium transition hover:bg-muted"
+                >
+                    <ArrowLeft class="mr-2 h-4 w-4" />
+
+                    Use a different account
+                </Link>
+            </CardContent>
+        </Card>
+    </AuthLayout>
 </template>
 ```
 
-`LandingSection` renders the `<h2>` from its `title` prop, so this file only writes the `<h3>`s.
-Open [LandingSection.vue](resources/js/Components/landing/LandingSection.vue) once to confirm the
-heading tag it uses is `h2`; the blueprint depends on it.
+Two things that are easy to miss:
+- Errors from `resendForm.post(...)` land in `resendForm.errors`, not `form.errors`. The
+  original `VerifyEmail.vue` never shows them; this page does, under the resend button.
+- The countdown starts from `resendAfter` (the server's real number) so the button is disabled
+  correctly even after a page refresh. After a successful resend it restarts at 60, which is
+  `RESEND_COOLDOWN_SECONDS`. If you change one, change the other.
 
-### 7.2 Place it in `Landing.vue`
+`route('login.otp.verify')` works because [app.blade.php:33](resources/views/app.blade.php#L33)
+has `@routes` — Ziggy picks up new routes on the next page load, no generation step.
 
-Import it with the other landing components:
+[Login.vue](resources/js/Pages/Auth/Login.vue) needs **no change**. Inertia follows the redirect
+to `/login/otp` and renders the new page.
 
-```js
-import WhatIsDigitalSignature from "@/Components/landing/WhatIsDigitalSignature.vue";
-```
+Run `npm run build` and do the browser checks in section 6 before writing tests.
 
-Render it immediately **after the hero section and before `<HowItWorks />`**. Find where
-`<HowItWorks />` is used in the template and put `<WhatIsDigitalSignature />` on the line above
-it. Second position is deliberate (section 4.2): it answers the informational half of the query
-on the first scroll.
+### Phase 6 — tests
 
-### 7.3 Retitle the security section
-
-In [SecurityCompliance.vue:35](resources/js/Components/landing/SecurityCompliance.vue#L35), change
-`title="Built for trust"` to `title="How we verify who signed"`. Keep the subtitle. The two
-existing cards stay as they are; check that their titles render as `<h3>`, and if they are
-`<div>`s or `<p>`s, change the tag — the blueprint needs them as H3.
-
-### 7.4 Two FAQ entries
-
-In [Faq.vue](resources/js/Components/landing/Faq.vue), append to the `faqs` array, after
-"Can my whole team use one account?":
-
-```js
-{
-    q: "Can a signed PDF be changed afterwards?",
-    a: "Not without it showing. When the last person signs, EZSign seals the PDF with a certificate. Open it in Adobe Reader or any PDF viewer with a signature panel and it will tell you whether the file has been modified since signing.",
-},
-{
-    q: "Where are my documents stored?",
-    a: "In private cloud storage that only your organization's members can reach through the app. Signers see only the document they were sent, through their own link.",
-},
-```
-
-### 7.5 Build and look
-
-```bash
-npm run build
-```
-
-Open `/`. The H1 is plain text, present instantly. Scroll: the new section is second. The
-security heading reads "How we verify who signed". The FAQ has eight entries.
-
-## 8. Phase 4 — robots, sitemap, noindex
-
-The noindex default is already live from 5.4. This phase adds the two files crawlers look for.
-
-### 8.1 `public/robots.txt`
-
-Replace the contents with:
-
-```
-User-agent: *
-Disallow: /api/
-Disallow: /billing
-Disallow: /confirm-password
-Disallow: /dashboard
-Disallow: /documents
-Disallow: /forgot-password
-Disallow: /invitations/
-Disallow: /login
-Disallow: /members
-Disallow: /pakasir/
-Disallow: /payments
-Disallow: /plan
-Disallow: /profile
-Disallow: /register
-Disallow: /reset-password
-Disallow: /settings
-Disallow: /sign/
-Disallow: /templates
-Disallow: /verify-email
-
-Sitemap: https://YOUR-DOMAIN/sitemap.xml
-```
-
-Replace `YOUR-DOMAIN` with the production host. This is the one hardcoded domain in the plan;
-`robots.txt` is a static file and cannot read config.
-
-The list is every top-level path the app serves except `/` — taken from
-`php artisan route:list --method=GET`. `/sign/` matters most: those are private signing links
-with a token in the URL, and a crawler that finds one in a forwarded email should not index it.
-
-Do **not** disallow `/build/` or `/storage/`. Google needs the CSS, JavaScript and images to
-render the page. Blocking them is the classic way to make a page look empty to Google.
-
-### 8.2 Sitemap route
-
-In `routes/web.php`, outside every middleware group (next to the `/health` route is a good
-spot):
+**Fix the one test that is now wrong.** In
+[AuthenticationTest.php](tests/Feature/Auth/AuthenticationTest.php), replace
+`test_users_can_authenticate_using_the_login_screen` with:
 
 ```php
-Route::get('/sitemap.xml', function () {
-    $base = rtrim(config('app.url'), '/');
+    public function test_a_correct_password_sends_a_code_instead_of_logging_in(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
 
-    return response()
-        ->view('sitemap', ['urls' => [$base.'/']])
-        ->header('Content-Type', 'application/xml');
-})->name('sitemap');
+        $response = $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ]);
+
+        $this->assertGuest();
+        $response->assertRedirect('/login/otp');
+        $response->assertSessionHas('login_otp.user_id', $user->id);
+        Mail::assertSent(LoginOtpMail::class, fn ($mail) => $mail->hasTo($user->email));
+    }
 ```
 
-Outside the groups because a logged-in user (or a bot that once got a session cookie) must not be
-redirected to the dashboard when fetching the sitemap.
+Add `use App\Mail\LoginOtpMail;` and `use Illuminate\Support\Facades\Mail;`. Leave the other
+three tests alone.
 
-### 8.3 New file: `resources/views/sitemap.blade.php`
-
-```blade
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-@foreach ($urls as $url)
-    <url>
-        <loc>{{ $url }}</loc>
-        <changefreq>weekly</changefreq>
-        <priority>1.0</priority>
-    </url>
-@endforeach
-</urlset>
-```
-
-One URL today. When a second public page exists, add it to the array in 8.2. No package; a
-sitemap with one entry does not need one.
-
-### 8.4 Check
-
-```bash
-curl -s http://localhost:8000/sitemap.xml
-curl -sI http://localhost:8000/sitemap.xml | grep -i content-type
-```
-
-Valid XML with one `<loc>`; `Content-Type: application/xml`.
-
-## 9. Phase 5 — make the pricing facts true
-
-The landing page and the plan catalogue disagree. Google's guidance on helpful content is blunt
-about pages that say one thing and charge another, and a business owner who signs up on the
-strength of "3 documents / month" and hits a weekly cap will not come back.
-
-[config/plans.php](config/plans.php) is the source of truth:
-
-| Plan | Documents | Members | Storage | Price |
-| --- | --- | --- | --- | --- |
-| free | 3 / **week** | **3** | 100 MB | $0 |
-| pro | 100 / month | 10 | 10 GB | **$10 / month** (Stripe subscription) |
-| enterprise | unlimited | unlimited | unlimited | contact |
-
-### 9.1 `resources/js/Components/landing/Pricing.vue`
-
-Change the Starter bullets at [line 15](resources/js/Components/landing/Pricing.vue#L15) from
-`"3 documents / month", "1 user"` to:
-
-```js
-bullets: ["3 documents / week", "Up to 3 members", "Email OTP verification", "Signed PDF download"],
-```
-
-The Team and Business cards describe a credit model that `config/plans.php` does not have. That is
-a product decision, not a copy fix, so leave those two cards alone and **tell the owner** they do
-not match the Pro plan. Do not invent bullets for them.
-
-### 9.2 `resources/js/Components/landing/Faq.vue`
-
-The entry "How does pricing work?" says "There is no monthly subscription." Pro is a monthly
-subscription. Replace the answer with:
-
-```js
-a: "Start on the free plan. When you need more, upgrade to a monthly plan from the Plan page. You can see exactly how many documents and members each plan includes before you pay.",
-```
-
-## 10. Phase 6 — tests
-
-### 10.1 New file: `tests/Feature/LandingSeoTest.php`
+**Create `tests/Feature/Auth/LoginOtpTest.php`.** Each test starts by putting the user in the
+"password passed" state with `withSession(['login_otp' => [...]])` and getting a code from the
+service — the same way `EmailVerificationTest` calls `generate()` instead of reading an email.
+Tests talk to the real Redis in Docker; user ids are random UUIDs, so tests never collide with
+each other or with your dev session.
 
 ```php
 <?php
 
-namespace Tests\Feature;
+namespace Tests\Feature\Auth;
 
+use App\Mail\LoginOtpMail;
+use App\Models\User;
+use App\Providers\RouteServiceProvider;
+use App\Services\LoginOtpService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
-class LandingSeoTest extends TestCase
+class LoginOtpTest extends TestCase
 {
-    public function test_the_landing_page_renders_seo_tags_in_the_html(): void
-    {
-        $response = $this->get('/');
+    use RefreshDatabase;
 
-        $response->assertOk();
-        $response->assertSee('<title inertia>Digital Signature Software for Small Business - EZSign</title>', false);
-        $response->assertSee('<meta name="description" content="Get contracts signed online', false);
-        $response->assertSee('<link rel="canonical" href="'.rtrim(config('app.url'), '/').'/">', false);
-        $response->assertSee('property="og:title"', false);
-        $response->assertSee('application/ld+json', false);
-        $response->assertSee('"@type":"SoftwareApplication"', false);
-        $response->assertDontSee('name="robots"', false);
+    private function pending(User $user, bool $remember = false): static
+    {
+        return $this->withSession([
+            'login_otp' => ['user_id' => $user->id, 'remember' => $remember],
+        ]);
     }
 
-    public function test_pages_without_meta_are_noindex(): void
+    public function test_the_otp_page_redirects_to_login_when_nothing_is_pending(): void
     {
-        $response = $this->get('/login');
-
-        $response->assertOk();
-        $response->assertSee('<meta name="robots" content="noindex, nofollow">', false);
-        $response->assertDontSee('name="description"', false);
+        $this->get('/login/otp')->assertRedirect('/login');
+        $this->post('/login/otp', ['otp' => '123456'])->assertRedirect('/login');
+        $this->post('/login/otp/resend')->assertRedirect('/login');
     }
 
-    public function test_the_sitemap_lists_the_landing_page(): void
+    public function test_the_otp_page_renders_for_a_pending_login(): void
     {
-        $response = $this->get('/sitemap.xml');
+        $user = User::factory()->create();
 
-        $response->assertOk();
-        $response->assertHeader('Content-Type', 'application/xml');
-        $response->assertSee('<loc>'.rtrim(config('app.url'), '/').'/</loc>', false);
+        $this->pending($user)->get('/login/otp')->assertOk();
+    }
+
+    public function test_a_correct_code_logs_the_user_in(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertAuthenticatedAs($user);
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        $response->assertSessionMissing('login_otp');
+    }
+
+    public function test_remember_me_survives_the_otp_step(): void
+    {
+        // The factory fills remember_token with a random string, so start from null.
+        $user = User::factory()->create(['remember_token' => null]);
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $this->pending($user, remember: true)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertAuthenticatedAs($user);
+        $this->assertNotNull($user->fresh()->remember_token);
+    }
+
+    public function test_a_wrong_code_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => '000000']);
+
+        $this->assertGuest();
+        $response->assertSessionHasErrors('otp');
+        $response->assertSessionHas('login_otp.user_id', $user->id);
+    }
+
+    public function test_a_code_that_is_gone_from_redis_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+        Redis::del("login_otp:{$user->id}:hash");
+
+        $response = $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertGuest();
+        $response->assertSessionHasErrors('otp');
+    }
+
+    public function test_five_wrong_guesses_burn_the_code(): void
+    {
+        $user = User::factory()->create();
+        $code = app(LoginOtpService::class)->generate($user);
+
+        for ($i = 0; $i < 5; $i++) {
+            $this->pending($user)->post('/login/otp', ['otp' => '000000']);
+        }
+
+        $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertGuest();
+    }
+
+    public function test_resend_is_blocked_inside_the_cooldown(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasErrors('otp');
+        Mail::assertNothingSent();
+    }
+
+    public function test_resend_sends_a_new_code_after_the_cooldown(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        app(LoginOtpService::class)->generate($user);
+        Redis::del("login_otp:{$user->id}:cooldown");
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasNoErrors();
+        $response->assertSessionHas('status', 'login-code-sent');
+        Mail::assertSent(LoginOtpMail::class, 1);
+    }
+
+    public function test_resend_is_blocked_after_five_sends(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create();
+        $service = app(LoginOtpService::class);
+
+        for ($i = 0; $i < 5; $i++) {
+            $service->generate($user);
+        }
+        Redis::del("login_otp:{$user->id}:cooldown");
+
+        $response = $this->pending($user)->post('/login/otp/resend');
+
+        $response->assertSessionHasErrors('otp');
+        Mail::assertNothingSent();
+    }
+
+    public function test_a_correct_code_also_verifies_an_unverified_email(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => null]);
+        $code = app(LoginOtpService::class)->generate($user);
+
+        $this->pending($user)->post('/login/otp', ['otp' => $code]);
+
+        $this->assertTrue($user->fresh()->hasVerifiedEmail());
+    }
+
+    public function test_a_logged_in_user_is_sent_away_from_the_otp_page(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)->get('/login/otp')->assertRedirect(RouteServiceProvider::HOME);
     }
 }
 ```
 
-`assertSee(..., false)` — the second argument turns off HTML escaping so the assertion matches raw
-tags. Without it every test here fails. `@json` writes `"@type":"SoftwareApplication"` with no
-spaces, which is what the assertion looks for.
+Why `Redis::del(...)` in two tests: cooldown and expiry are real clock time in Redis, so
+`travel()` cannot fake them. Deleting the key is the honest equivalent of "60 seconds passed".
+The prefix is added by the connection, so the test writes the bare key.
 
-None of these tests use `RefreshDatabase`; the pages they hit touch no tables.
-
-### 10.2 Run
+Run:
 
 ```bash
-docker exec esign-app php artisan test tests/Feature/LandingSeoTest.php
+docker exec esign-app php artisan test tests/Feature/Auth
 docker exec esign-app php artisan test
 ```
 
-Three green; no new failures in the full suite.
+All of `tests/Feature/Auth` must pass. In the full run, the only failures allowed are ones that
+already fail on `main` before your branch (check with `git stash` if unsure — at the time of
+writing there are 4 pre-existing failures in `TemplateUploadTest` and a TCPDF warning; none of
+them touch auth).
 
-## 11. Verification checklist
+## 6. Manual checks before you open the PR
 
-Tick each only if you saw it happen.
+Run `npm run build` first. Mailpit is at http://localhost:8025.
 
-**Head (Phase 1):**
-
-- [ ] `curl -s localhost:8000/ | grep '<title'` → `Digital Signature Software for Small Business - EZSign`
-- [ ] Same curl shows `name="description"`, `rel="canonical"`, `og:title`, `twitter:card`, `ld+json`
-- [ ] `curl -s localhost:8000/login | grep robots` → `noindex, nofollow`
-- [ ] `curl -s localhost:8000/ | grep robots` → nothing
-- [ ] In the browser, the tab title does not change after the page loads (no flicker)
-
-**Body (Phases 2–3):**
-
-- [ ] `curl -s localhost:8000/ | grep -c '<h1'` is still `0` — that is expected; the body is client-rendered. The H1 check is in the browser:
-- [ ] Elements panel after load: exactly one `<h1>`, text present with no typewriter
-- [ ] `grep -rn Typewriter resources/js` prints nothing
-- [ ] Heading outline (browser extension "HeadingsMap", or Lighthouse → Accessibility → heading order): H1 → H2 "What is a digital signature?" → H3 ×2 → H2 "Sign a document in three steps" → … matches 4.3
-- [ ] Security section heading reads "How we verify who signed"
-- [ ] FAQ has eight entries
-
-**Crawler files (Phase 4):**
-
-- [ ] `curl localhost:8000/robots.txt` lists the Disallow lines and a `Sitemap:` line with the real domain
-- [ ] `curl localhost:8000/sitemap.xml` is valid XML with one `<loc>`
-
-**Facts (Phase 5):**
-
-- [ ] Starter card says "3 documents / week" and "Up to 3 members"
-- [ ] FAQ pricing answer no longer says "no monthly subscription"
-- [ ] The owner has been told the Team/Business cards do not match `config/plans.php`
-
-**After deploy (needs the production URL):**
-
-- [ ] Paste the URL into Google's Rich Results Test — it reports a valid `SoftwareApplication`
-- [ ] Paste the URL into a link-preview checker (or a Slack DM to yourself) — title, description and image appear
-- [ ] Lighthouse SEO category ≥ 95
-- [ ] Search Console → URL inspection → Test live URL → "View crawled page" shows the H1 and the "What is a digital signature?" section in the rendered HTML. If it does not, that is the signal that SSR is the next step — not before.
-
-## 12. Common ways this goes wrong
-
-| Symptom | Cause | Fix |
+| # | Do | Expect |
 | --- | --- | --- |
-| Tab title flickers from one string to another on load | Blade title and `app.js` suffix do not match | 5.4: Blade must produce `{title} - EZSign` exactly |
-| Title in raw HTML is `EZSign` | `withViewData` not called, or route still uses the old closure | 5.2, 5.3 |
-| `Undefined variable $meta` on `/login` | Missing `@php($meta = $meta ?? null)` | 5.4, first line of the block |
-| Landing page has `noindex` | The `@if ($meta)` is inverted, or `meta` key misspelt | 5.4 |
-| Canonical says `http://localhost:8000/` in production | `APP_URL` on Render is wrong | Set `APP_URL=https://<domain>` in Render's env, no trailing slash |
-| Canonical says `http://` in production | Someone swapped `config('app.url')` for `url('/')` | 5.2 |
-| JSON-LD invalid in Rich Results Test | `{!! json_encode !!}` used instead of `@json`, or a trailing comma in the PHP array | 5.2, 5.4 |
-| `<h1>` still typed out | Only the import was removed, not the tag | 6.1 |
-| `Typewriter` import error on build | Component deleted but Landing.vue still imports it | 6.2 |
-| New section's `<h2>` is empty | `title` prop not passed to `LandingSection` (it always renders the tag) | 7.1 |
-| Sitemap redirects to `/dashboard` when logged in | Route placed inside the `guest` or `auth` group | 8.2 |
-| Sitemap served as `text/html` | `->header('Content-Type', 'application/xml')` missing | 8.2 |
-| Google renders the page blank | `/build/` or `/storage/` disallowed in robots.txt | 8.1 |
-| `assertSee` fails on a tag that is clearly there | Second argument `false` missing | 10.1 |
-| Lighthouse says "Document does not have a meta description" on `/login` | Correct — it is noindex on purpose; run Lighthouse on `/` | — |
+| 1 | Log in with a correct password | Land on `/login/otp`, page shows your email, resend button reads "Resend in ~60s" |
+| 2 | Open a new tab → http://localhost:8000/dashboard | Redirected to `/login`. You are not logged in yet |
+| 3 | Mailpit | One email, subject "Your EZSign sign-in code", code in big digits, "change your password" line present |
+| 4 | Type a wrong code | Red text "The code is invalid or has expired. Request a new one below." Still on the page |
+| 5 | Type the right code | Dashboard. Refresh: still logged in |
+| 6 | Log out, log in again with **Remember me** ticked, pass the code, close the browser fully, reopen | Still logged in (remember cookie set at the OTP step) |
+| 7 | Log out, log in, then refresh the OTP page | Countdown continues from the real remaining seconds, not from 60 |
+| 8 | Wait for the countdown to hit 0, click Resend | Green "New code sent" banner, a second email in Mailpit, countdown restarts at 60 |
+| 9 | Right after step 8: `docker exec esign-redis redis-cli --scan --pattern '*login_otp*'`, then `TTL` the `cooldown` key and `GET` the `sends` key | `cooldown` TTL is close to 60 and counting down; `sends` is `2`. (The refusal itself is covered by `test_resend_is_blocked_inside_the_cooldown` — the button is disabled in the UI, so you cannot trigger it by hand) |
+| 10 | Enter a wrong code 5 times, then the right one | Rejected. Resend, use the new code → logged in |
+| 11 | `docker exec esign-redis redis-cli --scan --pattern '*login_otp*'` after step 5 | No `hash` or `attempts` key for your user; `cooldown` (if under 60 s) and `sends` may remain and expire on their own |
+| 12 | Register a brand-new account | Unchanged: straight to `/verify-email` with **one** email (the registration code). No login code |
+| 13 | Log out, log in as an account whose email is **not** verified, pass the code | Dashboard directly, no `/verify-email` page, `email_verified_at` now set |
+| 14 | While on `/login/otp`, click "Use a different account", log in as someone else | Their code, their email on the page, their dashboard |
 
-## 13. Definition of done
+## 7. Definition of done
 
-- Raw HTML of `/` contains the title, description, canonical, Open Graph, Twitter and
-  `SoftwareApplication` JSON-LD from sections 4.4 and 5.2, served by Blade with no JavaScript.
-- Every other page carries `<meta name="robots" content="noindex, nofollow">` by default.
-- The H1 is static text: "Digital Signature Software for Small Business". `Typewriter.vue` is gone.
-- The "What is a digital signature?" section sits second on the page with the copy from 4.4,
-  as one H2 and two H3s.
-- The security section is titled "How we verify who signed"; the FAQ has the two new entries.
-- `robots.txt` disallows every app path and points at `sitemap.xml`; the sitemap serves valid XML.
-- The Starter pricing card and the pricing FAQ match `config/plans.php`; the Team/Business
-  mismatch has been reported to the owner.
-- `LandingSeoTest` — 3 tests pass; the full suite has no new failures.
-- No SSR, no new package, no hardcoded domain outside `robots.txt`, no review markup.
+- [ ] Phase 0 commands both succeed on a fresh `docker compose up`
+- [ ] `POST /login` with a correct password leaves the user a guest (`assertGuest()` in the test)
+- [ ] `login_otp:{id}:hash` in Redis is a bcrypt hash (`$2y$…`), never six digits, with `TTL` ≤ 600
+- [ ] Resend blocked inside 60 s and after 5 sends; both covered by tests
+- [ ] 5 wrong guesses invalidate the code; covered by a test
+- [ ] `remember` still works; covered by a test
+- [ ] Unverified users are verified by the login code; covered by a test
+- [ ] `tests/Feature/Auth` green; full suite has no new failures
+- [ ] All 14 manual checks pass
+- [ ] `grep -rn "Auth::attempt" app/` returns nothing
+- [ ] The code never appears in `storage/logs/laravel.log`, the session, or an Inertia prop
+- [ ] No changes to `.env`, `config/cache.php`, `config/session.php`, or any `auth`-group route
+
+## 8. Files you will touch
+
+| File | Change |
+| --- | --- |
+| `app/Services/LoginOtpService.php` | new |
+| `app/Mail/LoginOtpMail.php` | new |
+| `resources/views/emails/login-otp.blade.php` | new |
+| `app/Http/Controllers/Auth/LoginOtpController.php` | new |
+| `resources/js/Pages/Auth/LoginOtp.vue` | new |
+| `tests/Feature/Auth/LoginOtpTest.php` | new |
+| `routes/auth.php` | +3 routes, +1 import |
+| `app/Http/Requests/Auth/LoginRequest.php` | `authenticate()` uses `Auth::validate`, returns `User` |
+| `app/Http/Controllers/Auth/AuthenticatedSessionController.php` | `store()` sends a code instead of logging in |
+| `tests/Feature/Auth/AuthenticationTest.php` | one test rewritten |
+
+Ten files, roughly 450 lines, most of it copy-and-edit. One PR, one commit is fine. Suggested
+title: `feat(auth): require an emailed one-time code on every login`. In the PR body, list which
+of the 14 manual checks you ran and paste the `redis-cli TTL` output from check 11.
