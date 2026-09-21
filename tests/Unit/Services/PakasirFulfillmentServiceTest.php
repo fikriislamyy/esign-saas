@@ -79,4 +79,27 @@ class PakasirFulfillmentServiceTest extends TestCase
         $this->assertSame('pro', $this->organization->subscription->fresh()->plan);
         $this->assertSame('pakasir', $this->organization->subscription->fresh()->provider);
     }
+
+    public function test_a_completed_topup_credits_the_wallet_only_once(): void
+    {
+        Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => true]])]);
+        $wallet = app(WalletService::class)->getOrCreateWallet($this->organization);
+        $topup = WalletTopup::create(['wallet_id' => $wallet->id, 'organization_id' => $this->organization->id, 'currency' => 'IDR', 'amount' => 160000, 'exchange_rate' => 16000, 'wallet_amount_usd_cents' => 1000, 'provider' => 'pakasir', 'order_id' => 'topup-order', 'created_by' => $this->owner->id, 'metadata' => ['amount_idr' => 160000]]);
+
+        $this->assertTrue($this->service()->fulfill($topup));
+        $this->assertTrue($this->service()->fulfill($topup->fresh()));
+
+        $this->assertSame('paid', $topup->fresh()->status);
+        $this->assertSame(1000, $wallet->fresh()->balance_usd_cents);
+        $this->assertSame(1, $wallet->transactions()->count());
+    }
+
+    public function test_sandbox_only_rejects_a_non_sandbox_payment(): void
+    {
+        Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => false]])]);
+        $payment = $this->payment();
+
+        $this->assertFalse($this->service()->fulfill($payment, true));
+        $this->assertSame('pending', $payment->fresh()->status);
+    }
 }
