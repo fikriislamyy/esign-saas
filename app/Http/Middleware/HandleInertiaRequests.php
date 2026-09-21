@@ -72,6 +72,8 @@ class HandleInertiaRequests extends Middleware
 
             'stripeKey' => config('services.stripe.key'),
             'recaptchaSiteKey' => config('services.recaptcha.site_key'),
+            'salesMailto' => 'mailto:'.config('plans.enterprise.contact_email')
+                .'?subject='.rawurlencode(config('plans.enterprise.contact_subject')),
         ]);
     }
 }

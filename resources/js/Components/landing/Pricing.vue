@@ -1,11 +1,13 @@
 <script setup>
-import { Link } from "@inertiajs/vue3";
+import { Link, usePage } from "@inertiajs/vue3";
 import { CheckCircle2 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import FadeIn from "@/Components/animations/FadeIn.vue";
 import LandingSection from "@/Components/landing/LandingSection.vue";
+
+const salesMailto = usePage().props.salesMailto;
 
 const plans = [
     {
@@ -28,7 +30,7 @@ const plans = [
         price: "Custom",
         description: "Custom limits and terms",
         bullets: ["Unlimited documents", "Unlimited members", "Priority support", "Custom branding"],
-        button: { text: "Contact sales", variant: "outline", href: "mailto:sales@bebem.my.id" },
+        button: { text: "Contact sales", variant: "outline", href: salesMailto, external: true },
     },
 ];
 </script>
@@ -57,7 +59,17 @@ const plans = [
                             </li>
                         </ul>
 
-                        <Link :href="plan.button.href" class="w-full">
+                        <Button
+                            v-if="plan.button.external"
+                            as="a"
+                            :href="plan.button.href"
+                            :variant="plan.button.variant"
+                            class="w-full"
+                        >
+                            {{ plan.button.text }}
+                        </Button>
+
+                        <Link v-else :href="plan.button.href" class="w-full">
                             <Button :variant="plan.button.variant" class="w-full">
                                 {{ plan.button.text }}
                             </Button>

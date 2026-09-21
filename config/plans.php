@@ -47,6 +47,7 @@ return [
         'stripe_price_id' => null,
         'self_serve' => false,                            // decision 3.7
         'contact_email' => 'sales@bebem.my.id',
+        'contact_subject' => 'Enterprise Plan Inquiry',
         'limits' => [
             'documents' => ['limit' => null, 'period' => 'month'],
             'templates' => 5,

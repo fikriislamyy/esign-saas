@@ -84,10 +84,7 @@ function choose(key) {
     }
 
     if (key === "enterprise") {
-        const contactEmail = plans.value.enterprise?.contact_email;
-        if (contactEmail) {
-            window.location.href = `mailto:${contactEmail}?subject=Enterprise plan enquiry`;
-        }
+        window.location.href = page.props.salesMailto;
         return;
     }
 
