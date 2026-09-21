@@ -11,8 +11,8 @@
 |
 */
 
-define('K_TCPDF_EXTERNAL_CONFIG', true);
-define('K_TCPDF_THROW_EXCEPTION_ERROR', true);
+defined('K_TCPDF_EXTERNAL_CONFIG') || define('K_TCPDF_EXTERNAL_CONFIG', true);
+defined('K_TCPDF_THROW_EXCEPTION_ERROR') || define('K_TCPDF_THROW_EXCEPTION_ERROR', true);
 
 /*
 |--------------------------------------------------------------------------
