@@ -26,11 +26,18 @@ class OrganizationInvitationMailTest extends TestCase
         $mail->assertHasSubject('Organization Invitation');
     }
 
-    public function test_the_html_contains_the_organization_and_acceptance_link(): void
+    public function test_the_html_contains_the_organization_name(): void
     {
         $mail = new OrganizationInvitationMail($this->invitation());
 
         $mail->assertSeeInHtml('Acme');
-        $mail->assertSeeInHtml('invite-token');
+    }
+
+    public function test_the_html_contains_the_acceptance_link(): void
+    {
+        $invitation = $this->invitation();
+        $mail = new OrganizationInvitationMail($invitation);
+
+        $mail->assertSeeInHtml(route('invitations.accept', $invitation->token));
     }
 }

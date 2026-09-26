@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\WalletTopup;
 use App\Services\PakasirFulfillmentService;
 use App\Services\WalletService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -43,6 +44,24 @@ class PakasirFulfillmentServiceTest extends TestCase
         return app(PakasirFulfillmentService::class);
     }
 
+    private function topup(?array $metadata = ['amount_idr' => 160000]): WalletTopup
+    {
+        $wallet = app(WalletService::class)->getOrCreateWallet($this->organization);
+
+        return WalletTopup::create([
+            'wallet_id' => $wallet->id,
+            'organization_id' => $this->organization->id,
+            'currency' => 'IDR',
+            'amount' => 160000,
+            'exchange_rate' => 16000,
+            'wallet_amount_usd_cents' => 1000,
+            'provider' => 'pakasir',
+            'order_id' => 'topup-order',
+            'created_by' => $this->owner->id,
+            'metadata' => $metadata,
+        ]);
+    }
+
     public function test_amount_idr_uses_the_subscription_payment_amount(): void
     {
         $payment = $this->payment();
@@ -50,13 +69,17 @@ class PakasirFulfillmentServiceTest extends TestCase
         $this->assertSame(160000, $this->service()->amountIdr($payment));
     }
 
-    public function test_amount_idr_uses_topup_metadata_or_zero(): void
+    public function test_amount_idr_uses_topup_metadata(): void
     {
-        $wallet = app(WalletService::class)->getOrCreateWallet($this->organization);
-        $topup = WalletTopup::create(['wallet_id' => $wallet->id, 'organization_id' => $this->organization->id, 'currency' => 'IDR', 'amount' => 160000, 'exchange_rate' => 16000, 'wallet_amount_usd_cents' => 1000, 'provider' => 'pakasir', 'metadata' => ['amount_idr' => 160000]]);
-        $withoutMetadata = WalletTopup::create(['wallet_id' => $wallet->id, 'organization_id' => $this->organization->id, 'currency' => 'IDR', 'amount' => 1, 'exchange_rate' => 1, 'wallet_amount_usd_cents' => 1, 'provider' => 'pakasir']);
+        $topup = $this->topup();
 
         $this->assertSame(160000, $this->service()->amountIdr($topup));
+    }
+
+    public function test_amount_idr_without_topup_metadata_is_zero(): void
+    {
+        $withoutMetadata = $this->topup(null);
+
         $this->assertSame(0, $this->service()->amountIdr($withoutMetadata));
     }
 
@@ -71,26 +94,50 @@ class PakasirFulfillmentServiceTest extends TestCase
 
     public function test_a_completed_subscription_payment_activates_pro(): void
     {
+        $this->travelTo(Carbon::parse('2026-03-11 10:00:00'));
         Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => true]])]);
         $payment = $this->payment();
 
         $this->assertTrue($this->service()->fulfill($payment, true));
-        $this->assertSame('paid', $payment->fresh()->status);
-        $this->assertSame('pro', $this->organization->subscription->fresh()->plan);
-        $this->assertSame('pakasir', $this->organization->subscription->fresh()->provider);
+        $payment->refresh();
+        $subscription = $this->organization->subscription->fresh();
+
+        $this->assertSame('paid', $payment->status);
+        $this->assertSame('2026-03-11 10:00:00', $payment->paid_at?->toDateTimeString());
+        $this->assertSame('pro', $subscription->plan);
+        $this->assertSame('active', $subscription->status);
+        $this->assertSame('pakasir', $subscription->provider);
+        $this->assertSame('2026-04-10 10:00:00', $subscription->expired_at?->toDateTimeString());
     }
 
-    public function test_a_completed_topup_credits_the_wallet_only_once(): void
+    public function test_a_completed_topup_credits_the_wallet(): void
+    {
+        $this->travelTo(Carbon::parse('2026-03-11 10:00:00'));
+        Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => true]])]);
+        $topup = $this->topup();
+
+        $this->assertTrue($this->service()->fulfill($topup));
+        $topup->refresh();
+        $wallet = $topup->wallet->fresh();
+        $transaction = $wallet->transactions()->first();
+
+        $this->assertSame('paid', $topup->status);
+        $this->assertSame('2026-03-11 10:00:00', $topup->paid_at?->toDateTimeString());
+        $this->assertSame(1000, $wallet->balance_usd_cents);
+        $this->assertSame(WalletTopup::class, $transaction->reference_type);
+        $this->assertSame((string) $topup->id, (string) $transaction->reference_id);
+    }
+
+    public function test_fulfilling_the_same_topup_twice_credits_only_once(): void
     {
         Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => true]])]);
-        $wallet = app(WalletService::class)->getOrCreateWallet($this->organization);
-        $topup = WalletTopup::create(['wallet_id' => $wallet->id, 'organization_id' => $this->organization->id, 'currency' => 'IDR', 'amount' => 160000, 'exchange_rate' => 16000, 'wallet_amount_usd_cents' => 1000, 'provider' => 'pakasir', 'order_id' => 'topup-order', 'created_by' => $this->owner->id, 'metadata' => ['amount_idr' => 160000]]);
+        $topup = $this->topup();
 
         $this->assertTrue($this->service()->fulfill($topup));
         $this->assertTrue($this->service()->fulfill($topup->fresh()));
 
-        $this->assertSame('paid', $topup->fresh()->status);
-        $this->assertSame(1000, $wallet->fresh()->balance_usd_cents);
+        $wallet = $topup->wallet->fresh();
+        $this->assertSame(1000, $wallet->balance_usd_cents);
         $this->assertSame(1, $wallet->transactions()->count());
     }
 

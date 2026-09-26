@@ -32,12 +32,19 @@ class SignatureRequestMailTest extends TestCase
         $mail->assertHasSubject('Signature Request: Contract');
     }
 
-    public function test_the_html_contains_the_otp_and_signing_link(): void
+    public function test_the_html_contains_the_otp(): void
     {
         $signer = $this->signer();
         $mail = new SignatureRequestMail($signer, '123456');
 
         $mail->assertSeeInHtml('123456');
-        $mail->assertSeeInHtml($signer->token);
+    }
+
+    public function test_the_html_contains_the_signing_link(): void
+    {
+        $signer = $this->signer();
+        $mail = new SignatureRequestMail($signer, '123456');
+
+        $mail->assertSeeInHtml(route('signing.show', $signer->token));
     }
 }
