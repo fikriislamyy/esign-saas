@@ -3,7 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import { loadPdf } from "@/Composables/usePdfLoader";
 
 vi.mock("axios");
-vi.mock("pdfjs-dist");
+vi.mock("pdfjs-dist", () => ({ getDocument: vi.fn() }));
 
 describe("usePdfLoader", () => {
     afterEach(() => {
