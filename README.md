@@ -21,6 +21,20 @@ Laravel is a web application framework with expressive, elegant syntax. We belie
 
 Laravel is accessible, powerful, and provides tools required for large, robust applications.
 
+## Testing
+
+Run the JavaScript unit suite with:
+
+```bash
+npm test
+```
+
+Run the PHP suite in the application container with:
+
+```bash
+docker exec esign-app php artisan test
+```
+
 ## Learning Laravel
 
 Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.

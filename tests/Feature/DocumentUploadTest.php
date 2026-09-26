@@ -71,7 +71,9 @@ class DocumentUploadTest extends TestCase
 
     public function test_a_non_pdf_renamed_to_pdf_is_rejected(): void
     {
-        $file = UploadedFile::fake()->createWithContent('contract.pdf', str_repeat("\0", 1024));
+        $path = tempnam(sys_get_temp_dir(), 'notpdf');
+        file_put_contents($path, str_repeat("\0", 1024));
+        $file = new UploadedFile($path, 'contract.pdf', 'application/pdf', null, true);
 
         $response = $this->actingAs($this->user)->post('/documents', ['file' => $file]);
 
