@@ -23,6 +23,8 @@ Laravel is accessible, powerful, and provides tools required for large, robust a
 
 ## Testing
 
+For local SigNoz traces, metrics, and correlated logs, see [the observability runbook](docs/observability.md).
+
 Run the JavaScript unit suite with:
 
 ```bash

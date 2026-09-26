@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\SubscriptionPayment;
 use App\Models\WalletTopup;
+use App\Observability\Telemetry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -35,6 +36,12 @@ class PakasirFulfillmentService
      * the transaction as sandbox. Safe to call twice: a paid record is a no-op.
      */
     public function fulfill(SubscriptionPayment|WalletTopup $record, bool $sandboxOnly = false): bool
+    {
+        return app(Telemetry::class)->withinSpan('payment.fulfill', ['payment.provider' => 'pakasir'],
+            fn (): bool => $this->fulfillPayment($record, $sandboxOnly));
+    }
+
+    private function fulfillPayment(SubscriptionPayment|WalletTopup $record, bool $sandboxOnly): bool
     {
         $detail = $this->pakasir->transactionDetail($record->order_id, $this->amountIdr($record));
         $transaction = $detail['transaction'] ?? [];

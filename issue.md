@@ -1,838 +1,485 @@
-# Unit test suite for services, models, composables and components
+# Add observability with SigNoz and OpenTelemetry
 
-## 1. What we are building, in one paragraph
+## Original request
 
-Today the project has 15 PHP feature test files (HTTP in, HTTP out) and **zero** tests for the
-JavaScript side — there is no test runner in `package.json` at all. This task adds a unit test
-layer underneath the feature tests: one test file per PHP service, rule, mailable, command and
-model-with-logic, and one per JavaScript composable, helper and logic-bearing Vue component. It
-also installs Vitest so the Vue side can be tested at all, and fixes the two things that make the
-existing PHP suite show yellow and red on every run. Every test is written from the scenario
-checklist in section 6, using the fixture recipes in 4.3 and the fakes in 4.4, and every file is
-produced with the prompt in 4.2 — you fill in the target code, the prompt fills in the rest.
+> Please add observability to this project. Use SigNoz and OTel (OpenTelemetry). Use Docker to run these services.
 
-"All functions, components and modules" is triaged, not literal. Section 6 sorts every target
-into a tier; Tier A and B are this issue, Tier C is deliberately skipped with a reason, Tier D
-(controllers without feature tests) is listed for a follow-up so nothing is forgotten.
+## Purpose of this document
 
-## 2. Things you must not do
+This is an implementation plan for a junior developer or an AI coding agent. Complete the phases in order. Each phase includes files to change, implementation steps, and a completion check. The checkboxes describe future work; writing this plan does not mean that the feature has been implemented.
 
-- **Do not change the code under test.** No adding `export` to a helper so it is easier to
-  reach, no extracting a method, no "small refactor". If a function is private or unexported,
-  test it through the public surface that calls it, or skip it and say so. Test scaffolding
-  (config files, setup files, fixtures) is not "code under test" and is fine.
-- **Do not hit the network, Stripe, Pakasir, Google or CurrencyFreaks.** Every outbound call
-  goes through `Http::fake()` (PHP) or `vi.mock` (JS). A test that passes only when the office
-  Wi-Fi is up is a broken test.
-- **Do not mock your own classes.** `WalletService` is tested with the real database, not a
-  mocked `Wallet`. `Recaptcha` (the rule) is tested by faking Google's HTTP response, not by
-  mocking `RecaptchaService`. Mock the boundary, not the middle.
-- **Do not rewrite existing feature tests as unit tests.** `LoginOtpTest` already proves the
-  HTTP flow. A unit test for `LoginOtpService` proves the Redis key behaviour the HTTP test
-  cannot see (TTLs, hash format). Different questions, both stay.
-- **Do not test the framework.** No test that `hasMany` returns a relation, that `$fillable`
-  contains a column, or that `config()` reads a file. Test *your* decisions: `effectivePlan()`
-  returning `free` for a cancelled Pro is a decision; `belongsTo` working is Laravel's.
-- **Do not chase a coverage number.** The definition of done is "every Tier A/B target has a
-  file with the listed scenarios green", not a percentage. Do not add assertion-free tests to
-  move a bar.
-- **Do not write one giant test.** One scenario per test method, named for the behaviour:
-  `test_a_cancelled_pro_subscription_is_effectively_free`, not `test_effective_plan`.
-- **Do not use `sleep()`.** Time is controlled with `$this->travel()` / `travelTo()` (PHP) and
-  `vi.useFakeTimers()` (JS). Redis TTLs are real time — assert `TTL <= 600`, never wait for
-  expiry; to simulate "60 seconds passed", delete the key (see `LoginOtpTest`).
-- **Do not snapshot-test.** No `toMatchSnapshot()`. Assert the thing you care about.
-- **Do not skip Phase 0.** Adding tests to a suite that is already red or yellow means nobody
-  can tell whether your new test broke something.
+Documentation and repository structure were checked on **2026-09-26**. Resolve and record compatible dependency versions in Phase 0 before copying SDK examples. Do not assume that examples from a different Laravel or SigNoz version will work here.
 
-## 3. What exists today
+## 1. Expected outcome
 
-| Layer | Runner | Where | State |
-| --- | --- | --- | --- |
-| PHP feature tests | PHPUnit 10.5 via `php artisan test` | `tests/Feature/**` (15 files, 31 auth + ~28 other tests) | 1 red (`TemplateUploadTest::test_a_non_pdf_renamed_to_pdf_is_rejected`, can never pass — see Phase 0), every run shows a WARN from a double `define()` in `bootstrap/app.php` |
-| PHP unit tests | same | `tests/Unit/ExampleTest.php` | one placeholder, `assertTrue(true)` |
-| JS tests | **none** | — | no runner, no config, no `test` script |
+A developer can start the application and a local SigNoz stack with Docker, perform an application request, and use SigNoz to answer:
 
-Things the plan relies on, and where to see them:
+- Which route was called, how long did it take, and did it fail?
+- Which application log events belong to that request?
+- Are request volume, server errors, or latency increasing?
+- Did document expiry and subscription expiry finish successfully?
+- How long did payment fulfillment take inside its parent request or command?
 
-| You need to | Look at | What you will see |
-| --- | --- | --- |
-| The PHPUnit env | [phpunit.xml:20-33](phpunit.xml#L20-L33) | `APP_ENV=testing`, `CACHE_DRIVER=array`, `SESSION_DRIVER=array`, `MAIL_MAILER=array`, `QUEUE_CONNECTION=sync`, reCAPTCHA keys blank. DB is the real Postgres in Docker (the sqlite lines are commented out). Redis is the real container |
-| The base class every PHP test extends | [tests/TestCase.php](tests/TestCase.php) | `Tests\TestCase` boots the app, so `config()`, `app()`, facades all work. Add `use RefreshDatabase;` only when the test writes rows |
-| A feature test that builds an org + owner by hand | [TemplateLimitTest.php:20-31](tests/Feature/TemplateLimitTest.php#L20-L31) | `Organization::create(['name' => 'Acme'])`, then `User::factory()->create([...role => 'owner'])`. There is no OrganizationFactory — this is the pattern |
-| A test that fakes time on a DB row | [EmailVerificationTest.php:59](tests/Feature/Auth/EmailVerificationTest.php#L59) | `OtpVerification::where(...)->update(['expired_at' => now()->subMinute()])` — set the column, do not sleep |
-| A test that uses real Redis | [LoginOtpTest.php:78-80](tests/Feature/Auth/LoginOtpTest.php#L78-L80) | `Redis::del("login_otp:{$user->id}:hash")` to simulate expiry |
-| A test that faked HTTP would replace | [RecaptchaService.php:16-40](app/Services/RecaptchaService.php#L16-L40) | `Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', …)` |
-| Why the Recaptcha rule needs an env trick | [Recaptcha.php:13-15](app/Rules/Recaptcha.php#L13-L15) | `if (app()->environment() === 'testing') return;` — the rule is a no-op in tests unless you change the env in the test |
-| Why `ExpireSubscriptions` needs a Stripe key even for Pakasir rows | [StripeService.php:12-22](app/Services/StripeService.php#L12-L22) | The constructor throws without `services.stripe.secret`; the command type-hints it, so it is constructed on every run |
-| The only factory | [UserFactory.php](database/factories/UserFactory.php) | `email_verified_at => now()`, `remember_token => random`, password `password` |
-| How `@` resolves in Vite | [vite.config.js](vite.config.js) + `laravel-vite-plugin` | The Laravel plugin adds `@ → resources/js`. Vitest does not load that plugin, so `vitest.config.js` declares the alias itself (Phase 0) |
-| Globals a component may touch | [app.js](resources/js/app.js) | `route()` from Ziggy is a global; `FadeIn.vue` uses `IntersectionObserver` and `matchMedia`. The Vitest setup file provides all three |
+The application must continue serving requests and running commands when observability is disabled or SigNoz is unavailable.
 
-## 4. The design — done for you
+### Terms used below
 
-### 4.1 Where each kind of test lives
+| Term | Meaning in this project |
+| --- | --- |
+| Trace | A record of one request or command and its instrumented operations. |
+| Span | One timed operation inside a trace. |
+| Metric | An aggregated measurement, such as request count or duration. |
+| Correlated log | A structured event containing the active trace and span identifiers. |
+| OpenTelemetry SDK | PHP libraries used to create and export telemetry. |
+| OTLP | The protocol used to send OpenTelemetry data. Use HTTP with protobuf encoding here. |
+| Collector / ingester | The service receiving telemetry and forwarding it to SigNoz storage. |
+| SigNoz | The application used to inspect telemetry and build dashboards. |
+| Foundry | SigNoz's current tool for generating its Docker deployment. |
 
-| Target | Test type | Directory | Extends | `RefreshDatabase`? |
-| --- | --- | --- | --- | --- |
-| Pure PHP class (no DB, no HTTP) | unit | `tests/Unit/Services/`, `tests/Unit/Models/` | `Tests\TestCase` | no |
-| PHP service that fakes HTTP / Cache | unit | `tests/Unit/Services/` | `Tests\TestCase` | no |
-| PHP service / model method that reads or writes rows | unit | `tests/Unit/Services/`, `tests/Unit/Models/` | `Tests\TestCase` | **yes** |
-| Rule, FormRequest, Mailable, Command | unit | `tests/Unit/Rules/`, `…/Requests/`, `…/Mail/`, `…/Console/` | `Tests\TestCase` | when rows are needed |
-| Middleware, controller | feature | `tests/Feature/` | `Tests\TestCase` | yes |
-| JS helper / composable | unit | `tests/js/lib/`, `tests/js/Composables/` | — (Vitest) | — |
-| Vue component | unit | `tests/js/Components/<same path as the component>/` | — (Vitest + Test Utils) | — |
+## 2. Repository facts to preserve
 
-Every PHP test extends `Tests\TestCase`, even the pure ones. The placeholder
-`tests/Unit/ExampleTest.php` extends PHPUnit's bare `TestCase`, which has no app — delete it in
-Phase 0 so nobody copies it. Naming: `<ClassName>Test.php` mirroring the `app/` path;
-`<name>.test.js` mirroring the `resources/js/` path.
+Read these files before implementing their corresponding phases.
 
-### 4.2 The prompt — filled in for this project
+| Existing file or component | Current behavior and implementation consequence |
+| --- | --- |
+| `composer.json` | Laravel `^10.10`, PHP `^8.3`, Guzzle `^7.2`; no OTel dependencies yet. |
+| `docker-compose.yml` | Runs `app`, `nginx`, `postgres`, `redis`, `mailpit`, and `scheduler`. Application URL is `http://localhost:8000`. |
+| `docker/php/Dockerfile` | PHP 8.3 FPM image shared by the app and scheduler. |
+| Root `Dockerfile` | Production image uses separate Composer, frontend, and PHP runtime stages. New runtime dependencies must be installed in its vendor stage too. |
+| `docker/render/supervisord.conf` | Production runs PHP FPM, nginx, and the scheduler together. Account for HTTP and CLI service identities. |
+| `app/Http/Kernel.php` | Laravel 10 middleware registration belongs here. |
+| `config/app.php` | Laravel 10 service provider registration belongs here. Do not use Laravel 11's `bootstrap/providers.php`. |
+| `app/Exceptions/Handler.php` | Already handles JSON and Inertia responses. Preserve its rendering behavior. |
+| `config/logging.php` | Existing application logs go through Laravel channels. Keep them working. |
+| `app/Console/Kernel.php` | Schedules `documents:expire` and `subscriptions:expire`. |
+| `app/Services/PakasirFulfillmentService.php` | Contains payment fulfillment and provider interaction suitable for a child span. |
+| `app/Services/LoginOtpService.php` | Handles sensitive OTP data; do not capture its inputs or Redis keys. |
+| `tests/Unit` and `tests/Feature` | Existing PHP tests. Follow their fixtures and mocking conventions. |
 
-This is the prompt you give to a model (or read yourself) for **each** target file. Sections 1,
-2, 4 and 5 are already filled in. For each file you paste the target code into section 3, the
-target's row from section 6 into section 5, and the fixture recipe(s) it needs from 4.3 into
-section 4. Use the PHP variant for anything under `app/`, the JS variant for anything under
-`resources/js/`.
+At planning time, `.env.example` is absent from this checkout. Create a dedicated `.env.observability.example`; do not overwrite `.env` or reconstruct a full application environment from secrets.
 
-#### PHP variant
+## 3. Implementation decisions
 
-````markdown
-You are an expert software engineer specializing in unit testing. I am adding unit tests to an
-ongoing, existing project. Write a comprehensive, clean, maintainable unit test file for the code
-below, matching our existing architecture.
+These decisions keep the first implementation bounded and reproducible.
 
-### 1. Project Context & Stack
-- Language/Runtime: PHP 8.4, Laravel 10.
-- Testing Framework: PHPUnit 10.5, run with `php artisan test`.
-- Mocking/Assertion Libraries: Laravel's built-in fakes only — `Http::fake()`, `Mail::fake()`,
-  `Storage::fake()`, `Event::fake()`, `$this->travel()`. The database is a real Postgres with
-  `RefreshDatabase`; Redis is real. No Mockery for our own classes.
-- Core Coding Standards: Arrange-Act-Assert with one blank line between the three blocks. One
-  behaviour per test method. Method names are full sentences: `test_<subject>_<behaviour>`.
-  No docblocks. No comments unless a line would otherwise surprise a reader.
+1. Use the **PHP OTel SDK with explicit instrumentation** in Laravel middleware and selected commands/services. No automatic instrumentation package or PECL OTel extension is needed for this approach. Automatic PHP instrumentation has additional extension requirements; it is a separate future choice. [PHP automatic instrumentation](https://opentelemetry.io/docs/zero-code/php/auto/)
+2. Implement **traces, metrics, and curated application logs**. Forward only events defined in this plan; arbitrary existing log messages can contain signing URLs or other secrets.
+3. Send all three signals directly to **SigNoz's bundled OTel ingester** over an internal Docker network. A second generic collector is unnecessary for this first implementation.
+4. Run SigNoz in its own Compose project, with its own storage volumes. Keep the application's database separate from SigNoz's metadata database.
+5. Add an opt-in application Compose overlay. The existing application Compose command must work without the SigNoz stack.
+6. Default application telemetry to disabled. Enabling the overlay opts local development into telemetry.
+7. Make the PHP integration compatible with the production image, but do not deploy a production SigNoz server as part of this issue.
 
-### 2. Existing Conventions Reference
-```php
-<?php
-
-namespace Tests\Feature;
-
-use App\Models\Organization;
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-
-class SalesContactTest extends TestCase
-{
-    use RefreshDatabase;
-
-    public function test_the_plan_page_receives_the_sales_link(): void
-    {
-        $organization = Organization::create(['name' => 'Acme']);
-        $owner = User::factory()->create([
-            'organization_id' => $organization->id,
-            'role' => 'owner',
-        ]);
-
-        $this->actingAs($owner)->get('/plan')->assertInertia(fn ($page) => $page
-            ->where('salesMailto', 'mailto:sales@bebem.my.id?subject=Enterprise%20Plan%20Inquiry')
-        );
-    }
-}
-```
-Every test class extends `Tests\TestCase` (namespace `Tests\Unit\...` for unit tests, mirroring
-the `app/` path). Add `use RefreshDatabase;` only if the test creates rows. Set config with
-`config(['key' => value])` inside the test, never by editing `.env`.
-
-### 3. Target Code to Test
-```php
-[PASTE THE FILE]
+```mermaid
+flowchart LR
+    Browser --> Nginx[nginx :8000]
+    Nginx --> App[Laravel / PHP FPM]
+    Scheduler[Laravel expiry commands] --> SDK[PHP OpenTelemetry SDK]
+    App --> SDK
+    SDK -->|OTLP HTTP :4318| Ingester[SigNoz OTel ingester]
+    Ingester --> Store[SigNoz telemetry storage]
+    UI[SigNoz UI :8080] --> Store
 ```
 
-### 4. Dependencies & Interfaces
-[PASTE THE FIXTURE RECIPES THIS TARGET NEEDS FROM issue.md §4.3, AND THE FAKE FROM §4.4]
+### Included in this issue
 
-### 5. Test Requirements & Scenarios
-1. Write exactly these scenarios, one test method each, in this order:
-   [PASTE THE TARGET'S ROW FROM issue.md §6]
-2. Fake every external call with the fake named above. Assert the fake was (or was not) called
-   where the scenario says so — `Http::assertSent`, `Http::assertNothingSent`,
-   `Mail::assertSent`, `Storage::disk(...)->assertMissing`.
-3. Tests must be isolated and deterministic: no `sleep()`, no real dates (`travelTo` a fixed
-   `Carbon` when the date matters), no order dependence between methods.
-4. Do not alter or refactor the target code.
+- Laravel request spans, including failures rendered into HTTP responses.
+- Request count and duration metrics independent of trace sampling.
+- Correlated, privacy-filtered request, command, and error events.
+- Spans and metrics for both existing expiry commands.
+- One child span around Pakasir fulfillment.
+- Docker setup, a dashboard, a local smoke command, tests, and operating instructions.
 
-Output only the complete test file in a single ```php block. The first line is `<?php`.
-````
+### Follow-up work
 
-#### JS variant
+Browser instrumentation, automatic SQL/Redis instrumentation, all outbound HTTP calls, host/container metrics, queue worker instrumentation, production hosting, and external alert delivery are outside this first implementation. There is no queue worker service in the current Compose file. Static assets served directly by nginx will not appear as Laravel request spans.
 
-````markdown
-You are an expert software engineer specializing in unit testing. I am adding unit tests to an
-ongoing, existing project. Write a comprehensive, clean, maintainable unit test file for the code
-below, matching our existing architecture.
+## 4. Proposed files
 
-### 1. Project Context & Stack
-- Language/Runtime: JavaScript (ES modules, no TypeScript), Vue 3.4 `<script setup>`, Vite 5,
-  Inertia.js 1.x, Node 24.
-- Testing Framework: Vitest 3 with `globals: true` and the `happy-dom` environment. Vue
-  components are mounted with `@vue/test-utils` 2.
-- Mocking/Assertion Libraries: `vi.mock()` for modules (`@inertiajs/vue3`, `axios`,
-  `pdfjs-dist`), `vi.fn()` for callbacks, `vi.useFakeTimers()` for time. A global `route(name)`
-  stub and an `IntersectionObserver` stub are provided by `tests/js/setup.js` — do not
-  redefine them.
-- Core Coding Standards: Arrange-Act-Assert with one blank line between the blocks. One
-  behaviour per `it()`. `describe` is the file or component name; `it` reads as a sentence:
-  `it("renders the Enterprise button as a mailto link")`. No snapshots. No comments unless a
-  line would otherwise surprise a reader.
+Keep responsibilities small. Equivalent names are acceptable if the final runbook uses the actual names.
 
-### 2. Existing Conventions Reference
-```js
-import { mount } from "@vue/test-utils";
-import { h } from "vue";
+| File | Action / responsibility |
+| --- | --- |
+| `docker/observability/signoz/casting.yaml` | Add: Foundry configuration, pinned images, networking and port patches. |
+| `docker/observability/signoz/casting.yaml.lock` | Add: reviewed Foundry lock file, if generated by the selected release. |
+| `docker/observability/versions.md` | Add: exact versions, image digests, compatibility notes, and upstream references. |
+| `docker-compose.observability.yml` | Add: app/scheduler telemetry configuration and shared network. |
+| `.env.observability.example` | Add: nonsecret configuration examples. |
+| `.gitignore` | Update: ignore generated Foundry `pours/` and local credentials. |
+| `composer.json`, `composer.lock` | Update: compatible OTel runtime dependencies. |
+| `config/observability.php` | Add: application telemetry settings. |
+| `app/Providers/ObservabilityServiceProvider.php` | Add: lazy service registration and lifecycle hooks. |
+| `config/app.php` | Update: register that provider. |
+| `app/Observability/Telemetry.php` | Add: small application-facing API for spans, events, measurements, flush, and shutdown. |
+| `app/Observability/TelemetryFactory.php` | Add: SDK providers, transports, resources, and processors. |
+| `app/Observability/TelemetryAttributes.php` | Add: event and attribute allowlists and normalization. |
+| `app/Http/Middleware/TraceRequest.php` | Add: one server span per Laravel request. |
+| `app/Http/Kernel.php` | Update: register middleware near the start of the global stack. |
+| `app/Exceptions/Handler.php` | Update only if needed: record a sanitized reportable exception event. |
+| Existing expiry command classes | Update: wrap command execution without changing business behavior. |
+| `app/Services/PakasirFulfillmentService.php` | Update: wrap fulfillment in a child span. |
+| `app/Console/Commands/ObservabilitySmoke.php` | Add: local/testing-only command emitting synthetic telemetry. |
+| `tests/Unit/Observability/` | Add: configuration, privacy, lifecycle, and disabled-mode tests. |
+| `tests/Feature/Observability/` | Add: request, command, and service integration tests. |
+| `docs/observability.md` | Add: setup, queries, troubleshooting, rollback, and production considerations. |
+| `docs/observability/dashboard.json` | Add: dashboard exported from the chosen SigNoz version. |
+| `README.md` | Update: short link to the observability runbook. |
 
-vi.mock("@inertiajs/vue3", () => ({
-    usePage: () => ({ props: { salesMailto: "mailto:sales@example.test?subject=Hi" } }),
-    Link: {
-        props: ["href"],
-        setup: (props, { slots }) => () => h("a", { href: props.href, "data-inertia": "" }, slots.default?.()),
-    },
-}));
+## Phase 0 — Establish compatible versions
 
-import Pricing from "@/Components/landing/Pricing.vue";
+**Goal:** avoid building the integration against incompatible examples or moving image tags.
 
-describe("Pricing", () => {
-    it("renders the Enterprise button as a plain mailto link", () => {
-        const wrapper = mount(Pricing);
+1. Inspect the files listed in section 2 and check the working tree. Preserve unrelated changes.
+2. Confirm Docker Engine and Docker Compose v2 are available on the intended development host.
+3. Read the current official SigNoz Docker installation instructions. The documentation reviewed for this plan uses Foundry and marks the old bundled `deploy/docker` installation as deprecated. Allow at least the documented 4 GB for SigNoz, plus memory for this application. For Windows/WSL, check the documented ClickHouse Keeper compatibility caveat before choosing the Docker engine. [SigNoz Docker installation](https://signoz.io/docs/install/docker/)
+4. Select a stable Foundry release and record its exact version and installation/checksum instructions. Use the compatible SigNoz component set generated by that release as the starting point.
+5. Record exact image tags or digests for every generated SigNoz service. Do not independently upgrade ClickHouse or Keeper beyond the supported set.
+6. Resolve stable PHP packages compatible with PHP 8.3 and the existing lock file:
+   - `open-telemetry/api`
+   - `open-telemetry/sdk`
+   - `open-telemetry/exporter-otlp`
+   - `php-http/guzzle7-adapter`
+7. Check that protobuf encoding is available through the resolved dependencies. HTTP/protobuf does not require gRPC. The official exporter documentation describes the exporter and HTTP-client requirements. [PHP exporters](https://opentelemetry.io/docs/languages/php/exporters/)
+8. Save the results in `docker/observability/versions.md`. Include the exact SDK APIs used for log export, metric temporality, timeouts, and flushing. Commit `composer.lock` with the implementation.
 
-        const link = wrapper.get('a[href^="mailto:"]');
-
-        expect(link.attributes("data-inertia")).toBeUndefined();
-        expect(link.text()).toBe("Contact sales");
-    });
-});
-```
-Imports use the `@` alias. `vi.mock` calls sit above the component import. Components that
-read `usePage()` get their props through the mock, never through `global.mocks.$page`.
-
-### 3. Target Code to Test
-```vue
-[PASTE THE FILE]
-```
-
-### 4. Dependencies & Interfaces
-[PASTE THE MOCK RECIPE(S) THIS TARGET NEEDS FROM issue.md §4.4 (JS half)]
-
-### 5. Test Requirements & Scenarios
-1. Write exactly these scenarios, one `it()` each, in this order:
-   [PASTE THE TARGET'S ROW FROM issue.md §6]
-2. Mock every import that touches the network, the router, or a browser API the environment
-   lacks. Assert on rendered text, attributes, emitted events and mock calls — not on internal
-   refs.
-3. Tests must be isolated and deterministic: fake timers for countdowns, no real fetches, no
-   reliance on test order. Call `vi.useRealTimers()` in `afterEach` when fake timers were used.
-4. Do not alter or refactor the target code.
-
-Output only the complete test file in a single ```js block.
-````
-
-### 4.3 Fixture recipes (PHP)
-
-Copy the ones you need into section 4 of the prompt. All of them assume `use RefreshDatabase;`.
-
-```php
-// Organization + owner. Organization has HasUuids; no id needed.
-$organization = Organization::create(['name' => 'Acme']);
-$owner = User::factory()->create(['organization_id' => $organization->id, 'role' => 'owner']);
-
-// A member / admin: same, with 'role' => 'member' or 'admin'.
-
-// Subscription (integer id). PlanService::subscriptionFor() creates a free one on demand;
-// create one yourself only to test a non-free plan.
-$organization->subscription()->create(['plan' => 'pro', 'status' => 'active', 'expired_at' => now()->addDays(30)]);
-
-// Document (HasUuids). Status defaults to 'draft'; allowed: draft, sent, completed, expired.
-$document = Document::create([
-    'organization_id' => $organization->id,
-    'owner_id' => $owner->id,
-    'name' => 'Contract',
-    'file_path' => 'documents/contract.pdf',
-    'file_size' => 1024,
-    'mime_type' => 'application/pdf',
-]);
-
-// Backdate a row (created_at is not fillable — update it after the fact, like EmailVerificationTest does).
-Document::whereKey($document->id)->update(['created_at' => now()->subDays(10)]);
-
-// Signer (HasUuids). token is a NOT NULL uuid column.
-$signer = DocumentSigner::create([
-    'document_id' => $document->id,
-    'name' => 'Sam Signer',
-    'email' => 'sam@example.com',
-    'token' => (string) Str::uuid(),
-]);
-
-// Template (HasUuids).
-Template::create([
-    'organization_id' => $organization->id,
-    'name' => 'NDA',
-    'file_path' => 'templates/nda.pdf',
-    'file_size' => 1024,
-    'mime_type' => 'application/pdf',
-]);
-
-// Pending invitation (HasUuids). accepted_at null = still counts against the member limit.
-Invitation::create(['organization_id' => $organization->id, 'email' => 'new@example.com', 'role' => 'member', 'token' => (string) Str::uuid()]);
-
-// Wallet: always go through the service so the row shape is right.
-$wallet = app(WalletService::class)->getOrCreateWallet($organization);
-
-// Wallet top-up awaiting Pakasir (integer id).
-$topup = WalletTopup::create([
-    'wallet_id' => $wallet->id,
-    'organization_id' => $organization->id,
-    'currency' => 'USD',
-    'amount' => 10,
-    'exchange_rate' => 16000,
-    'wallet_amount_usd_cents' => 1000,
-    'provider' => 'pakasir',
-    'order_id' => 'TOPUP-1',
-    'status' => 'pending',
-    'created_by' => $owner->id,
-    'metadata' => ['amount_idr' => 160000],
-]);
-
-// Subscription payment awaiting Pakasir (integer id). amount is already IDR.
-$payment = SubscriptionPayment::create([
-    'organization_id' => $organization->id,
-    'subscription_id' => $organization->subscription->id,
-    'plan' => 'pro',
-    'provider' => 'pakasir',
-    'order_id' => 'SUB-1',
-    'currency' => 'IDR',
-    'amount' => 160000,
-    'amount_usd_cents' => 1000,
-    'exchange_rate' => 16000,
-    'status' => 'pending',
-]);
-```
-
-### 4.4 Fakes — which one for which boundary
-
-| Boundary | PHP | JS |
-| --- | --- | --- |
-| Outbound HTTP (Google, Pakasir, CurrencyFreaks) | `Http::fake(['www.google.com/*' => Http::response([...], 200)])`; assert with `Http::assertSent(fn ($r) => $r['secret'] === 'x')` / `Http::assertNothingSent()` | `vi.mock("axios", () => ({ default: { get: vi.fn() } }))` |
-| Email | `Mail::fake()` then `Mail::assertSent(LoginOtpMail::class, fn ($m) => $m->hasTo(...))`. To test a mailable's *content*: no fake — `(new LoginOtpMail($user, '123456'))->assertSeeInHtml('123456')` and `->assertHasSubject('…')` | — |
-| Files | `Storage::fake('documents')` (the disk name is `config('documents.disk')`), then `Storage::disk('documents')->assertExists / assertMissing` | — |
-| Cache | Already `array` in `phpunit.xml`; each test starts empty. `Cache::flush()` if a test needs a clean second half | — |
-| Redis | Real. Keys are per-UUID so tests never collide. `Redis::ttl($key)`, `Redis::get`, `Redis::del` | — |
-| Time | `$this->travelTo(Carbon::parse('2026-03-11 10:00:00'))` (a Wednesday — matters for week-based quotas); `$this->travel(6)->minutes()` | `vi.useFakeTimers(); vi.advanceTimersByTime(1000)`; `afterEach(vi.useRealTimers)` |
-| Stripe | Never construct a real client in a test path. The `StripeService` constructor is safe with a dummy key (`config(['services.stripe.secret' => 'sk_test_dummy'])`) — it makes no call until `->client()->…` is used. Do not test code paths that call the Stripe API (see Tier D) | — |
-| Inertia | — | `vi.mock("@inertiajs/vue3", …)` providing `usePage`, `Link`, `Head`, `useForm`, `router` as the component needs (recipes below) |
-| Ziggy `route()` | — | Global stub from `tests/js/setup.js`: `route("login")` → `"/login"` |
-| `IntersectionObserver`, `matchMedia` | — | Stubbed in `tests/js/setup.js`; `FadeIn.vue` renders its slot immediately |
-| `window.location.href = "mailto:…"` | — | `const loc = { href: "" }; vi.stubGlobal("location", loc)` then assert `loc.href` |
-| `window.confirm` | — | `vi.spyOn(window, "confirm").mockReturnValue(true)` |
-
-JS mock recipes to paste into section 4 as needed:
-
-```js
-// Inertia: page props + Link + Head (for components that only read props and link)
-vi.mock("@inertiajs/vue3", async () => {
-    const { h } = await import("vue");
-    return {
-        usePage: () => ({ props: { /* what the component reads */ } }),
-        Link: { props: ["href"], setup: (p, { slots }) => () => h("a", { href: p.href, "data-inertia": "" }, slots.default?.()) },
-        Head: { setup: (_, { slots }) => () => slots.default?.() },
-    };
-});
-
-// Inertia: useForm + router (for pages that submit)
-const post = vi.fn();
-vi.mock("@inertiajs/vue3", async () => {
-    const { reactive } = await import("vue");
-    return {
-        useForm: (fields) => reactive({ ...fields, errors: {}, processing: false, post }),
-        router: { post: vi.fn(), visit: vi.fn() },
-        Link: { props: ["href"], setup: (p, { slots }) => () => h("a", { href: p.href }, slots.default?.()) },
-        Head: { setup: (_, { slots }) => () => slots.default?.() },
-    };
-});
-// Then in a test: expect(post).toHaveBeenCalledWith("/login.otp.verify")   ← route() stub returns "/<name>"
-
-// pdf.js + axios (for usePdfLoader)
-vi.mock("axios", () => ({ default: { get: vi.fn() } }));
-vi.mock("pdfjs-dist", () => ({ getDocument: vi.fn(() => ({ promise: Promise.resolve("PDF") })) }));
-```
-
-## 5. Step by step
-
-Commands run inside the container: `docker exec esign-app php artisan test …`. `npm` runs on the
-host.
-
-### Phase 0 — a green suite and a JS runner
-
-**0.1 Silence the TCPDF warning.** In [bootstrap/app.php](bootstrap/app.php) the two `define()`
-calls run once per test because PHPUnit re-bootstraps the app for every test class. Guard them:
-
-```php
-defined('K_TCPDF_EXTERNAL_CONFIG') || define('K_TCPDF_EXTERNAL_CONFIG', true);
-defined('K_TCPDF_THROW_EXCEPTION_ERROR') || define('K_TCPDF_THROW_EXCEPTION_ERROR', true);
-```
-
-Run `php artisan test` — the `!` marks and the `1 warning` line are gone.
-
-**0.2 Fix the test that cannot pass.** `TemplateUploadTest::test_a_non_pdf_renamed_to_pdf_is_rejected`
-uses `UploadedFile::fake()->createWithContent('template.pdf', "\0…")`. Laravel's testing `File`
-guesses the MIME type **from the file name**, so a fake named `.pdf` always reports
-`application/pdf` and the `mimes:pdf` rule passes. The test needs a real `UploadedFile` built
-from a temp file, so `finfo` reads the bytes:
-
-```php
-    public function test_a_non_pdf_renamed_to_pdf_is_rejected(): void
-    {
-        $path = tempnam(sys_get_temp_dir(), 'notpdf');
-        file_put_contents($path, str_repeat("\0", 1024));
-        $file = new \Illuminate\Http\UploadedFile($path, 'template.pdf', 'application/pdf', null, true);
-
-        $response = $this->actingAs($this->user)->post('/templates', ['file' => $file]);
-
-        $response->assertSessionHasErrors(['file' => 'Only PDF files can be uploaded.']);
-        $this->assertDatabaseCount('templates', 0);
-    }
-```
-
-[DocumentUploadTest.php:72-74](tests/Feature/DocumentUploadTest.php#L72-L74) has the identical
-test with the identical fake; apply the same fix there (`contract.pdf`, `/documents`). Run the
-two files; both green.
-
-**0.3 Delete `tests/Unit/ExampleTest.php` and `tests/Feature/ExampleTest.php`.** They assert
-nothing about this project.
-
-**0.4 Install Vitest.**
+Suggested dependency installation command, after checking compatibility:
 
 ```bash
-npm install --save-dev vitest@^3.2 @vue/test-utils@^2.4 happy-dom@^20
+docker compose exec app composer require open-telemetry/api open-telemetry/sdk open-telemetry/exporter-otlp php-http/guzzle7-adapter
 ```
 
-Add to `package.json` `scripts`:
+Do not add `--ignore-platform-reqs`, development stability overrides, or unrelated dependency upgrades to make installation pass. If a package requires a major Laravel/PHP upgrade, find a compatible stable version first.
 
-```json
-        "test": "vitest run",
-        "test:watch": "vitest"
+**Done when:** the version document has concrete versions, runtime dependencies resolve in PHP 8.3, and there are no `latest` tags in the new observability deployment. Existing application image tags are outside this issue.
+
+## Phase 1 — Run SigNoz with Docker
+
+**Goal:** a reproducible, isolated SigNoz stack reachable at `http://localhost:8080`.
+
+1. Create `docker/observability/signoz/` and a Foundry casting file using the official Compose example. Start from:
+
+   ```yaml
+   apiVersion: v1alpha1
+   kind: Installation
+   metadata:
+     name: esign-observability
+   spec:
+     deployment:
+       flavor: compose
+       mode: docker
+   ```
+
+2. Add the version pins selected in Phase 0 using the selected release's component configuration schema. Do not treat the minimal example above as the finished deployment. [Foundry casting reference](https://github.com/SigNoz/foundry/blob/main/docs/reference/casting-file.md)
+3. Generate the deployment once. Inspect the generated Compose file to identify its ingester, UI service, networks, volumes, and published ports. Use those actual service keys in subsequent patches.
+4. Create an external Docker network named `esign-observability`. Add it to the generated Compose configuration through Foundry patches. Attach **only the ingester** to that shared network, retaining its existing internal networks. Give it the network alias `otel-collector`.
+5. Ensure the ingester's OTLP HTTP receiver listens on `0.0.0.0:4318` inside its container. Retain the generated SigNoz pipelines and exporters for all three signals. Do not replace them with a generic collector configuration.
+6. Keep telemetry storage and metadata services internal. Remove unnecessary host port publications, including OTLP ports, and bind the UI to `127.0.0.1:8080`. Leave the optional MCP service disabled because its port can conflict with the application's port 8000.
+7. Preserve named storage volumes. Make all required deployment changes in `casting.yaml`; ignore generated `pours/`. Foundry applies `spec.patches` to generated files, and patch paths must match the selected version's output. [Foundry patches](https://github.com/SigNoz/foundry/blob/main/docs/concepts/patches.md)
+8. Review generated and lock files for credentials before committing anything. Put local credentials in ignored configuration where the selected release supports it. Document first-run account creation.
+9. Start the generated Compose project with a fixed project name, `esign-observability`, and confirm all required services become healthy.
+
+Command sequence to document, run from the repository root except for the indicated directory change:
+
+```bash
+docker network create esign-observability
+cd docker/observability/signoz
+foundryctl gauge -f casting.yaml
+foundryctl forge -f casting.yaml
+docker compose -p esign-observability -f pours/deployment/compose.yaml config --quiet
+docker compose -p esign-observability -f pours/deployment/compose.yaml up -d
+docker compose -p esign-observability -f pours/deployment/compose.yaml ps
 ```
 
-Create `vitest.config.js` (separate from `vite.config.js` — the Laravel plugin in there is not
-wanted in tests):
+If the external network already exists, inspect and reuse it. The final runbook must identify the actual ingester service name and how to inspect its logs.
 
-```js
-import { defineConfig } from "vitest/config";
-import vue from "@vitejs/plugin-vue";
-import { fileURLToPath } from "node:url";
+**Done when:** the UI loads, required services are healthy, storage survives a restart, and the ingester has the `otel-collector` alias on `esign-observability`. Application port 8000 remains available.
 
-export default defineConfig({
-    plugins: [vue()],
-    resolve: {
-        alias: { "@": fileURLToPath(new URL("./resources/js", import.meta.url)) },
-    },
-    test: {
-        environment: "happy-dom",
-        globals: true,
-        include: ["tests/js/**/*.test.js"],
-        setupFiles: ["tests/js/setup.js"],
-    },
-});
+## Phase 2 — Add opt-in application configuration
+
+**Goal:** enable telemetry without making SigNoz a dependency of application startup.
+
+1. Add `docker-compose.observability.yml`.
+2. Attach both `app` and `scheduler` to their existing `default` network and external `esign-observability` network. Keeping `default` is necessary for database and Redis access.
+3. Set environment variables for both services. Configure `esign-api` as the HTTP service name and `esign-scheduler` as the CLI service name. Choose between these configured values at runtime, so a shared Laravel configuration cache does not give HTTP and CLI the same identity.
+4. Do not add a `depends_on` relationship from application services to SigNoz. A stopped collector must not prevent application startup.
+5. Add `config/observability.php`. Access environment values here and use `config()` throughout application code so Laravel configuration caching works.
+6. Add `.env.observability.example` with these documented values:
+
+   ```dotenv
+   OBSERVABILITY_ENABLED=false
+   OTEL_SERVICE_NAME=esign-api
+   OBSERVABILITY_CONSOLE_SERVICE_NAME=esign-scheduler
+   OTEL_SERVICE_VERSION=local
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+   OTEL_TRACES_SAMPLER_ARG=1.0
+   OBSERVABILITY_EXPORT_TIMEOUT_MS=200
+   ```
+
+7. Make the overlay set `OBSERVABILITY_ENABLED` to true by default when explicitly selected, while allowing an explicit false override. Keep the application configuration default false.
+8. Define `deployment.environment.name` from `config('app.env')`, and `service.namespace` as `esign-saas`. Supply `service.version` from release configuration; do not execute Git on every request.
+9. Use a parent-based trace sampler with the configured ratio for locally created roots. Validate that the ratio is within 0–1. Start at 1.0 locally. Metrics must still record when traces are not sampled.
+10. Treat the endpoint as a base URL and construct exactly one `/v1/traces`, `/v1/metrics`, or `/v1/logs` suffix. `localhost` inside `app` refers to the app container, not SigNoz.
+11. Check that PHP FPM sees the intended container configuration. If its pool clears required variables, explicitly pass those variables in an FPM pool configuration. Check CLI and FPM separately.
+12. In the factory, select the configured console service name when Laravel is running in the console, and the configured `OTEL_SERVICE_NAME` otherwise. Make this selection after loading configuration, not while generating the configuration cache. This also covers the shared production supervisor image. Do not hard-code a local Docker endpoint into that image.
+
+The sample environment file is documentation. Do not automatically replace the developer's `.env`. Document whether a variable is read by Compose interpolation or passed into the container; these are different operations.
+
+Commands from the repository root:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 ```
 
-Create `tests/js/setup.js`:
+**Done when:** application networking still works, service identities differ, and the base Compose setup remains usable without creating the observability network.
 
-```js
-import { config } from "@vue/test-utils";
-import { vi } from "vitest";
+## Phase 3 — Build the PHP telemetry service
 
-globalThis.route = vi.fn((name, params) => {
-    const query = params ? "?" + new URLSearchParams(params).toString() : "";
-    return `/${name}${query}`;
-});
-config.global.mocks.route = globalThis.route;
+**Goal:** a single, testable place owns SDK setup and export lifecycle.
 
-class IntersectionObserverStub {
-    constructor(callback) {
-        this.callback = callback;
-    }
-    observe(target) {
-        this.callback([{ isIntersecting: true, target }], this);
-    }
-    unobserve() {}
-    disconnect() {}
-    takeRecords() {
-        return [];
-    }
-}
-globalThis.IntersectionObserver ??= IntersectionObserverStub;
+1. Implement `TelemetryFactory` to build a tracer provider, meter provider with an exporting reader, and logger provider. Share the resource attributes from Phase 2. Use OTLP HTTP/protobuf exporters for each signal.
+2. Consult the installed SDK's examples for actual constructor and builder signatures. The PHP documentation covers provider setup, span activation, metrics, and explicit collection. [PHP instrumentation](https://opentelemetry.io/docs/languages/php/instrumentation/)
+3. Implement a small `Telemetry` wrapper with application-facing operations equivalent to:
+   - `startRequest(...)` / `finishRequest(...)`
+   - `withinSpan(name, safeAttributes, callback)`
+   - `runCommand(commandName, callback)`
+   - `event(eventName, safeAttributes, severity)`
+   - `recordExceptionType(Throwable)`
+   - `forceFlush()` and `shutdown()`
+4. Keep SDK-specific types inside the observability classes where practical. Allow providers/exporters and the clock to be substituted in tests. Disabled mode must use no-op behavior and make no network calls.
+5. Register the service lazily in `ObservabilityServiceProvider`, then register that provider in `config/app.php`. Running Composer discovery, migrations, or unrelated Artisan commands must not start telemetry transport unnecessarily.
+6. Use bounded batching for spans and logs. Set a small queue limit, such as 256 records per process, and verify the chosen SDK's behavior. Do not assume PHP FPM has a permanent background exporter thread.
+7. Apply `OBSERVABILITY_EXPORT_TIMEOUT_MS` to the actual HTTP transport, including connection and response limits. Disable SDK transport retries for this first implementation. Bound the entire flush cycle to one second, including all three signals; test this bound rather than assuming each timeout adds up correctly.
+8. Make export/setup failures nonfatal. Catch failures only at telemetry boundaries; do not swallow business exceptions. SDK diagnostics must bypass the OTel logger to prevent recursion. Do not print exporter URLs, credentials, or serialized payloads in fallback messages.
+9. Register a Laravel application termination hook to flush initialized providers. End request spans before this hook. Make shutdown idempotent and avoid registering multiple competing automatic shutdown handlers.
+10. At the end of an instrumented command, flush explicitly. In a reused CLI process, keep providers alive for the next operation; shut them down only at final process termination. Every activated scope must be detached in a `finally` block.
+11. Configure metric temporality deliberately. Prefer delta aggregation for short PHP request lifetimes, using the selected SDK's supported API. Verify SigNoz ingestion with several separate requests. Never ship cumulative counters that reset each request under the same identity and produce incorrect rates. If the selected ingester requires conversion, configure and document its supported delta-to-cumulative path before continuing.
 
-globalThis.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+**Done when:** synthetic spans, a metric, and a log reach SigNoz; disabled mode performs zero exports; transport failure cannot change a callback's result or exception; repeated operations do not retain the previous active span.
+
+## Phase 4 — Instrument HTTP requests
+
+**Goal:** one correctly named server span and one measurement set per Laravel request.
+
+1. Add `TraceRequest` near the start of the global middleware list in `app/Http/Kernel.php` so it also observes responses produced by later middleware.
+2. Extract valid W3C trace context from `traceparent`/`tracestate` using the SDK propagator. Ignore malformed context safely. Do not import or export arbitrary baggage.
+3. Start and activate a server span before calling `$next($request)`. Initially use a safe generic name; after routing, rename it to the normalized method plus **route template**, such as `GET /documents/{document}`.
+4. Use the matched route's URI template, never the concrete request URL. For unmatched routes, use the constant `unmatched`. Normalize unrecognized methods to a bounded value such as `_OTHER`.
+5. Record only the allowlisted fields in the telemetry contract below. Read the final HTTP status from the response. Mark 5xx responses as span errors; do not mark all validation/authentication 4xx responses as server failures.
+6. Laravel can render exceptions inside its pipeline and return a response to this middleware. Handle both returned 5xx responses and thrown exceptions. A `catch` block alone will miss some failures.
+7. If adding a report hook in `app/Exceptions/Handler.php`, preserve existing behavior and attach only the exception class to the active span/event. Deduplicate error recording within a request. Never call raw `recordException($exception)` unless its payload is explicitly sanitized first.
+8. While the request span is still active, emit `http.request.completed` and record request count/duration. Then end the span and detach its context in `finally`. Rethrow original exceptions unchanged.
+9. Use monotonic time for durations. Define duration as time through Laravel response creation; document that it excludes streamed body delivery and export time.
+10. Register a test-only failure route in the test harness. Do not add a public debug endpoint to production routes.
+
+Lifecycle order:
+
+```text
+extract context -> start and activate span -> execute application
+-> obtain response/status -> emit safe event and metrics
+-> end span -> detach scope -> flush during application termination
 ```
 
-Create the first test, `tests/js/lib/utils.test.js`, to prove the pipeline:
+**Done when:** successful, redirect, validation, missing-route, and server-error responses produce the expected telemetry without changing response content/status. Token-bearing URLs appear only as route templates.
 
-```js
-import { cn } from "@/lib/utils";
+## Telemetry contract and privacy rules
 
-describe("cn", () => {
-    it("merges class names", () => {
-        expect(cn("p-2", "text-sm")).toBe("p-2 text-sm");
-    });
+Implement these rules centrally in `TelemetryAttributes`, with tests. Signing URLs, OTPs, payment data, and document contents make broad request/log capture unsuitable here.
 
-    it("lets the last Tailwind conflict win", () => {
-        expect(cn("p-2", "p-4")).toBe("p-4");
-    });
+### Allowed fields
 
-    it("drops falsy values", () => {
-        expect(cn("p-2", false, null, undefined, "", "m-1")).toBe("p-2 m-1");
-    });
-});
-```
-
-`npm test` → 3 passed. If the `@` import fails, the alias in `vitest.config.js` is wrong; if
-`describe` is undefined, `globals: true` is missing.
-
-**0.5 Commit Phase 0 on its own** (`test: fix suite warnings and add Vitest runner`). Everything
-after this is additive.
-
-### Phase 1 — PHP, pure (no fakes, no rows)
-
-Targets: `SigningPricingService`, `Subscription::effectivePlan()` + `config()`,
-`User::isOwner/isAdmin/canManageMembers`. Scenarios in section 6, Tier A.
-
-Worked example — `tests/Unit/Models/SubscriptionTest.php`. Note `new Subscription([...])` with
-no database: the `datetime` cast on `expired_at` works without a row.
-
-```php
-<?php
-
-namespace Tests\Unit\Models;
-
-use App\Models\Subscription;
-use Tests\TestCase;
-
-class SubscriptionTest extends TestCase
-{
-    public function test_a_free_subscription_is_free(): void
-    {
-        $subscription = new Subscription(['plan' => 'free', 'status' => 'active']);
-
-        $this->assertSame('free', $subscription->effectivePlan());
-    }
-
-    public function test_an_active_pro_subscription_with_no_expiry_is_pro(): void
-    {
-        $subscription = new Subscription(['plan' => 'pro', 'status' => 'active', 'expired_at' => null]);
-
-        $this->assertSame('pro', $subscription->effectivePlan());
-    }
-
-    public function test_a_cancelled_pro_subscription_is_effectively_free(): void
-    {
-        $subscription = new Subscription(['plan' => 'pro', 'status' => 'cancelled']);
-
-        $this->assertSame('free', $subscription->effectivePlan());
-    }
-
-    public function test_an_expired_pro_subscription_is_effectively_free(): void
-    {
-        $subscription = new Subscription(['plan' => 'pro', 'status' => 'active', 'expired_at' => now()->subMinute()]);
-
-        $this->assertSame('free', $subscription->effectivePlan());
-    }
-
-    public function test_a_pro_subscription_expiring_in_the_future_is_still_pro(): void
-    {
-        $subscription = new Subscription(['plan' => 'pro', 'status' => 'active', 'expired_at' => now()->addDay()]);
-
-        $this->assertSame('pro', $subscription->effectivePlan());
-    }
-
-    public function test_config_returns_the_effective_plans_entry(): void
-    {
-        $subscription = new Subscription(['plan' => 'pro', 'status' => 'cancelled']);
-
-        $this->assertSame(config('plans.free'), $subscription->config());
-    }
-}
-```
-
-### Phase 2 — PHP, fakes but no rows
-
-Targets: `RecaptchaService`, `Recaptcha` rule, `ExchangeRateService`, `PakasirService`,
-`StripeService`. Each needs `Http::fake()` and/or `config([...])`.
-
-Two traps, both from section 3:
-
-- The `Recaptcha` rule short-circuits when `app()->environment() === 'testing'`. In its test,
-  first line of every method that must reach the real path: `$this->app['env'] = 'production';`.
-  Then drive the outcome with `Http::fake()`, not by mocking `RecaptchaService`. Run the rule
-  with `Validator::make(['recaptcha_token' => 'tok'], ['recaptcha_token' => [new Recaptcha]])->passes()`.
-- `ExchangeRateService` caches for 300 s under the `array` store. The "second call does not hit
-  the API" scenario is `Http::assertSentCount(1)` after two `usdToIdr()` calls.
-
-### Phase 3 — PHP, rows (`RefreshDatabase`)
-
-Targets: `WalletService`, `PlanService`, `EmailVerificationOtpService`, `SigningOtpService`,
-`PakasirFulfillmentService`, `LoginOtpService`, `Organization::wallet_balance_usd_cents`.
-
-Traps:
-
-- `PlanService::documentPeriodStart` depends on the plan's period (`week` for free, `month` for
-  pro). Pin the clock: `$this->travelTo(Carbon::parse('2026-03-11 10:00'))` (a Wednesday), then
-  a document backdated to Monday 09:00 counts and one backdated to Sunday does not.
-- `WalletService::debit` throws `InsufficientWalletBalanceException` — assert with
-  `$this->expectException(...)` **and**, in a separate test, that the balance and the transaction
-  count are unchanged after the failed call (wrap the call in `try/catch` for that one).
-- `PakasirFulfillmentService::fulfill` calls `PakasirService::transactionDetail`, which is HTTP.
-  `Http::fake(['*/api/transactiondetail*' => Http::response(['transaction' => ['status' => 'completed', 'is_sandbox' => true]])])`.
-  Set `config(['services.pakasir.project' => 'p', 'services.pakasir.api_key' => 'k'])` first.
-- `LoginOtpService` writes real Redis keys. Assert the hash key starts with `$2y$` (bcrypt) and
-  `Redis::ttl(...)` is `> 0 && <= 600`. Delete keys to simulate time.
-
-### Phase 4 — PHP mail, commands, requests, middleware
-
-Targets: the 4 mailables, `ExpireDocuments`, `ExpireSubscriptions`, `LoginRequest` throttling,
-`ProfileUpdateRequest` rules, `HandleInertiaRequests` shared props, `Authenticate` /
-`RedirectIfAuthenticated` redirects.
-
-Traps:
-
-- Mailable content tests need no `Mail::fake()`: `(new LoginOtpMail($user, '123456'))->assertSeeInHtml('123456')`,
-  `->assertHasSubject('Your EZSign sign-in code')`. `SignatureRequestMail` needs a signer fixture;
-  `OrganizationInvitationMail` needs an invitation fixture.
-- `ExpireSubscriptions` type-hints `StripeService`, whose constructor throws without a key.
-  `config(['services.stripe.secret' => 'sk_test_dummy'])` at the top of every test. Only test
-  rows with `provider => 'pakasir'` (or null) — the Stripe-verification branch calls the Stripe
-  API and is out of scope (Tier D).
-- Commands: `$this->artisan('documents:expire')->expectsOutput('Documents expired: 2')->assertSuccessful()`.
-  `Storage::fake('documents')` and `Storage::disk('documents')->put($path, 'x')` before, `assertMissing` after.
-- `LoginRequest` throttling is a feature test: 5 × `POST /login` with a wrong password, then the
-  6th response `assertSessionHasErrors('email')` with a message containing "Too many".
-- `HandleInertiaRequests`: `GET /` as guest → `assertInertia` shows `auth.user` null, `wallet`
-  null, `plan` null, `salesMailto` set; `GET /dashboard` as owner → `plan.key === 'free'`,
-  `plan.label === 'Free'`, `wallet.balanceUsdCents === 0`.
-
-### Phase 5 — JS helpers and composables
-
-Targets: `cn` (done in Phase 0), `valueUpdater`, `useFeedback`, `withoutTransitions`,
-`loadPdf`.
-
-Worked example — `tests/js/Composables/useFeedback.test.js`. The composable keeps **module-level**
-state, so it is shared between calls and between tests; reset it in `beforeEach`.
-
-```js
-import { useFeedback } from "@/Composables/useFeedback";
-
-describe("useFeedback", () => {
-    beforeEach(() => {
-        const { hideLoading, closeFeedback, closeConfirmation } = useFeedback();
-        hideLoading();
-        closeFeedback();
-        closeConfirmation();
-    });
-
-    it("shares one state between callers", () => {
-        const a = useFeedback();
-        const b = useFeedback();
-
-        a.showLoading("Saving…");
-
-        expect(b.loading.value).toBe(true);
-        expect(b.loadingText.value).toBe("Saving…");
-    });
-
-    it("showSuccess opens a success dialog with the given copy", () => {
-        const feedback = useFeedback();
-
-        feedback.showSuccess("Saved", "Done", "OK");
-
-        expect(feedback.feedbackOpen.value).toBe(true);
-        expect(feedback.feedbackType.value).toBe("success");
-        expect(feedback.feedbackTitle.value).toBe("Done");
-        expect(feedback.feedbackMessage.value).toBe("Saved");
-        expect(feedback.feedbackButtonText.value).toBe("OK");
-    });
-
-    it("showError uses its defaults", () => {
-        const feedback = useFeedback();
-
-        feedback.showError("Boom");
-
-        expect(feedback.feedbackType.value).toBe("error");
-        expect(feedback.feedbackTitle.value).toBe("Something went wrong");
-        expect(feedback.feedbackButtonText.value).toBe("Close");
-    });
-
-    it("confirmAction runs the stored callback once and closes", async () => {
-        const feedback = useFeedback();
-        const onConfirm = vi.fn();
-        feedback.showConfirmation({ onConfirm });
-
-        await feedback.confirmAction();
-        await feedback.confirmAction();
-
-        expect(onConfirm).toHaveBeenCalledTimes(1);
-        expect(feedback.confirmationOpen.value).toBe(false);
-    });
-
-    it("closeConfirmation discards the callback", async () => {
-        const feedback = useFeedback();
-        const onConfirm = vi.fn();
-        feedback.showConfirmation({ onConfirm });
-
-        feedback.closeConfirmation();
-        await feedback.confirmAction();
-
-        expect(onConfirm).not.toHaveBeenCalled();
-    });
-});
-```
-
-### Phase 6 — Vue components
-
-Targets: Tier A and B components in section 6. Start with `Pricing.vue` (the reference snippet
-in 4.2 is its first test) and `LandingSection.vue`, then the props-in/text-out components, then
-the two with timers and forms (`LoginOtp.vue`, `PlanPickerDialog.vue`).
-
-Traps:
-
-- Reka UI `Dialog` teleports to `body`. For `PlanPickerDialog`, mount with
-  `props: { open: true }` and `attachTo: document.body`, then query `document.body` (not
-  `wrapper`) for the cards. `wrapper.unmount()` in `afterEach`.
-- `LoginOtp.vue` starts a `setInterval` in `onMounted`. `vi.useFakeTimers()` **before**
-  `mount`, `await vi.advanceTimersByTimeAsync(1000)` to tick, and read the button text.
-- Components that only receive props and render text (`StatCard`, `MemberRoleBadge`,
-  `LandingSection`, `Faq`) need no mocks at all: `mount(X, { props })` and assert `text()`.
-
-### Phase 7 — Tier D follow-up issue
-
-Do not write these here. Create a GitHub issue titled "Feature tests for uncovered controllers"
-and paste the Tier D rows from section 6 into it. Its top three (the webhooks and cross-org
-authorization) are the most valuable tests in this whole plan, but they need a Stripe event
-fixture and a Pakasir signature scheme that this issue does not cover.
-
-### Phase 8 — wire it into the routine
-
-Add to `package.json`: `"test:all": "npm test && docker exec esign-app php artisan test"`.
-Add a `## Testing` section to `README.md` with the two commands. Run `npm run test:all` — all
-green, no warnings.
-
-## 6. Targets and scenarios
-
-Tier A = must, Tier B = should, Tier C = skipped on purpose, Tier D = follow-up issue. "Fake"
-names what goes in section 4 of the prompt. Each scenario becomes one test method, in order.
-
-### 6.1 PHP
-
-| Tier | Target | Fake / fixtures | Scenarios (one test each) |
-| --- | --- | --- | --- |
-| A | `Services/SigningPricingService` | none | `pricePerSignaturePlot` is 10 · `calculateCost(0)` is 0 · `calculateCost(3)` is 30 · `calculateCost(1000)` is 10000 |
-| A | `Models/Subscription::effectivePlan / config` | none | see Phase 1 worked example (6 tests) · enterprise active is `enterprise` |
-| A | `Models/User` roles | none (`new User(['role' => …])`) | owner: `isOwner` true, `isAdmin` false, `canManageMembers` true · admin: false / true / true · member: false / false / false · null role: all false |
-| A | `Models/Organization::wallet_balance_usd_cents` | rows; `WalletService` | no wallet → 0 · wallet with 1500 → 1500 |
-| A | `Services/RecaptchaService` | `Http::fake`, `config` | `isConfigured` true with both keys · false with site key blank · false with secret blank · `verify(null)` false and `assertNothingSent` · `verify('')` false · Google 500 → false · `success:false` → false · `success:true` → true · the POST carries `secret`, `response`, `remoteip` (`Http::assertSent`) |
-| A | `Rules/Recaptcha` | `$this->app['env'] = 'production'`, `config`, `Http::fake` | in `testing` env the rule passes without HTTP · not configured → passes without HTTP · configured + Google `success:false` → fails with "Please confirm you are not a robot." · configured + `success:true` → passes |
-| A | `Services/ExchangeRateService` | `Http::fake`, `config(['services.currencyfreaks.key' => …])` | no key → `usdToIdr` null and `assertNothingSent` · rate `16000` → `16000.0` · second call in 300 s → `assertSentCount(1)` · HTTP 500 → null · `rates.IDR` missing → null · `rates.IDR` = `0` → null · non-numeric → null · `convertUsdToIdr(10)` with rate 16000 → 160000.0 · `convertUsdToIdr` with no key → null |
-| A | `Services/PakasirService` | `Http::fake`, `config(['services.pakasir.*'])` | `isConfigured` true/false (project blank, key blank) · `baseUrl` trailing slash is trimmed (assert the URL sent) · default base URL when config null · `createQris` POSTs JSON `project/order_id/amount/api_key` to `/api/transactioncreate/qris` and returns the JSON body · `createQris` on 500 throws `RequestException` · `transactionDetail` GETs `/api/transactiondetail` with the four query params · `simulatePayment` POSTs to `/api/paymentsimulation` |
-| A | `Services/StripeService` | `config` | secret missing → `RuntimeException` "Stripe secret key is not configured." · secret set → `client()` is a `StripeClient` |
-| A | `Services/WalletService` | rows | `getOrCreateWallet` creates with balance 0 · second call returns the same row (count stays 1) · `getBalance` new org → 0 · `credit` raises balance and returns a transaction with `balance_before 0`, `balance_after 1000`, `source_currency` upper-cased, `type` default `topup` · `credit` with a `reference` model stores `reference_type` + `reference_id` · `debit` lowers balance, `type` default `signature` · `debit` more than balance throws `InsufficientWalletBalanceException` · after the failed debit balance and transaction count are unchanged · `debit` exactly the balance succeeds (balance 0) |
-| A | `Services/PlanService` | rows, `travelTo` | `subscriptionFor` creates a free active row when none · returns the existing row · `limits` free vs pro (documents 3/week vs 100/month) · `documentPeriodStart` free → `startOfWeek`, pro → `startOfMonth` · `documentsUsed` counts a doc from Monday, ignores one from last Sunday (clock pinned to a Wednesday) · `storageUsedBytes` sums `file_size` and ignores `expired` · `membersUsed` = users + pending invitations, accepted invitation ignored · `canUploadDocument` free with 2 docs true, with 3 false, enterprise with 50 true (`null` limit) · `canAddMember` at limit false · `canAddTemplate` with 5 false · `canStore` exactly to the limit true, one byte over false · `usage()` has keys `documents.used/limit/period`, `templates`, `members`, `storage` |
-| A | `Services/EmailVerificationOtpService` | rows | `generate` returns 6 digits · stores one row expiring in 10 min · second `generate` replaces the first (count 1) · `verify` correct → true and row deleted · wrong → false, row kept · expired (update `expired_at` past) → false · verify twice → second false |
-| A | `Services/SigningOtpService` | rows (document + signer) | `generate` stores a bcrypt hash, not the code · sets `otp_expires_at` ≈ +5 min, `otp_attempts 0`, `otp_verified_at null`, `otp_last_sent_at` now · `verify` no hash → false · wrong → false and `otp_attempts` 1 · correct → true and `otp_verified_at` set · expired → false · 5 wrong then correct → false · `isVerified` false before verify · true after · false after `travel(6)->minutes()` |
-| A | `Services/LoginOtpService` | real Redis, `Mail::fake` | `generate` returns 6 digits · hash key starts `$2y$` · hash TTL `> 0 && <= 600` · cooldown TTL `<= 60` · `sends` is 1 then 2 · `verify` correct → true and hash + attempts keys gone · wrong → false, attempts 1 · 6th attempt false even when correct · missing hash → false · `retryAfter` right after generate is `> 0` · after `del cooldown` → 0 · after 5 generates + `del cooldown` → `> 0` · `send` mails `LoginOtpMail` to the user |
-| A | `Services/PakasirFulfillmentService` | rows, `Http::fake`, `config` | `amountIdr` payment → `amount` · topup → `metadata.amount_idr` · topup without metadata → 0 · `fulfill` status not completed → false, record untouched · `sandboxOnly` and `is_sandbox` false → false · completed payment → true, `status paid`, `paid_at` set, subscription `plan pro / active / provider pakasir / expired_at ≈ +30 d` · completed topup → true, wallet credited 1000, transaction `reference_type` is the topup, topup `paid` · calling `fulfill` twice credits once |
-| A | `Mail/LoginOtpMail` | user | subject "Your EZSign sign-in code" · HTML contains the code · contains the user's name · contains "change your password" |
-| A | `Mail/EmailVerificationOtpMail` | user | subject "Your EZSign verification code" · contains code · contains name |
-| B | `Mail/SignatureRequestMail` | signer fixture | subject (read it from the class) · contains the OTP · contains the signing link with the signer's token |
-| B | `Mail/OrganizationInvitationMail` | invitation fixture | subject includes the organization name · body contains the accept link with the token |
-| A | `Console/ExpireDocuments` | rows, `Storage::fake('documents')` | draft 4 days old → `expired`, file missing · sent 4 days old → expired · completed 4 days old → untouched · draft 2 days old → untouched · `--days=1` expires a 2-day-old draft · `--dry-run` changes nothing, prints "would expire" · a document whose file is already gone still expires · output "Documents expired: N" |
-| A | `Console/ExpireSubscriptions` | rows, `config(['services.stripe.secret' => 'sk_test_dummy'])` | pakasir pro expired yesterday → `plan free / status cancelled / cancelled_at` set · pro expiring tomorrow → untouched · free with past `expired_at` → untouched · `expired_at null` → untouched · `--dry-run` changes nothing · output "Subscriptions downgraded: N" |
-| A | `Requests/LoginRequest` throttle (feature) | rows | 5 wrong passwords then a 6th attempt → `email` error containing "Too many" · a correct password after 4 wrong ones still proceeds to `/login/otp` and clears the counter |
-| B | `Requests/ProfileUpdateRequest` (feature via `PATCH /profile`) | rows | email already used by another user → `email` error · own current email → accepted · uppercase email → `email` error (lowercase rule) · name over 255 → error |
-| A | `Middleware/HandleInertiaRequests` (feature) | rows | guest `/` → `auth.user` null, `wallet` null, `plan` null, `salesMailto` present, `recaptchaSiteKey` present · owner `/dashboard` → `plan.key 'free'`, `plan.label 'Free'`, `wallet.balanceUsdCents 0` · owner on pro → `plan.key 'pro'` |
-| A | `Middleware/Authenticate`, `RedirectIfAuthenticated` (feature) | rows | guest `GET /dashboard` → redirect `/login` · guest `GET /documents` → `/login` · logged-in `GET /login` → `/dashboard` · logged-in `GET /register` → `/dashboard` |
-| C | Models: relationships, `$fillable`, `$casts` | — | framework — skip |
-| C | `Providers/*`, `Http/Kernel`, `Console/Kernel`, `Exceptions/Handler` | — | wiring, exercised by every feature test — skip |
-| C | `Middleware/TrimStrings`, `EncryptCookies`, `TrustProxies`, `VerifyCsrfToken`, `ValidateSignature` | — | framework classes with only a property override — skip |
-| C | `ExpireSubscriptions::stillActiveAtStripe` | — | calls the Stripe API; see Tier D |
-| D | `StripeWebhookController` | needs a signed event fixture | missing signature → 400 · bad signature → 400 · `invoice.paid` activates the subscription · `customer.subscription.deleted` cancels it · replayed event is idempotent |
-| D | `PakasirWebhookController` | needs the signature scheme | missing `order_id` → 400 · unknown order → 404 · completed payment fulfils once · a second delivery is a no-op |
-| D | Cross-org authorization | rows for two orgs | `GET /documents/{other org's doc}` → 403/404 · `POST /documents/{id}/send` on another org → 403 · `PATCH /members/{user}/role` as member → 403 · `GET /plan` as member → 403 · `DELETE /templates/{other org}` → 403 |
-| D | `SigningController` flow | rows, `Mail::fake` | `GET /sign/{token}` unknown → 404 · shows OTP page before verification · wrong OTP → error · verified → signing page · `finish` on an unverified signer → 403 · completed document `pdf` downloads · expired document → 410 |
-| D | `SubscriptionController`, `BillingController`, `BillingTopupController`, `PaymentStatusController` | rows, `Http::fake` | index 403 for non-owner · `downgrade` sets free/cancelled · `payWithQr` creates a pending payment and returns the QR payload · `payments.status` returns `paid` after fulfilment |
-| D | `InvitationController`, `InvitationAcceptController`, `MembersController`, `OrganizationSettingsController`, `DashboardController`, `DocumentSignerController`, `DocumentSignatureFieldController`, `TemplateSignatureFieldController` | rows | one happy path + one authorization failure each |
-
-### 6.2 JavaScript
-
-| Tier | Target | Mock | Scenarios (one `it` each) |
-| --- | --- | --- | --- |
-| A | `lib/utils.js` `cn` | none | done in Phase 0 |
-| A | `Components/data-table/utils.ts` `valueUpdater` | none | a function updater receives the current value and its return is stored · a plain value is stored as-is · works with a `ref` holding an object |
-| A | `Composables/useFeedback.js` | none | see Phase 5 worked example · `showConfirmation` stores title/message/confirm/cancel text · `showConfirmation()` with no args uses the defaults · `closeFeedback` closes without touching the confirmation dialog |
-| A | `lib/theme-transitions.js` `withoutTransitions` | `vi.stubGlobal("requestAnimationFrame", cb => cb())` | calls `apply` once · a `<style>` with `transition:none` is in `document.head` while `apply` runs (assert inside the callback) · the style is removed after two animation frames · reads `document.body.offsetHeight` (spy with `vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get')`) |
-| A | `Composables/usePdfLoader.js` `loadPdf` | `axios`, `pdfjs-dist` | GETs the given URL · decodes `data.data` from base64 into a `Uint8Array` with the right bytes (`btoa("hello")` → `[104,101,108,108,111]`) · returns `getDocument(...).promise` · an axios rejection propagates |
-| A | `Components/landing/Pricing.vue` | Inertia (`usePage`, `Link`) | renders three plan names · Enterprise renders `<a href="mailto:…">` from `usePage` without the `data-inertia` marker · Starter and Pro render through `Link` with `/register` and `/plan` · "Most popular" badge only on Pro · each plan lists its four bullets |
-| A | `Components/landing/LandingSection.vue` | none | renders `title` in an `h2` · renders `eyebrow` only when given · renders `subtitle` only when given · applies the muted class when `muted` · renders the default slot · sets `id` on the `section` |
-| A | `Components/landing/Faq.vue` | none | renders 8 `details` · each `summary` shows the question · answers are present in the DOM |
-| A | `Components/landing/WhatIsDigitalSignature.vue` | none | renders the two `h3` headings · section id is `what-is-a-digital-signature` |
-| A | `Components/common/StatCard.vue` | none | renders label and value · renders the icon slot / prop (read the component first for exact props) |
-| A | `Components/members/MemberRoleBadge.vue` | none | one test per role → expected label and variant class · unknown role falls back |
-| A | `Components/ui/resource-count/ResourceCount.vue` | none | `used/limit` renders "2 / 5" · `limit null` renders unlimited wording · at or over limit applies the warning variant (read the component for the exact class) |
-| A | `Components/page/PageHeader.vue`, `PageSection.vue` | none | title/description props render · actions slot renders |
-| B | `Pages/Auth/LoginOtp.vue` | Inertia (`useForm`, `Link`, `Head`), fake timers | shows the email prop · countdown starts at `resendAfter` and the resend button is disabled · after `resendAfter` seconds the button reads "Resend code" and is enabled · verify button disabled until 6 characters · submitting calls `post("/login.otp.verify")` · clicking resend calls `post("/login.otp.resend")` and restarts the countdown at 60 (drive `onSuccess` from the `post` mock) · `status === "login-code-sent"` shows the "New code sent" banner · `resendForm.errors.otp` renders under the resend button · "Use a different account" links to `/login` |
-| B | `Pages/Auth/VerifyEmail.vue` | Inertia (`usePage` with `auth.user.email`, `useForm`, `Link`) | shows the user's email · verify disabled until 6 digits · submit posts to `/verification.verify` · resend posts and starts a 60 s cooldown · banner on `status === "verification-code-sent"` |
-| B | `Components/plan/PlanPickerDialog.vue` | Inertia (`usePage` with `plans` = `config/plans.php` shape, `router`), `window.confirm`, `location` stub; `attachTo: document.body` | renders three cards · prices "$0", "$10", "$50" · "/month" only when price > 0 · benefits text "3 documents per week", "Unlimited members", "10 GB storage" · current plan shows "Current" badge and a disabled "Current plan" button · Pro click emits `select` with `"pro"` · Free click with `confirm` false does nothing · Free click with `confirm` true calls `router.post("/plan.downgrade")` · Enterprise click sets `location.href` to `salesMailto` |
-| B | `Components/FileDropzone.vue` | none | drop event with a file emits it · click opens the hidden input (spy on `click`) · rejects wrong type if the component validates (read it first) |
-| B | `Components/dashboard/DashboardFilter.vue` | Inertia `router` if used | changing the select emits / calls router with the new value |
-| B | `Components/billing/TransactionTable.vue`, `WalletCard.vue`, `BillingStats.vue` | none | formatted amounts (cents → "$10.00") · empty state text when no rows · credit vs debit sign / colour |
-| B | `Components/documents/columns.js`, `templates/columns.js`, `members/columns.js` | `h` from vue | via the exported `columns` array: the status cell's variant per status (invoke `cell({ row })` with a fake row and inspect the vnode props) · size cell formats bytes · the members `createColumns` respects `canManage` (read it first) |
-| B | `Components/Layout/navigation.js` | none | every item has `title`, `icon`, `route` · no duplicate routes |
-| C | `Pages/**` other than the two auth pages | — | covered by PHP feature tests; mostly wiring |
-| C | `documents/prepare/PdfCanvas.vue`, `signing/SigningCanvas.vue`, `signing/SignatureDialog.vue` | — | wrap `pdfjs` / `signature_pad` canvas APIs; happy-dom has no canvas — skip |
-| C | `dashboard/ActivityChart.vue`, `StatusChart.vue`, `landing/DashboardPreviewCarousel.vue` | — | ApexCharts / animation wrappers, no logic of ours |
-| C | `Components/ui/**`, `components/ui/**` | — | shadcn/reka wrappers — not our code |
-| C | `animations/FadeIn.vue`, `SlideIn.vue`, `ThemeToggle.vue`, `RecaptchaField.vue` | — | browser-API driven (observer, `matchMedia`, grecaptcha script); stubbed in setup, not tested |
-| C | `data-table/DataTable*.vue` | — | thin wrappers over TanStack table |
-
-## 7. Definition of done
-
-- [ ] Phase 0 committed separately; `php artisan test` shows no `!` and no `WARN`; `npm test` runs
-- [ ] `tests/Unit/ExampleTest.php` and `tests/Feature/ExampleTest.php` are gone
-- [ ] Every Tier A row in 6.1 and 6.2 has a test file at the path 4.1 prescribes, with every listed scenario as its own test, all green
-- [ ] Every Tier B row is done, or the PR description names which ones were left and why
-- [ ] `grep -rn "sleep(" tests/` and `grep -rn "toMatchSnapshot" tests/js` both print nothing
-- [ ] `grep -rn "Mockery\|->mock(\|partialMock" tests/Unit` prints nothing (no mocking of our own classes)
-- [ ] No test file imports from `node_modules/@inertiajs` directly or reads `window.location` without a stub
-- [ ] `git diff --stat main -- app/ resources/js/` shows **only** `bootstrap/app.php` (the guard) — nothing under `app/` or `resources/js/` changed
-- [ ] A Tier D follow-up issue exists with the rows from 6.1 pasted in
-- [ ] `README.md` has a Testing section with `npm test` and `docker exec esign-app php artisan test`
-
-## 8. Files you will create or touch
-
-| File | Change |
+| Signal | Allowed fields / values |
 | --- | --- |
-| `bootstrap/app.php` | 2 lines: guard the `define()`s |
-| `tests/Feature/TemplateUploadTest.php`, `DocumentUploadTest.php` | fix the renamed-PDF test (real `UploadedFile`) |
-| `tests/Unit/ExampleTest.php`, `tests/Feature/ExampleTest.php` | delete |
-| `package.json`, `package-lock.json` | Vitest deps + `test`, `test:watch`, `test:all` scripts |
-| `vitest.config.js`, `tests/js/setup.js` | new |
-| `tests/Unit/Services/*Test.php` (11 files) | new |
-| `tests/Unit/Models/SubscriptionTest.php`, `UserTest.php`, `OrganizationTest.php` | new |
-| `tests/Unit/Rules/RecaptchaTest.php` | new |
-| `tests/Unit/Mail/*MailTest.php` (4) | new |
-| `tests/Unit/Console/ExpireDocumentsTest.php`, `ExpireSubscriptionsTest.php` | new |
-| `tests/Feature/LoginThrottleTest.php`, `ProfileUpdateValidationTest.php`, `SharedInertiaPropsTest.php`, `AuthRedirectsTest.php` | new |
-| `tests/js/lib/*.test.js` (2), `tests/js/Composables/*.test.js` (2), `tests/js/Components/**/*.test.js` (~15), `tests/js/Pages/Auth/*.test.js` (2) | new |
-| `README.md` | Testing section |
+| Resource | `service.name`, `service.namespace`, `service.version`, `deployment.environment.name`. |
+| HTTP span | `http.request.method`, `http.route`, `http.response.status_code`, optional `error.type` as an exception class or fixed category. |
+| Command span | `app.command.name` from the fixed command allowlist, `app.command.exit_code`, `app.outcome` as `success` or `failure`. |
+| Fulfillment span | Fixed operation name `payment.fulfill`; `payment.provider=pakasir`; optional fixed result category derived from existing behavior. |
+| Log | Fixed event name/body, severity, allowed operation fields, and native OTel trace/span context. |
+| Metric dimensions | Method/route/status for HTTP; command/outcome for commands. No per-user or per-request dimensions. |
 
-Roughly 45 new test files. Work in the phase order; commit at the end of each phase with
-`test(<phase>): …` so a reviewer can read one phase at a time. Suggested PR title:
-`test: add unit test layer for services, models, composables and components`.
+### Never export
+
+- Authorization headers, cookies, sessions, passwords, API keys, or OTP values.
+- Signing tokens, concrete signing URLs, URL query strings, or arbitrary request headers.
+- Request/response bodies, document contents, signatures, storage paths, or uploaded filenames.
+- Email addresses, user/document/order identifiers, payment amounts, card details, or provider payloads.
+- SQL statements/bindings, Redis keys, exception messages/stack traces, or serialized request/model/exception objects.
+
+Use fixed event names as log bodies. Reject attributes outside the allowlist and cap string lengths. Filtering must happen **before** export; deleting fields in SigNoz after ingestion is insufficient. A denylist alone will miss newly introduced sensitive fields.
+
+## Phase 5 — Add metrics and correlated logs
+
+**Goal:** useful aggregates and searchable events without collecting arbitrary application data.
+
+1. Create these custom instruments once per provider:
+
+   | Instrument | Type | Unit | Record when |
+   | --- | --- | --- | --- |
+   | `esign.http.requests` | Counter | `{request}` | Once per completed Laravel request. |
+   | `esign.http.duration` | Histogram | `s` | Once per completed Laravel request. |
+   | `esign.command.runs` | Counter | `{run}` | Once per instrumented command completion. |
+   | `esign.command.duration` | Histogram | `s` | Once per instrumented command completion. |
+
+2. Start with duration boundaries `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]` seconds if the selected SDK supports explicit histogram views. Record the actual configuration in the runbook.
+3. Record measurements even when the current trace is unsampled. Do not use trace count as a substitute for total request count.
+4. Use the SDK logger behind `Telemetry::event()` to export these curated events:
+   - `http.request.completed`
+   - `application.exception` with sanitized exception class only
+   - `command.completed`
+   - `observability.smoke`
+5. Emit events while their span is active so native OTLP `TraceId` and `SpanId` fields are populated. A JSON string containing `trace_id` alone is not sufficient for SigNoz correlation.
+   Use INFO for normal completion, WARN for HTTP 4xx completion, and ERROR for HTTP 5xx, failed commands, and sanitized exception events.
+6. Keep existing Laravel file/stderr logging intact. Do not attach an unrestricted OTLP handler to the existing default log stack or read entire log files into the collector.
+7. Verify metrics across at least ten independent HTTP requests and several CLI invocations. Check aggregation, units, reset handling, and label cardinality. A single visible data point is not enough to validate PHP metrics.
+
+**Done when:** SigNoz shows correct counts/durations, a request event opens its trace, and changing a document identifier does not create a new metric series.
+
+## Phase 6 — Instrument commands and payment fulfillment
+
+**Goal:** useful operational coverage outside the request middleware.
+
+1. Read `app/Console/Commands/ExpireDocuments.php` and `app/Console/Commands/ExpireSubscriptions.php`, plus their existing tests under `tests/Unit/Console/`. Preserve the `StripeService` injection in `ExpireSubscriptions::handle()`.
+2. Wrap each command's existing execution in `Telemetry::runCommand()`. Keep all existing scheduling, database operations, locking, output, and return codes intact. A small extracted private method is acceptable if needed to keep `handle()` readable.
+3. Start an internal root span named `artisan documents:expire` or `artisan subscriptions:expire`. Record a nonzero exit code as failure even if no exception was thrown.
+   Here, success means the command returned zero. Existing commands can log warnings and still return success; do not change that business policy as part of instrumentation.
+4. In all exits, emit the command event/metrics, end and detach its span, and flush. Rethrow the original business exception unchanged.
+5. Do not create a never-ending root span for `schedule:work`. Trace the actual units of work. Account for commands that execute in separate processes.
+6. Wrap `PakasirFulfillmentService::fulfill()` with `Telemetry::withinSpan('payment.fulfill', ...)`. When called inside a request or instrumented command, its span must be a child of that operation.
+7. Preserve the service's existing return value, transaction boundaries, idempotency checks, and exception behavior. Do not move payments into or out of database transactions for telemetry.
+8. Test fulfillment with the existing mocked provider pattern. No real payment, Stripe, Pakasir, or email calls are needed to verify this feature.
+
+**Done when:** both commands have duration/status telemetry; fulfillment appears under its parent; failures preserve the original behavior; multiple operations in one process do not share stale context.
+
+## Phase 7 — Add automated verification
+
+**Goal:** detect privacy leaks, broken lifecycle handling, and behavior changes before deployment.
+
+Use in-memory exporters or injected fakes for PHP tests. Unit/feature tests must not require a running SigNoz server or network access. Do not make a live exporter the default in `phpunit.xml`.
+
+Required test cases:
+
+| Area | Cases and assertions |
+| --- | --- |
+| Configuration | Disabled by default; cached config works for both HTTP and CLI service names; invalid ratio/protocol handled predictably; signal endpoint suffix appears exactly once. |
+| HTTP | 200, redirect, 422, 404, returned/rendered 500, and thrown exception; one span and measurement set each. |
+| Context | Valid remote parent preserved; malformed header ignored; child has correct parent; scope detached after failure. |
+| Logs | Request event has matching native trace/span identifiers; log severity matches outcome; arbitrary context is rejected. |
+| Metrics | Durations use seconds; counts are correct across operations; unsampled traces still produce measurements. |
+| Commands | Success, nonzero exit, and thrown exception; original results preserved; flush occurs. |
+| Fulfillment | Existing successful/already-processed/error paths preserve behavior with telemetry enabled and disabled. |
+| Privacy | Canary secrets in URL token, query, headers, body, exception message, and log attributes never appear in any exported payload. |
+| Export failure | Throwing exporter and timeout simulation cannot change response/command outcome or recursively log. |
+| Lifecycle | Two requests/commands in one process have independent context; termination does not double-export; shutdown is idempotent. |
+
+Add a local/testing-only `observability:smoke` command:
+
+1. Reject execution outside `local` and `testing` before producing telemetry.
+2. Print a clear message and return nonzero if observability is disabled.
+3. Start a synthetic span, increment a dedicated `esign.observability.smoke` counter with unit `{run}`, emit `observability.smoke`, end the span, and flush. Do not increment real HTTP or expiry-command counters for this synthetic operation.
+4. Print its trace ID and whether export was attempted; do not claim successful SigNoz ingestion merely because the SDK accepted a record.
+5. Support a synthetic failure option that records an error and returns nonzero without touching application data or external services.
+
+Suggested implementation verification commands:
+
+```bash
+docker compose exec app php artisan test --filter=Observability
+docker compose exec app php artisan test
+npm test
+docker compose exec app composer check-platform-reqs
+```
+
+Also build the root production `Dockerfile` and confirm runtime dependencies and PHP FPM startup. Run configuration-cache checks in a disposable test container so the developer's normal local configuration is not left cached with test values.
+
+Explicitly exercise kernel/application termination in lifecycle tests; an in-process test request may not perform the same shutdown sequence as a real PHP FPM request.
+
+**Done when:** new tests and existing suites pass, and test output contains no real credentials or telemetry payloads.
+
+## Phase 8 — Validate the full Docker flow and write the runbook
+
+**Goal:** a new developer can reproduce the feature without knowing OTel internals.
+
+1. Start SigNoz using Phase 1, then the application with the overlay from Phase 2.
+2. Open `http://localhost:8000` and exercise a harmless existing route repeatedly. Use synthetic local data for authenticated flows.
+3. Run the smoke command from the telemetry-enabled app container:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.observability.yml exec app php artisan observability:smoke
+   ```
+
+4. In SigNoz, find `esign-api`, locate the printed trace ID, and open its correlated log. Allow ingestion time and verify the UI time range.
+5. In a disposable local database, run both expiry commands and find `esign-scheduler` telemetry. Use synthetic non-Stripe fixtures or mocked providers. These commands change data; even `subscriptions:expire --dry-run` can call Stripe for Stripe-backed records, so a dry run alone does not isolate external effects.
+6. Check the request metrics against a known request count. Test across different PHP requests and worker processes, not only inside one test process.
+7. Create a dashboard filtered by service and environment with:
+   - Request rate, server-error rate, and p50/p95 request duration by route.
+   - Command runs by outcome and command duration.
+   - A link or documented query for recent error events/traces.
+8. Use the instrument names from Phase 5. Verify the actual metric names and histogram representation in the selected SigNoz release before writing queries. Export the working dashboard to `docs/observability/dashboard.json`; do not invent an untested dashboard JSON schema.
+9. Document one optional server-error alert recipe, including a minimum traffic threshold and no-data behavior. External email/Slack delivery is not required by this issue.
+10. Stop the actual SigNoz ingester service and repeat a harmless request and the smoke command. Verify application availability, bounded export overhead, and nonrecursive diagnostics. Restart the ingester and confirm later telemetry arrives. Loss of telemetry during an outage is acceptable for this local first version; blocking the application is not.
+11. Disable telemetry, recreate app/scheduler containers, and verify no new application telemetry is emitted. Then confirm the base Compose setup works independently.
+12. Restart the SigNoz project without deleting volumes and verify saved dashboard/data persistence.
+
+The final `docs/observability.md` must include:
+
+- Prerequisites and exact pinned tool/image versions.
+- Copyable setup commands with their working directories.
+- First-run SigNoz account setup, UI URL, service names, and all configuration variables.
+- How to start, stop, inspect logs, regenerate Foundry output, and update version pins.
+- Metric definitions, units, sampling behavior, privacy policy, and known coverage limits.
+- The actual ingester service name and its network alias.
+- How to import the dashboard and reproduce the smoke checks.
+- Local storage/retention guidance and how to inspect disk use.
+- Production requirements: a reachable private/TLS endpoint, credentials outside Git, resource sizing, sampling, retention, and separate service identities. Do not expose an unauthenticated collector publicly.
+- The recovery steps below.
+
+### Troubleshooting checklist
+
+| Symptom | Check in this order |
+| --- | --- |
+| App cannot resolve `otel-collector` | Both stacks use the external network; alias belongs to the ingester; app retained its default network. |
+| UI loads but no traces | Enabled flag, FPM environment, service/time filters, `/v1/traces` endpoint, receiver bind address, span end and flush. |
+| Traces work but metrics/logs do not | Their providers/exporters, signal endpoint paths, ingester pipelines, metric temporality, and log scope timing. |
+| Wrong counts after multiple requests | Metric temporality/reset behavior and duplicate collection/export. |
+| CLI works but HTTP does not | PHP FPM environment/configuration and application termination hook. |
+| Requests slow down when SigNoz stops | Transport connect/read timeout, retries, flush deadline, and recursive diagnostics. |
+| Spans share the wrong trace | Scope detachment and mutable state surviving between operations. |
+| Keeper repeatedly crashes on Windows | Current SigNoz host/engine compatibility guidance from Phase 0. |
+
+### Disable and rollback
+
+1. Set `OBSERVABILITY_ENABLED=false` in the configuration source actually used by the running services, rebuild cached Laravel configuration if applicable, and recreate/restart app and scheduler.
+2. To remove the overlay entirely, explicitly recreate app and scheduler with the base Compose file. Merely omitting `-f` from a later `exec` command does not remove environment settings from existing containers.
+3. Stop the separate SigNoz Compose project when desired. Preserve its volumes.
+4. Do not use `docker compose down -v` as a routine rollback command. Do not alter the application's database to disable telemetry.
+5. Re-enable by restoring configuration, starting SigNoz, and repeating the smoke checks.
+
+**Done when:** another developer can follow the runbook from a clean checkout with an existing working application environment, and all three signals are visible in SigNoz.
+
+## Final acceptance checklist
+
+- [ ] All new dependency/image versions are recorded and reproducible.
+- [ ] SigNoz and its required services run through Docker.
+- [ ] App runs with the base Compose file and observability disabled.
+- [ ] App and scheduler export through the internal OTLP HTTP endpoint when enabled.
+- [ ] Request spans use route templates and include the correct final status.
+- [ ] A fulfillment child span appears beneath its request/command parent.
+- [ ] Both expiry commands export outcome and duration.
+- [ ] Request/command metrics aggregate correctly across process lifetimes.
+- [ ] Curated logs link to their traces through native OTel context.
+- [ ] Canary privacy tests cover every exported signal.
+- [ ] A stopped collector cannot break application requests or commands.
+- [ ] Automated tests and the full Docker smoke procedure have recorded results.
+- [ ] Production image builds with the new PHP runtime dependencies.
+- [ ] Dashboard export, setup instructions, troubleshooting, and rollback are committed.
+- [ ] No production debug route, real credentials, generated data directories, or unrelated business changes are included.
+
+## Suggested implementation workflow for a junior developer or AI agent
+
+1. Read this entire issue once, then work on one phase at a time.
+2. Before changing a file, read the existing implementation and nearby tests.
+3. Finish each phase's completion check before marking its checkbox complete.
+4. Use small commits, for example: Docker setup; PHP SDK/configuration; HTTP telemetry; commands/fulfillment; tests and documentation.
+5. Preserve business return values and exceptions. If telemetry requires changing business rules, revisit the instrumentation design.
+6. When a documented SDK or Foundry API differs from the pinned version, inspect that version's official source/examples and record the adjustment. Do not guess method names or silently omit a signal.
+7. Report the files changed, commands run, evidence observed in SigNoz, and any incomplete checks. Do not describe unexecuted Docker checks as passing.

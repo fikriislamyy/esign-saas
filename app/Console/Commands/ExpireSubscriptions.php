@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Subscription;
+use App\Observability\Telemetry;
 use App\Services\StripeService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -15,6 +16,11 @@ class ExpireSubscriptions extends Command
     protected $description = 'Return lapsed paid subscriptions to the free plan';
 
     public function handle(StripeService $stripe): int
+    {
+        return app(Telemetry::class)->runCommand('subscriptions:expire', fn (): int => $this->expire($stripe));
+    }
+
+    private function expire(StripeService $stripe): int
     {
         $dryRun = (bool) $this->option('dry-run');
 

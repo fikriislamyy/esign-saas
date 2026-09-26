@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Document;
+use App\Observability\Telemetry;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +17,11 @@ class ExpireDocuments extends Command
     protected $description = 'Expire unsigned documents past the retention window and delete their files';
 
     public function handle(): int
+    {
+        return app(Telemetry::class)->runCommand('documents:expire', fn (): int => $this->expire());
+    }
+
+    private function expire(): int
     {
         $days = (int) ($this->option('days') ?: config('documents.retention_days'));
         $dryRun = (bool) $this->option('dry-run');
