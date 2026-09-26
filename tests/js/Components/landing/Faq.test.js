@@ -17,11 +17,16 @@ describe("Faq", () => {
     it("renders each question in a summary", () => {
         const wrapper = mountFaq();
 
-        expect(wrapper.findAll("summary").map((summary) => summary.text())).toEqual(expect.arrayContaining([
+        expect(wrapper.findAll("summary").map((summary) => summary.text())).toEqual([
             "Are electronic signatures legally binding?",
             "Do signers need an account?",
+            "What file types can I upload?",
+            "How does the OTP verification work?",
+            "How does pricing work?",
+            "Can my whole team use one account?",
+            "Can a signed PDF be changed afterwards?",
             "Where are my documents stored?",
-        ]));
+        ]);
     });
 
     it("keeps answers in the DOM", () => {

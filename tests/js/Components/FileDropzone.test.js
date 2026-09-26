@@ -2,6 +2,14 @@ import { mount } from "@vue/test-utils";
 import FileDropzone from "@/Components/FileDropzone.vue";
 
 describe("FileDropzone", () => {
+    it("wraps the file input in the clickable dropzone label", () => {
+        const wrapper = mount(FileDropzone);
+        const input = wrapper.get('label input[type="file"]');
+
+        expect(input.attributes("accept")).toBe("application/pdf,.pdf");
+        expect(input.classes()).toContain("hidden");
+    });
+
     it("emits a dropped PDF file", async () => {
         const wrapper = mount(FileDropzone);
         const file = new File(["pdf"], "contract.pdf", { type: "application/pdf" });

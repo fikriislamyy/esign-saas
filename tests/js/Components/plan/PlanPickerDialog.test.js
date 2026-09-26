@@ -14,34 +14,73 @@ vi.mock("@inertiajs/vue3", () => ({
 import PlanPickerDialog from "@/Components/plan/PlanPickerDialog.vue";
 
 describe("PlanPickerDialog", () => {
+    let wrapper;
+
     function mountDialog(currentPlan = "free") {
-        return mount(PlanPickerDialog, {
+        wrapper = mount(PlanPickerDialog, {
             props: { open: true, currentPlan },
+            attachTo: document.body,
             global: {
                 stubs: {
-                    Dialog: { template: "<div><slot /></div>" }, DialogContent: { template: "<div><slot /></div>" }, DialogHeader: { template: "<div><slot /></div>" }, DialogTitle: { template: "<h2><slot /></h2>" }, DialogDescription: { template: "<p><slot /></p>" }, Badge: { template: "<span><slot /></span>" }, Button: { props: ["disabled"], template: "<button :disabled=\"disabled\"><slot /></button>" },
+                    Dialog: { template: "<div><slot /></div>" }, DialogContent: { template: "<div><slot /></div>" }, DialogHeader: { template: "<div><slot /></div>" }, DialogTitle: { template: "<h2><slot /></h2>" }, DialogDescription: { template: "<p><slot /></p>" }, Badge: { template: "<span data-badge><slot /></span>" }, Button: { props: ["disabled"], template: "<button :disabled=\"disabled\"><slot /></button>" },
                 },
             },
         });
+        return wrapper;
     }
 
     beforeEach(() => { post.mockReset(); });
 
-    it("renders all plans with their prices and benefits", () => {
+    afterEach(() => {
+        wrapper?.unmount();
+        wrapper = undefined;
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+    });
+
+    it("renders three plan cards", () => {
         const wrapper = mountDialog();
 
+        expect(wrapper.findAll(".grid > div")).toHaveLength(3);
         expect(wrapper.text()).toContain("Free");
-        expect(wrapper.text()).toContain("$10");
-        expect(wrapper.text()).toContain("$50");
+        expect(wrapper.text()).toContain("Pro");
+        expect(wrapper.text()).toContain("Enterprise");
+    });
+
+    it("formats the three prices in dollars", () => {
+        const wrapper = mountDialog();
+
+        expect(wrapper.findAll(".grid > div .text-3xl").map((price) => price.text())).toEqual(["$0", "$10", "$50"]);
+    });
+
+    it("shows per month only on paid plans", () => {
+        const wrapper = mountDialog();
+        const cards = wrapper.findAll(".grid > div");
+
+        expect(cards[0].text()).not.toContain("/month");
+        expect(cards[1].text()).toContain("/month");
+        expect(cards[2].text()).toContain("/month");
+    });
+
+    it("shows the configured document, member, and storage benefits", () => {
+        const wrapper = mountDialog();
+
         expect(wrapper.text()).toContain("3 documents per week");
         expect(wrapper.text()).toContain("Unlimited members");
         expect(wrapper.text()).toContain("10 GB storage");
     });
 
-    it("marks the current plan as unavailable", () => {
+    it("marks the current plan with a badge", () => {
+        const wrapper = mountDialog("pro");
+        const cards = wrapper.findAll(".grid > div");
+
+        expect(wrapper.findAll("[data-badge]")).toHaveLength(1);
+        expect(cards[1].get("[data-badge]").text()).toBe("Current");
+    });
+
+    it("disables the current plan button", () => {
         const wrapper = mountDialog("pro");
 
-        expect(wrapper.text()).toContain("Current");
         expect(wrapper.get('button[disabled]').text()).toBe("Current plan");
     });
 
@@ -53,15 +92,31 @@ describe("PlanPickerDialog", () => {
         expect(wrapper.emitted("select")).toEqual([["pro"]]);
     });
 
-    it("only downgrades after confirmation", async () => {
-        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    it("does not downgrade when confirmation is declined", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(false);
         const wrapper = mountDialog("pro");
 
         await wrapper.findAll("button").find((button) => button.text() === "Downgrade").trigger("click");
-        expect(post).not.toHaveBeenCalled();
 
-        confirm.mockReturnValue(true);
+        expect(post).not.toHaveBeenCalled();
+    });
+
+    it("posts a downgrade when confirmation is accepted", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        const wrapper = mountDialog("pro");
+
         await wrapper.findAll("button").find((button) => button.text() === "Downgrade").trigger("click");
+
         expect(post).toHaveBeenCalledWith("/plan.downgrade");
+    });
+
+    it("opens the sales email for Enterprise", async () => {
+        const location = { href: "" };
+        vi.stubGlobal("location", location);
+        const wrapper = mountDialog();
+
+        await wrapper.findAll("button").find((button) => button.text() === "Contact sales").trigger("click");
+
+        expect(location.href).toBe("mailto:sales@example.test");
     });
 });
