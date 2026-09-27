@@ -78,7 +78,7 @@ disable_maintenance() {
 
 check_app() {
     local release=$1
-    compose "$release" exec -T app curl -fsS --max-time 5 http://127.0.0.1:10000/ready >/dev/null
+    compose "$release" exec -T app php artisan db:monitor
     compose "$release" exec -T app test -s /var/www/public/build/manifest.json
 }
 
