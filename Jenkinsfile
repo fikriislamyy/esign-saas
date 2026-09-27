@@ -16,6 +16,8 @@ pipeline {
 
     environment {
         IMAGE_REPOSITORY = 'ghcr.io/fikriislamyy/esign-saas'
+        RELEASE_JOB      = 'true',
+        DEPLOY_HOST      = 'ubuntu@13.61.11.156'
     }
 
     stages {
@@ -44,7 +46,7 @@ pipeline {
             steps {
                 sh '''#!/usr/bin/env bash
 set -Eeuo pipefail
-docker build --platform linux/amd64 --build-arg "VCS_REF=$RELEASE_SHA" -t "$IMAGE_REPOSITORY:$RELEASE_SHA" .
+docker build --platform linux/amd64 -f docker/php/Dockerfile --build-arg "VCS_REF=$RELEASE_SHA" -t "$IMAGE_REPOSITORY:$RELEASE_SHA" .
 docker run --rm --entrypoint test "$IMAGE_REPOSITORY:$RELEASE_SHA" -s /var/www/public/build/manifest.json
 docker run --rm --entrypoint php "$IMAGE_REPOSITORY:$RELEASE_SHA" -r 'exit(extension_loaded("pdo_pgsql") && extension_loaded("redis") ? 0 : 1);'
 '''
