@@ -1,14 +1,9 @@
 {$APP_DOMAIN} {
     encode zstd gzip
-    root * /var/www/public
-    
+
     route {
         import /etc/caddy/maintenance/*.caddy
-        
-        # Serve static files directly if present
-        file_server
-        
-        # Pass PHP requests to PHP-FPM
-        php_fastcgi app:9000
+
+        reverse_proxy app:10000
     }
 }
