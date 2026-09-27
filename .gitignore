@@ -24,6 +24,8 @@
 /.env.*
 !.env.example
 !.env.observability.example
+!.env.production.example
+ci-results/
 
 /docker/observability/signoz/pours/
 /docker/observability/signoz/.env

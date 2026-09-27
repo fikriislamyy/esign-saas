@@ -62,7 +62,7 @@ class TemplateController extends Controller
 
         $file = $request->file('file');
 
-        $path = $file->store('templates', env('DOCUMENTS_DISK', 'documents'));
+        $path = $file->store('templates', config('documents.disk'));
 
         Template::create([
             'organization_id' => $request->user()->organization_id,
@@ -112,7 +112,7 @@ class TemplateController extends Controller
             403
         );
 
-        return Storage::disk(env('DOCUMENTS_DISK', 'documents'))->response(
+        return Storage::disk(config('documents.disk'))->response(
             $template->file_path,
             $template->name.'.pdf',
             ['Content-Disposition' => 'inline']
@@ -126,7 +126,7 @@ class TemplateController extends Controller
             403
         );
 
-        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($template->file_path);
+        $contents = Storage::disk(config('documents.disk'))->get($template->file_path);
 
         return response()->json([
             'data' => base64_encode($contents),
@@ -144,7 +144,7 @@ class TemplateController extends Controller
 
         $template->delete();
 
-        if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
+        if (! Storage::disk(config('documents.disk'))->delete($path)) {
             app(Telemetry::class)->event('template.delete.partial', [
                 'app.outcome' => 'partial',
                 'app.reason' => 'storage_failure',

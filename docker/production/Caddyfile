@@ -1,0 +1,7 @@
+{$APP_DOMAIN} {
+    encode zstd gzip
+    route {
+        import /etc/caddy/maintenance/*.caddy
+        reverse_proxy app:10000
+    }
+}

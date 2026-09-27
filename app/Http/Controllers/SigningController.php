@@ -102,7 +102,7 @@ class SigningController extends Controller
 
         abort_unless($filePath, 404);
 
-        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($filePath);
+        $contents = Storage::disk(config('documents.disk'))->get($filePath);
 
         return response()->json([
             'data' => base64_encode($contents),
@@ -357,10 +357,7 @@ class SigningController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            $documentDisk = env(
-                'DOCUMENTS_DISK',
-                'documents'
-            );
+            $documentDisk = config('documents.disk');
 
             $tempDirectory = sys_get_temp_dir();
 

@@ -54,6 +54,19 @@ Route::get('/health', function () {
     ]);
 })->name('health');
 
+Route::get('/ready', function () {
+    try {
+        \Illuminate\Support\Facades\DB::select('SELECT 1');
+        if (! \Illuminate\Support\Facades\Redis::ping()) {
+            throw new \RuntimeException('Redis is unavailable');
+        }
+
+        return response()->json(['status' => 'ready']);
+    } catch (\Throwable) {
+        return response()->json(['status' => 'unavailable'], 503);
+    }
+})->name('ready');
+
 Route::post('/stripe/webhook', [
     StripeWebhookController::class,
     'handle',
@@ -281,14 +294,14 @@ Route::middleware('auth', 'verified')->group(function () {
 
 Route::get('/sitemap.xml', function () {
     $base = rtrim(config('app.url'), '/');
-    $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
-    $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . "\n";
+    $xml = '<?xml version="1.0" encoding="UTF-8"?>'."\n";
+    $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'."\n";
     foreach ([$base.'/'] as $url) {
-        $xml .= '    <url>' . "\n";
-        $xml .= '        <loc>' . e($url) . '</loc>' . "\n";
-        $xml .= '        <changefreq>weekly</changefreq>' . "\n";
-        $xml .= '        <priority>1.0</priority>' . "\n";
-        $xml .= '    </url>' . "\n";
+        $xml .= '    <url>'."\n";
+        $xml .= '        <loc>'.e($url).'</loc>'."\n";
+        $xml .= '        <changefreq>weekly</changefreq>'."\n";
+        $xml .= '        <priority>1.0</priority>'."\n";
+        $xml .= '    </url>'."\n";
     }
     $xml .= '</urlset>';
 

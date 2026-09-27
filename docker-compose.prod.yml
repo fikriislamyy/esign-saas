@@ -1,0 +1,85 @@
+services:
+  proxy:
+    image: caddy:2.10.0-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/production/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${ESIGN_SHARED_DIR:-/opt/esign/shared}/maintenance:/etc/caddy/maintenance:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 80m
+    logging: &bounded_logs
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  app:
+    image: ${APP_IMAGE:?set immutable APP_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ${ESIGN_SHARED_DIR:-/opt/esign/shared}/.env.production
+    volumes:
+      - app_files:/var/www/storage/app/private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "3", "http://127.0.0.1:10000/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    mem_limit: 448m
+    logging: *bounded_logs
+
+  postgres:
+    image: postgres:17.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=20", "-c", "work_mem=2MB"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 192m
+    logging: *bounded_logs
+
+  redis:
+    image: redis:7.4.5-bookworm
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 96m
+    logging: *bounded_logs
+
+volumes:
+  postgres_data:
+    name: esign_prod_postgres
+  redis_data:
+    name: esign_prod_redis
+  app_files:
+    name: esign_prod_app_files
+  caddy_data:
+    name: esign_prod_caddy_data
+  caddy_config:
+    name: esign_prod_caddy_config

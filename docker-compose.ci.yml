@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    environment:
+      POSTGRES_DB: esign_test
+      POSTGRES_USER: esign_test
+      POSTGRES_PASSWORD: ci-only-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esign_test -d esign_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4.5-bookworm
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  php:
+    build:
+      context: .
+      dockerfile: docker/ci/Dockerfile
+    user: "${CI_UID:-1000}:${CI_GID:-1000}"
+    working_dir: /var/www
+    volumes:
+      - ${CI_SOURCE_DIR:-.}:/var/www
+    environment:
+      APP_NAME: EZSign
+      APP_URL: http://localhost
+      APP_ENV: testing
+      APP_KEY: "${CI_APP_KEY:?generate a temporary CI_APP_KEY}"
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: esign_test
+      DB_USERNAME: esign_test
+      DB_PASSWORD: ci-only-password
+      REDIS_HOST: redis
+      REDIS_CLIENT: phpredis
+      REDIS_PORT: "6379"
+      CACHE_DRIVER: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+      OBSERVABILITY_ENABLED: "false"
+      COMPOSER_HOME: /tmp/composer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  node:
+    image: node:22.16.0-bookworm
+    user: "${CI_UID:-1000}:${CI_GID:-1000}"
+    working_dir: /var/www
+    volumes:
+      - ${CI_SOURCE_DIR:-.}:/var/www
+    environment:
+      npm_config_cache: /tmp/npm

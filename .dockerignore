@@ -10,6 +10,7 @@ vendor
 
 bootstrap/cache/*
 storage/logs/*
+storage/app/private/*
 storage/framework/cache/*
 storage/framework/sessions/*
 storage/framework/testing/*
@@ -22,6 +23,9 @@ yarn-error.log
 docker-compose.yml
 docker-compose.yaml
 docker-compose.override.yml
+ci-results
+backups
+releases
 
 .phpunit.result.cache
 
