@@ -32,7 +32,7 @@ trap cleanup EXIT
 docker run --rm \
     -v "${COMPOSE_PROJECT_NAME}_app_data:/var/www" \
     -v "$(pwd):/source:ro" \
-    alpine sh -c "cp -a /source/. /var/www/"
+    alpine sh -c "cp -a /source/. /var/www/ && chown -R ${CI_UID:-1000}:${CI_GID:-1000} /var/www"
 
 # 3. Ensure required directories exist inside volume
 "${compose[@]}" run --rm php mkdir -p \
