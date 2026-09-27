@@ -25,11 +25,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 1. Spin up base services and volume helper
+# 1. Spin up base services (this creates the volume esign-ci-X_app_data under Docker Compose control)
 "${compose[@]}" up -d --wait --wait-timeout 120 postgres redis
 
-# 2. Populate the named volume with workspace code
+# 2. Populate the existing compose-created volume with workspace code and set non-root ownership
 docker run --rm \
+    --volumes-from "$(docker compose -f docker-compose.ci.yml ps -q postgres | head -n1)" \
     -v "${COMPOSE_PROJECT_NAME}_app_data:/var/www" \
     -v "$(pwd):/source:ro" \
     alpine sh -c "cp -a /source/. /var/www/ && chown -R ${CI_UID:-1000}:${CI_GID:-1000} /var/www"
