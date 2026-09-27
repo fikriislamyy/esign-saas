@@ -11,5 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www
 
-# Copy the entire build context into the image
+# Copy application files
 COPY . /var/www
+
+# Grant ownership to the non-root user (1000:1000)
+RUN chown -R 1000:1000 /var/www
