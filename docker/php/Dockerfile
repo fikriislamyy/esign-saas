@@ -32,3 +32,12 @@ ARG GID=1000
 RUN usermod -u ${UID} www-data && groupmod -g ${GID} www-data
 
 WORKDIR /var/www
+
+# Copy application source files
+COPY . /var/www
+
+# Install production composer dependencies
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+RUN composer install --no-dev --optimize-autoloader --no-interaction
+
+RUN chown -R www-data:www-data /var/www
