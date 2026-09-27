@@ -60,6 +60,10 @@ RUN npm run build
 # ==========================================
 FROM php:8.3-fpm-bookworm
 
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=$VCS_REF
+LABEL org.opencontainers.image.source="https://github.com/fikriislamyy/esign-saas"
+
 RUN apt-get update && apt-get install -y \
     nginx \
     supervisor \
@@ -122,6 +126,7 @@ RUN mkdir -p \
 # PHP upload limits
 COPY docker/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 COPY docker/php/observability-fpm.conf /usr/local/etc/php-fpm.d/zz-observability.conf
+COPY docker/production/php-fpm.conf /usr/local/etc/php-fpm.d/zz-production.conf
 
 # Nginx configuration
 COPY docker/render/nginx.conf /etc/nginx/conf.d/default.conf
@@ -129,8 +134,11 @@ COPY docker/render/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Supervisor configuration
 COPY docker/render/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/production/entrypoint.sh /usr/local/bin/esign-entrypoint
+RUN chmod 755 /usr/local/bin/esign-entrypoint
 
 
 EXPOSE 10000
 
+ENTRYPOINT ["/usr/local/bin/esign-entrypoint"]
 CMD ["/usr/bin/supervisord", "-n"]

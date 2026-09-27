@@ -89,7 +89,7 @@ class DocumentController extends Controller
             ]);
         }
 
-        $documentDisk = env('DOCUMENTS_DISK', 'documents');
+        $documentDisk = config('documents.disk');
 
         try {
             $path = $file->store(
@@ -481,7 +481,7 @@ class DocumentController extends Controller
         );
 
         return Storage::disk(
-            env('DOCUMENTS_DISK', 'documents')
+            config('documents.disk')
         )->response(
             $filePath,
             $document->name.'.pdf',
@@ -514,7 +514,7 @@ class DocumentController extends Controller
         );
 
         return Storage::disk(
-            env('DOCUMENTS_DISK', 'documents')
+            config('documents.disk')
         )->download(
             $filePath,
             $document->name.'.pdf'
@@ -537,7 +537,7 @@ class DocumentController extends Controller
             404
         );
 
-        $contents = Storage::disk(env('DOCUMENTS_DISK', 'documents'))->get($filePath);
+        $contents = Storage::disk(config('documents.disk'))->get($filePath);
 
         return response()->json([
             'data' => base64_encode($contents),

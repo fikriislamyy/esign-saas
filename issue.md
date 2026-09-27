@@ -1,246 +1,275 @@
-# Add application logging across necessary modules and make it searchable in SigNoz
+# Implement Jenkins CI/CD for deployment to AWS EC2 t3.micro
 
-## Task
+## Task and expected result
 
-> Please add logging management to all necessary functions or modules so that the logs can be accessed in SigNoz.
+Implement a Jenkins pipeline that checks this project, builds a production Docker image, publishes it to a registry, and deploys an approved release to one AWS EC2 `t3.micro` instance. Write instructions that a junior programmer can follow from an empty server to a working HTTPS deployment and a tested rollback.
 
-This is an implementation plan for a junior programmer or a smaller AI model. Complete the steps in order. The checkboxes represent work to implement and verify, not completed functionality. Repository baseline inspected on 2026-09-27.
+This issue is an implementation plan. Complete the steps in order, record actual command results, and do not mark deployment verification complete using only a successful image build.
 
-## 1. Expected result and scope
+## 1. Architecture and constraints
 
-Operators can use SigNoz to see successful business operations, rejected operations, recovered failures, and unexpected errors in authentication, documents, signing, billing, payments, wallet operations, organization management, templates, external services, mail submission, and scheduled expiry commands.
+Use this initial architecture:
 
-Each event has a fixed searchable name, consistent severity, safe structured attributes, and trace/span correlation when an active span exists. Application behavior remains the same when logging is disabled or the collector is unavailable.
+```text
+GitHub -> Jenkins controller + separate build agent -> private image registry
+                               |
+                               +-- SSH deployment -> EC2 t3.micro
+                                                      HTTPS proxy
+                                                      application image
+                                                      PostgreSQL + Redis
+Documents and backups -> private object storage
+```
 
-“Necessary functions” means business state changes, important rejection branches, external I/O failures, and command summaries. Getters, calculations, model serialization, page rendering, polling success, and every loop iteration do not need individual business logs. Existing request logs cover ordinary reads. Operational logs are best effort; they are not a durable financial or legal audit ledger.
+- Run Jenkins and the build agent on an existing separate computer/server. A controller and agent may share that separate machine for this small project; run builds on the agent, with zero executors on the controller. Start with one build executor.
+- EC2 runs production containers only. Do not install Jenkins, run Composer/npm builds, run tests, or run the local SigNoz stack there.
+- A t3.micro has 2 vCPUs and 1 GiB RAM. Treat this deployment as a small, low-traffic installation whose capacity must be measured, especially during PDF signing. Jenkins recommends 4 GiB or more for a small team; its requirements reinforce the decision to separate it from production. Sources: [AWS T3 specifications](https://aws.amazon.com/ec2/instance-types/t3/), [Jenkins Linux installation](https://www.jenkins.io/doc/book/installing/linux/).
+- Use a single application replica and accept a short maintenance window during releases. Do not implement blue/green deployment on this memory budget.
+- Use GHCR as the initial private registry, with an image such as `ghcr.io/<owner>/esign-saas`. Use a full Git commit SHA tag and deploy the resolved immutable digest. Record owner/package permissions during setup.
+- Keep PostgreSQL and Redis on EC2 initially, with persistent volumes and private networking. If measured usage exceeds available memory, document the evidence and obtain a hosting decision before moving services or resizing.
+- Use a lightweight HTTPS proxy, for example Caddy, in front of the existing image's internal port 10000. Only the proxy publishes ports 80/443.
+- Preserve `QUEUE_CONNECTION=sync` initially. Do not introduce a queue worker unless application queue behavior is changed in a separate task.
+- Use existing private S3-compatible document storage. The repository's `documents` disk is S3-backed; setting `DOCUMENTS_DISK=local` is not a drop-in production design for all document flows.
 
-This issue extends the existing backend pipeline. Browser logging, SQL/query logging, container log collection, a new logging UI, production deployment, and alert delivery are outside scope.
+### Free Tier and inputs to record
 
-## 2. What already exists
+AWS Free Tier eligibility depends on account creation date, plan, region, and remaining allowance/credits. Accounts created before July 15, 2025 and newer accounts have different rules. Do not promise that a t3.micro deployment costs zero. Verify the account in the billing console before provisioning. See [EC2 Free Tier rules](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html) and [AWS Free Tier](https://aws.amazon.com/free/).
 
-Read these files before editing them. Do not implement the earlier observability setup again.
+Record these values in the deployment runbook without secret values:
 
-| File | Current behavior / consequence |
+| Input | Required decision |
 | --- | --- |
-| `composer.json`, `composer.lock` | Laravel 10, PHP 8.3, and OpenTelemetry packages are already installed. No new logging dependency is expected. |
-| `app/Observability/Telemetry.php` | Exports only `http.request.completed`, `application.exception`, `command.completed`, and `observability.smoke`. Unregistered event names are silently dropped. Severity currently handles INFO, WARN, and ERROR. |
-| `app/Observability/TelemetryAttributes.php` | Allows a small set of HTTP, command, outcome, provider, and exception-class attributes. New keys are dropped unless added. It limits strings but does not currently validate enum values. |
-| `app/Observability/TelemetryFactory.php` | Already builds an OTLP log exporter, resource metadata, bounded batching, and transports with timeouts and no retries. |
-| `app/Providers/ObservabilityServiceProvider.php` | Lazily creates telemetry and shuts it down at application termination. |
-| `app/Http/Middleware/TraceRequest.php` | Owns HTTP request instrumentation. |
-| `app/Exceptions/Handler.php` | Reports exception types through telemetry and preserves JSON/Inertia rendering. |
-| `app/Services/PakasirFulfillmentService.php` | Has a `payment.fulfill` span, but no business outcome event. |
-| `app/Console/Commands/ExpireDocuments.php`, `ExpireSubscriptions.php` | Already use `runCommand()`; individual warnings still use Laravel logs. |
-| `config/logging.php` | Default Laravel stack writes to `single`; `daily` and `stderr` also exist. These logs are not automatically sent to SigNoz. |
-| `config/observability.php`, `.env.observability.example` | Existing opt-in telemetry settings. |
-| `docker-compose.observability.yml`, `docker/php/observability-fpm.conf` | Pass observability configuration into HTTP and CLI runtimes. |
-| `docs/observability.md` | Existing Docker setup, smoke check, privacy rules, troubleshooting, and rollback. |
-| `tests/Unit/Observability/TelemetryTest.php` | In-memory exporters and existing correlation/privacy/failure tests to reuse. |
-| `tests/Feature/Observability/RequestTelemetryTest.php` | Existing request integration tests. |
+| AWS account/region | Eligibility, credit expiry, spending limit, budget alert recipient |
+| Instance | Ubuntu LTS x86_64 AMI, t3.micro, EBS size, CPU credit mode |
+| Jenkins host | Existing host, reachable agent, supported Jenkins LTS/Java versions |
+| Domain | Production hostname and DNS control; stable IP allocation and its cost |
+| Registry | Package path, push identity, read-only deployment identity |
+| Data | New database or existing data import; private document bucket and backup destination |
+| Dependencies | Production mail, payment/webhook, reCAPTCHA, and exchange-rate settings |
+| Release policy | Protected `main`, permitted release approvers, maintenance window |
 
-Important gaps: business events are missing; legacy logs sometimes contain identifiers, paths, provider data, and exception messages; recovered errors may never become an HTTP 500; `recordExceptionType()` currently skips errors without a valid span; nested reporting can emit the same exception more than once.
+Account for EC2, EBS, snapshots, public IPv4, traffic, S3, registry storage, DNS, and any separate Jenkins hosting. Check T3 Unlimited CPU credit charges; use Standard mode initially if avoiding surplus CPU charges is the priority, documenting that CPU can be throttled. Billing alerts are notifications, not a hard spending cap. Avoid adding NAT Gateway, load balancer, or managed database infrastructure as an implicit dependency.
 
-## 3. Implementation decisions
+If the Jenkins machine or domain is not yet available, implement and test the repository artifacts locally, then report those deployment prerequisites precisely.
 
-1. Use `Telemetry::event()` as the common business logging entry point. Extend its event catalog and validation. Keep the existing OTLP exporter and lifecycle.
-2. Do not forward all Laravel `Log::*` messages or tail `laravel.log` into SigNoz. Migrate relevant application calls explicitly, using fixed event names and reviewed attributes.
-3. Preserve Laravel's local exception reporting. For migrated business logs, replace verbose debug calls with structured events; retain a local equivalent only where existing operational needs require it, using the same sanitized attributes.
-4. Centralize event names, allowed attributes, and default severities in a proposed `app/Observability/LogEventCatalog.php`. Keep the existing four events supported. Unknown names must fail closed: drop them without affecting application behavior; tests must detect unregistered call sites.
-5. Default business outcomes to INFO, expected abnormal rejection/recovery to WARN, and unexpected operation failures to ERROR. Normal pending payments, duplicate webhook deliveries, and intentionally ignored webhook types are INFO. Do not classify every HTTP 4xx or routine validation error as an application ERROR.
-6. Add `OBSERVABILITY_LOG_LEVEL` with default `INFO`, accepting `INFO`, `WARN`, and `ERROR`. Normalize case and fall back to INFO for invalid values. This controls exported logs independently of Laravel `LOG_LEVEL` and trace sampling. Do not add DEBUG events in this issue.
-7. Export logs even when the current trace is unsampled. Events outside a span still export, with no fabricated trace/span identifiers. Keep business identifiers out of metric dimensions.
-8. Log committed state changes only after the outermost successful database commit. Use Laravel's transaction callback mechanism after verifying its installed implementation; execute immediately when no transaction is active. Capture safe scalar attributes and the originating OTel context when registering a deferred callback, reactivate that context during emission, and always detach it. Rollbacks must discard success events. Do not flush or perform exporter network I/O inside a transaction.
+## 2. Repository facts the implementer must use
 
-## 4. Event schema and privacy contract
-
-Use the fixed event name for both OTel event name and log body, matching the current implementation. Resource metadata already contains service name, version, namespace, and environment. The SDK supplies timestamp and active trace/span context; do not copy client-supplied IDs into trusted fields.
-
-| Attribute | Allowed values / type |
+| Existing file | Finding and implication |
 | --- | --- |
-| `app.module` | Fixed enum: `auth`, `document`, `signing`, `billing`, `payment`, `wallet`, `organization`, `template`, `integration`, `mail`, `scheduler`. |
-| `app.operation` | Fixed operation token registered for that event, such as `upload`, `verify_otp`, `fulfill`, or `delete`. Never a request value. |
-| `app.outcome` | `success`, `failure`, `rejected`, `skipped`, `pending`, or `partial`. |
-| `app.reason` | Per-event fixed enum, for example `invalid_otp`, `rate_limited`, `insufficient_balance`, `duplicate`, `amount_mismatch`, `provider_unavailable`, `storage_failure`. |
-| `payment.provider` | `stripe` or `pakasir`. |
-| `integration.provider` | Fixed configured labels such as `stripe`, `pakasir`, `currencyfreaks`, `recaptcha`, `mail`, or `storage`; never a URL. |
-| `error.type` | Exception class only, passed from a caught Throwable. No exception message or stack. |
-| `app.duration_ms` | Optional finite, nonnegative numeric elapsed time for external operations; calculate with `hrtime(true)`. |
-| `app.processed_count`, `app.skipped_count`, `app.failed_count` | Nonnegative integer summary counts; define what each counts per command. |
-| `app.dry_run` | Boolean for command summaries. |
-| Existing HTTP / command keys | Preserve their current behavior and filtering. |
+| `composer.json`, `composer.lock` | Laravel 10, PHP 8.3, PostgreSQL, Redis, S3, PDF and payment dependencies. Install from the lockfile. |
+| `package.json`, `package-lock.json` | Vue/Inertia/Vite, Vitest; use `npm ci`, `npm test`, `npm run build`. Existing production build uses Node 22. |
+| `Dockerfile` | Multi-stage production image: Composer dependencies, frontend assets, PHP-FPM + Nginx + Supervisor. Reuse it; inspect its runtime behavior before extending. |
+| `docker/render/supervisord.conf` | Already starts `schedule:work` alongside Nginx/FPM. Adding a second scheduler would execute tasks twice. |
+| `docker/render/nginx.conf` | Listens on 10000 and assumes HTTPS upstream. Verify proxy headers and Laravel trusted proxies. |
+| `docker-compose.yml` | Development setup: source bind mounts, fixed container names, exposed database/Redis ports, Mailpit, separate scheduler. Do not deploy this file to production. |
+| `docker/php/Dockerfile` | Development PHP image; can inform a separate CI image with development dependencies. |
+| `.dockerignore` | Excludes environment secrets and dependencies, but must also exclude uploaded documents, local backups and CI reports from build context. |
+| `phpunit.xml`, `tests/` | PHP tests need a disposable database and real Redis for OTP tests. No SQLite assumption. Explicitly disable telemetry/network export in CI. |
+| `package.json` `test:all` | Hardcodes `docker exec esign-app`; do not use this command in isolated Jenkins builds. |
+| `routes/web.php` | `/health` exists but currently returns static JSON, without testing database or Redis readiness. |
+| `app/Console/Kernel.php` | Document and subscription expiry jobs use cache locks. Preserve one scheduler and working shared cache. |
+| `config/filesystems.php`, `config/documents.php` | Documents use S3-compatible storage; audit runtime `env()` calls before enabling config cache. |
+| `.env.example` | Missing at planning time. Supply a production example containing placeholders only; never copy the real `.env`. |
+| `docs/observability.md` | Keep optional remote telemetry compatible; leave observability disabled unless an external endpoint is supplied. |
 
-Each event accepts only its own documented subset of attributes. Reject arrays, objects, unknown keys, invalid enum values, and nonfinite numbers. Limit string lengths. Retain existing generic filtering for spans/metrics; use a separate event-specific filter so logging additions do not unintentionally broaden trace and metric attributes.
+## 3. Deliverables
 
-Never include passwords, OTPs, signing/invitation/reset tokens, authorization or cookie headers, webhook signatures, request/response bodies, raw URLs or query strings, email addresses, names, IP addresses, document contents or paths, signatures, payment/card details, amounts, wallet balances, external customer/order IDs, SQL, Redis keys, or arbitrary exception messages. This first implementation also omits internal user, organization, and document IDs; investigate individual operations through trace IDs. Do not serialize models or spread `$request->all()` into context. Truncation is not redaction.
+Create or update the following files. Keep deployment operations in scripts so they can be tested without Jenkins.
 
-## 5. Required coverage checklist
-
-Create `docs/observability/log-events.md` during implementation. Expand each event family below into exact names and record its owner method, severity, permitted attributes, reasons, and test. Family notation is planning shorthand, not an event name to emit. Give every row a final covered/not-applicable status with a reason.
-
-| Module and starting files | Required events and branches |
+| File | Responsibility |
 | --- | --- |
-| Auth: `app/Http/Controllers/Auth/*`, `app/Http/Requests/Auth/LoginRequest.php`, `LoginOtpService`, `EmailVerificationOtpService` | `auth.login.*`, `auth.logout.completed`, `auth.registration.completed`, `auth.password.*`, `auth.email_verification.*`, `auth.otp.*`: successful final authentication, credential/OTP rejection, throttle rejection, resend, password reset/update, verification. Generating an OTP is not successful login. Log accepted reset requests without revealing whether an account exists. |
-| Documents: `DocumentController` | `document.upload.*`, `document.delete.*`, `document.prepare.*`, `document.send.*`: state changes, plan/storage/balance rejection, upload/delete failure, sending with partial recipient failure. Emit only once at the method that owns the operation. |
-| Signer setup: `DocumentSignerController`, `DocumentSignatureFieldController` | `document.signers.changed`, `document.fields.changed`: signer additions/removals/reorder/workflow changes and field create/update/delete; no coordinates, names, or signatures. |
-| Signing: `SigningController`, `SigningOtpService` | `signing.otp.*`, `signing.submit.*`, `signing.document.completed`, `signing.workflow.advanced`: expired/invalid/order rejection, OTP outcomes, PDF/storage failures, successful signer submission, final document completion, next-recipient mail failure. Inspect existing caught-error branches as well as successful returns. |
-| Billing: `BillingTopupController`, `SubscriptionController` | `billing.topup.*`, `billing.subscription.*`: checkout/payment creation, downgrade, missing configuration, provider failure, and business rejection. Creating checkout does not mean payment succeeded. |
-| Stripe: `StripeWebhookController` | `payment.webhook.*`, `payment.fulfillment.*`, `billing.subscription.*`: invalid signature/payload, unknown records, ignored types, duplicates, checkout/payment-intent fulfillment, invoice paid/failed, subscription cancellation. Replace verbose RECEIVED/CONFIG logs without exporting payloads. |
-| Pakasir: `PakasirWebhookController`, `PakasirSandboxPayController`, `PakasirFulfillmentService` | Webhook validation, unknown order, amount/project mismatch, pending status, sandbox rejection, duplicate/no-op, committed fulfillment and failure. Preserve `payment.fulfill` span. A true return from `fulfill()` can mean already paid; do not count that as a new fulfillment. |
-| Wallet: `WalletService::credit`, `WalletService::debit` | `wallet.credit.*`, `wallet.debit.*`: committed mutations, duplicate reference/no-op, insufficient funds, unexpected failure. Preserve locks, transactions, idempotency, and financial calculations. |
-| Organization: `InvitationController`, `InvitationAcceptController`, `MembersController`, `OrganizationSettingsController`, `ProfileController` | `organization.invitation.*`, `organization.member.*`, `organization.settings.updated`, `auth.profile.*`: invitation create/resend/revoke/accept/reject, role changes, settings changes, profile update/deletion. Remove verbose invitation debug messages. |
-| Templates: `TemplateController`, `TemplateSignatureFieldController` | `template.upload.*`, `template.delete.*`, `template.fields.changed`: committed changes, quota rejection, storage failures. |
-| Integrations: `PakasirService`, Stripe call sites, `ExchangeRateService`, `RecaptchaService` | `integration.request.completed` / `integration.request.failed`: actual provider I/O, operation, safe provider/status outcome, duration, failure class. Log exchange-rate fallback and reCAPTCHA rejection/configuration failures. `StripeService::client()` only exposes the SDK client; instrument the real call sites. Cache hits need no integration event. |
-| Mail: `Mail::to(...)->send(...)` call sites and `LoginOtpService::send` | `mail.submission.completed` / `mail.submission.failed`: submission to the mail transport. This is not proof of delivery. Record fixed purpose as a registered operation, never recipient or mail content. No logging inside mailable rendering. |
-| Scheduled work: `ExpireDocuments`, `ExpireSubscriptions` | `documents.expiry.summary`, `subscriptions.expiry.summary`: processed/skipped/failure counts and dry-run flag, including recoverable delete/provider failures. Retain existing `command.completed`; a zero exit code can coexist with a partial summary. Summarize loops instead of logging every successful row. |
-| Framework errors: `Handler`, `Telemetry::recordExceptionType` | `application.exception` once per exception instance in an operation, including contexts without active spans. Preserve reporting rules and rendering. |
+| `Jenkinsfile` | Trusted release pipeline: checkout, verification, build, publish, approval, deploy, reports |
+| `docker-compose.ci.yml` | Isolated PHP test runner, Node runner if needed, PostgreSQL 17 and Redis, no host ports/fixed names |
+| `docker/ci/Dockerfile` | PHP 8.3 test dependencies/extensions, including Redis; development Composer dependencies |
+| `docker-compose.prod.yml` | Standalone runtime-only stack: proxy, app, PostgreSQL, Redis, health checks and named volumes |
+| `docker/production/Caddyfile` | HTTPS, reverse proxy, persistent certificate storage |
+| `docker/production/entrypoint.sh` | Runtime directory permissions and Laravel caches, then `exec` Supervisor; no migrations |
+| `docker/production/php-fpm.conf` | Small worker pool tuned from actual memory measurements |
+| `scripts/ci/test.sh` | Execute tests with isolated service names; export JUnit reports and clean up |
+| `scripts/deploy/deploy.sh` | Validated digest deployment, server lock, backup, migration, activation and health checks |
+| `scripts/deploy/rollback.sh` | Restore prior image/config release without destructive database rollback |
+| `scripts/deploy/backup.sh` | Consistent PostgreSQL backup, encrypted off-host copy and retention |
+| `.env.production.example` | Production Laravel/Compose setting names and safe placeholders |
+| `docs/deployment/jenkins-aws.md` | Provisioning, credentials, first deploy, normal deploy, restore, recovery and costs |
+| `Dockerfile`, `.dockerignore`, `README.md` | Production runtime wiring, safe build context, link to runbook |
 
-Pure read paths in `DashboardController`, `BillingController::index`, `Api/PaymentStatusController::show`, landing pages, and getters/calculations in `PlanService` and `SigningPricingService` use existing request logs. Log a business limit rejection at the caller that acts on the result, not every call to a limit getter.
+Use explicit pinned versions for runtime images/plugins/toolchains and record why they were chosen. Resolve supported Jenkins LTS/Java combinations from official installation instructions at implementation time. Do not combine a Laravel major upgrade with this issue.
 
-## 6. Step-by-step implementation
+## 4. Implementation steps
 
-### Step 1 — Inventory and establish the baseline
+### Step 1 — Capture a baseline
 
-- [ ] Read section 2 and `docs/observability.md`; inspect the working tree and preserve unrelated changes.
-- [ ] Locate existing logs, catches, transactions, and external call sites:
+- [ ] Read the files above, repository instructions, and current branch changes.
+- [ ] Run existing PHP and JavaScript suites in a disposable environment and record any baseline failure separately.
+- [ ] Verify lockfiles are committed and identify actual PHP extensions needed by tests and PDF generation.
+- [ ] Inventory required environment-variable names from configuration without printing `.env` or real credentials.
+- [ ] Confirm the deployment inputs in section 1. Write down the first-deploy data-import decision.
 
-```bash
-rg -n 'Log::|logger\(|report\(|catch\s*\(' app
-rg -n 'DB::transaction|afterCommit|Mail::|Http::|Storage::|->client\(' app
-rg -n 'Telemetry|withinSpan|runCommand' app tests
-```
+Done when: another programmer can identify the required versions, services, environment names, and baseline checks from the runbook.
 
-- [ ] Create the event catalog documentation from section 5. For each existing log decide: replace with a catalog event, retain a sanitized local diagnostic, or remove redundant debugging. Record the decision.
-- [ ] Run the existing observability tests in the configured test environment:
+### Step 2 — Make CI independent of the developer machine
 
-```bash
-docker compose exec app php artisan test tests/Unit/Observability tests/Feature/Observability
-```
+- [ ] Create CI Compose services with no `container_name`, source-host assumptions, or published PostgreSQL/Redis ports.
+- [ ] Use a unique sanitized Compose project name per build, such as `esign-ci-<build-number>`, and unique volumes/networks. Keep the project name stable across stages of that build.
+- [ ] Start PostgreSQL 17 and Redis; wait for actual health checks with a bounded timeout.
+- [ ] Give tests an isolated database, temporary `APP_KEY`, Redis database, `APP_ENV=testing`, fake mail and `OBSERVABILITY_ENABLED=false`. Never bind production credentials into test containers.
+- [ ] Install Composer development dependencies with `composer install --no-interaction --prefer-dist`, and Node dependencies with `npm ci`. Do not run dependency update commands.
+- [ ] Install Composer dependencies before Vite builds: Ziggy imports from `vendor`.
+- [ ] Run `composer validate --no-check-publish`, `vendor/bin/pint --test`, `php artisan test --log-junit=...`, `npm test -- --reporter=default --reporter=junit --outputFile=...`, and `npm run build`. Verify report flags against installed tools.
+- [ ] Run database-backed PHP tests sequentially initially. Do not allow two suites to migrate the same test database concurrently.
+- [ ] Export reports into a Jenkins-readable workspace directory, including on failure. Do not bake reports into the production image.
+- [ ] In cleanup, remove only this build's CI containers/networks/volumes. Never execute broad Docker prune commands on a shared agent.
 
-**Done when:** every required module has named owners/events and baseline failures, if any, are recorded separately.
+Done when: checks run from a clean checkout with no existing `esign-app` container, failures fail the build, and two isolated builds cannot affect each other's database.
 
-### Step 2 — Build and verify the shared logging contract
+### Step 3 — Prepare an immutable production image
 
-- [ ] Add `LogEventCatalog.php` with exact event names, default severity, required fields, allowed keys, and enum values. Keep definitions easy to scan; avoid an elaborate logging framework.
-- [ ] Update `Telemetry::event()` to validate catalog entries, normalize severity, apply the configured minimum level, sanitize attributes, and use the existing logger provider. Do not let a malformed event throw into business code.
-- [ ] Keep existing method calls compatible. New constructor/config options must have defaults so current direct `new Telemetry(...)` tests still work.
-- [ ] Add the level to `config/observability.php` and pass it from `TelemetryFactory`. Read `env()` only in configuration files.
-- [ ] Document and wire the environment variable through `.env.observability.example`, both services in `docker-compose.observability.yml`, and `docker/php/observability-fpm.conf` so CLI and FPM agree, including cached configuration.
-- [ ] Add a small helper for emitting after commit using the context rule in section 3. Do not change when business transactions begin or end.
-- [ ] Test catalog validation, privacy, threshold behavior, disabled mode, and after-commit/rollback behavior before instrumenting business modules.
+- [ ] Reuse the root multi-stage Dockerfile; keep PHP 8.3 and the existing frontend build working. Build `linux/amd64` for t3.micro.
+- [ ] Ensure the final image contains built `public/build` assets, production Composer dependencies, correct autoloading and runtime extensions. It must not contain `.env`, tests' secrets, uploaded files, backups, `node_modules`, or cached configuration from a developer machine.
+- [ ] Add OCI revision labels for the Git SHA and capture the registry digest after publishing.
+- [ ] Add a runtime entrypoint that prepares writable directories and builds configuration/view caches only after production settings are available. Validate route caching against existing routes before enabling it.
+- [ ] Audit `env()` outside `config/` and replace deployment-relevant calls with `config()` access where necessary. Verify the chosen document disk with configuration cached.
+- [ ] Keep cache directories release-local. Persist user/application files that need durability, but do not share compiled views or `bootstrap/cache` across old/new images.
+- [ ] Do not generate `APP_KEY`, run migrations, or run seeders automatically at container startup.
+- [ ] Verify Nginx and PHP-FPM both receive required runtime settings. Add `/health` container checks and a separate bounded readiness check for database/Redis connectivity; return generic failures without exposing credentials.
+- [ ] Preserve the existing Supervisor scheduler as the only scheduler. Ensure maintenance mode stops scheduled task execution and stop the old app process before running migrations.
 
-Example target usage after the catalog supports this event:
+Done when: the image boots with injected configuration, serves compiled assets, and requires no repository bind mount or dependency installation on EC2.
 
-```php
-app(Telemetry::class)->event('signing.submit.rejected', [
-    'app.module' => 'signing',
-    'app.operation' => 'submit',
-    'app.outcome' => 'rejected',
-    'app.reason' => 'invalid_otp',
-], 'WARN');
-```
+### Step 4 — Define and measure the production stack
 
-**Done when:** a catalog event reaches the in-memory exporter with the correct body, severity, safe fields, and active trace context. Unknown fields/names cannot leak data.
+- [ ] Create `docker-compose.prod.yml` as a standalone file, not an overlay that inherits development ports, names, source mounts or Mailpit.
+- [ ] App uses `image: ${APP_IMAGE}` with a digest reference and no `build:` key. Proxy reaches app:10000 over an internal network.
+- [ ] Only publish 80/443. Keep PostgreSQL 5432, Redis 6379, PHP-FPM 9000 and app 10000 private.
+- [ ] Persist PostgreSQL data, Redis data where required by OTP/cache/session behavior, certificate state and required application storage in stable named volumes. Volume names must survive release-directory changes; always use the same production Compose project name.
+- [ ] Use explicit non-default database credentials, service health checks, `restart: unless-stopped`, and bounded Docker log rotation.
+- [ ] Start with a small PHP-FPM pool (for example, two workers), conservative PostgreSQL connections and bounded Redis usage. Set and test Compose memory limits; do not assume limits reserve memory or prove the stack fits.
+- [ ] Measure idle use, login/OTP, PDF upload/signing, migration and scheduler execution. Leave OS/Docker headroom within 1 GiB. Record actual peak memory, swap and CPU credit behavior. Optional swap can reduce abrupt failures but is not a capacity guarantee.
+- [ ] Verify worker count and PHP memory limits against real PDFs; report capacity failure instead of silently deploying a configuration that OOM-kills signing jobs.
+- [ ] Rotate logs and retain current/previous release images. Check free disk before pulls and backups.
 
-### Step 3 — Make failures reliable and avoid duplicate reporting
+Done when: a staging rehearsal on equivalent resources demonstrates acceptable behavior and persistence across container replacement.
 
-- [ ] Inspect `withinSpan()`, `recordExceptionType()`, and the handler together. Use weak references, such as a `WeakMap` keyed by Throwable, to prevent duplicate exception events without retaining exceptions indefinitely. Do not deduplicate by class or message: two different exceptions must remain distinct.
-- [ ] Allow sanitized exception logs with no active span; only mutate span status/attributes when a valid span exists.
-- [ ] A caught-and-recovered failure needs a specific business/integration event because it may never reach the global handler. A rethrown exception retains its original type and instance; centralized reporting owns `application.exception`.
-- [ ] Business failure summaries and a generic exception event may coexist when they describe different facts, but do not add identical ERROR logs at each stack layer. Document the event owner.
-- [ ] Preserve failure isolation, transport timeouts, bounded batching, and termination flushing. Do not add per-event `forceFlush()`, exporter retries, or a Laravel log channel that recursively calls telemetry.
+### Step 5 — Provision the EC2 host and secrets
 
-**Done when:** nested reporting emits one generic exception record, separate exceptions emit separate records, and exporter failures never change the business response or exception.
+1. Verify Free Tier/billing settings; create budget alerts and record estimated recurring costs.
+2. Provision the selected Ubuntu x86_64 t3.micro, encrypted EBS and a stable hostname/IP arrangement. Require IMDSv2 if using an EC2 role.
+3. Configure the security group: public 80/443; SSH only from the administrator and Jenkins agent's approved addresses. Never expose Jenkins, database, Redis or Docker daemon ports on this host.
+4. Install Docker Engine and Compose plugin using official Ubuntu instructions. Enable startup on reboot and configure host updates/time synchronization.
+5. Create a dedicated deploy account and `/opt/esign/{releases,shared}`. Restrict secret file access. Treat Docker group membership as root-equivalent; use a narrowly controlled deploy identity and trusted release jobs.
+6. Store production environment values in `/opt/esign/shared/.env.production`, readable only by intended operators/runtime. Use a separate release manifest for `APP_IMAGE`, SHA and deployment metadata. Explain Compose interpolation versus service `env_file`; validate required settings with `config --quiet` without printing rendered secrets.
+7. Set `APP_ENV=production`, `APP_DEBUG=false`, correct HTTPS `APP_URL`, secure session cookies, PostgreSQL/Redis service names, real mail settings and stable document storage. Generate `APP_KEY` once through an operator setup step and back it up securely; never regenerate on release.
+8. Configure private document bucket access. Prefer a scoped EC2 IAM role if compatible with the storage provider and SDK; otherwise inject scoped storage credentials. Verify actual container access and keep the bucket private.
+9. Configure a registry read-only credential for pulls. Keep registry push permissions on the trusted Jenkins agent only.
+10. Point DNS to EC2, bring up the proxy and verify TLS issuance/renewal. Test HTTPS redirects, secure cookies and application-generated URLs behind the proxy.
+11. Configure off-host encrypted PostgreSQL backups and document-storage backup/versioning policy. Perform a restore to a disposable database before first production release.
 
-### Step 4 — Instrument payments, wallet, and external calls
+Done when: infrastructure, DNS, TLS, private networking, secret injection, registry pulls and restore access are ready. No production data is created by CI tests.
 
-- [ ] Work through the billing, Stripe, Pakasir, wallet, and integration rows first, one module at a time.
-- [ ] Enumerate every return/rejection/catch branch before adding events. Use fixed reasons for pending, duplicate, validation failure, and missing configuration.
-- [ ] Register mutation success events after commit. For provider calls, record provider acceptance separately from database fulfillment; an external call can succeed even if a later local transaction rolls back.
-- [ ] Capture correlation context inside active spans before any deferred success emission. Do not create a new root trace for every log.
-- [ ] Preserve webhook signatures, status codes, retries, idempotency checks, locks, and payment calculations. Do not make a duplicate delivery appear to credit a wallet again.
-- [ ] Extend existing tests in `tests/Unit/Services/` and add focused feature tests for webhook outcomes under `tests/Feature/Observability/`. Fake providers; never create real charges.
+### Step 6 — Configure Jenkins and trust boundaries
 
-**Done when:** success, rejection, failure, duplicate, and rollback cases emit the expected events without changing payment or wallet state behavior.
+- [ ] Install supported Jenkins LTS and Java on the separate host; secure login, HTTPS or private access, controller backups and persistent Jenkins home.
+- [ ] Install only needed plugins: Pipeline, Git, Credentials Binding, SSH Agent, JUnit and the chosen branch-source/registry integration. Record versions and credential IDs in the runbook.
+- [ ] Configure a Docker-capable Linux build agent. Do not mount the production host's Docker socket into Jenkins. Never expose an unauthenticated Docker TCP daemon.
+- [ ] Create separate jobs/trust scopes: PR/branch CI gets no production or publishing credentials; the trusted `main` release job gets scoped publishing/deployment credentials. Untrusted Jenkinsfiles must not be able to request the trusted agent or its credentials.
+- [ ] Use branch protection/review for changes to Jenkinsfile and deployment scripts. Do not rely only on `when { branch 'main' }` to protect secrets from untrusted code.
+- [ ] Credential IDs: `esign-git-read` if needed, `esign-registry-push`, `esign-prod-ssh`, and a managed verified SSH known-hosts file. Provision the server's read-only registry identity separately.
+- [ ] Verify the SSH host fingerprint through the AWS/operator channel. Do not use `StrictHostKeyChecking=no` or blindly trust a key fetched during deployment.
+- [ ] Prefer SCM polling initially when Jenkins is private. If using GitHub webhooks, document secure routing, plugin authentication and delivery tests; do not expose an unsecured controller to receive pushes.
 
-### Step 5 — Instrument documents, signing, auth, organization, templates, and mail
+Done when: a PR can run checks but cannot read production credentials, publish releases, or reach the deployment host.
 
-- [ ] Complete the corresponding coverage rows. Inspect early returns and caught exceptions; success-only instrumentation is incomplete.
-- [ ] Keep controller/service ownership explicit. For example, a service owns OTP verification; a controller owns establishing the authenticated session. These are different events.
-- [ ] Treat sequential signing advancement, final completion, PDF writing, and mail submission as separate outcomes. A saved signature with failed follow-up mail is partial success, not an entirely failed signature.
-- [ ] Replace debug logs that expose paths, URLs, identifiers, request data, or exception messages at migrated sites.
-- [ ] Extend existing auth, document upload, template, and service tests, with new feature tests where coverage is missing. Use mail/storage/HTTP fakes and synthetic OTPs.
+### Step 7 — Implement the Jenkinsfile
 
-**Done when:** every required state change and recovered failure in these rows has an event and a focused assertion; logging does not change response contents or status codes.
+Execute these stages in order:
 
-### Step 6 — Instrument command summaries
+1. **Checkout:** check out the exact SCM revision and record its full SHA. Clean the workspace of artifacts from previous builds.
+2. **Validate and test:** run Step 2. Publish JUnit results even when tests fail. A failed check blocks all later release stages.
+3. **Build:** build the production image once for that SHA; run a container smoke test with disposable dependencies and synthetic settings. Check assets and runtime extensions.
+4. **Publish:** on the trusted release job only, log in using scoped credentials, push the SHA-tagged image, resolve its digest, and archive a nonsecret release manifest. Use password-stdin and avoid shell tracing/Groovy interpolation of secrets.
+5. **Approve production:** initial rollout policy is an explicit Jenkins `input` approval restricted to release operators with a timeout. Display SHA/digest and migration notes. Do not hold credentials open while waiting. Automatic deployment may be enabled later by an explicit policy change.
+6. **Deploy:** send the manifest/scripts for that same SHA to a release directory and invoke the server deployment script over verified SSH. Do not `git pull main` on EC2 or rebuild there.
+7. **Verify/report:** archive the deployed digest, sanitized readiness/smoke output, migration result and rollback result where applicable. Report failure honestly if rollback was needed.
+8. **Always cleanup:** close registry sessions, remove this build's temporary credentials and test resources, retain reports, apply build/artifact retention.
 
-- [ ] Retain the existing `runCommand()` wrapper and emit one domain summary inside its active span before it returns.
-- [ ] Reuse current counts; add separate counters where needed to distinguish provider verification failure from remotely active subscriptions. Document document-count versus file-failure-count units.
-- [ ] Mark partial work with `app.outcome=partial` and WARN even if the existing command still exits zero. Do not change command exit behavior as part of logging.
-- [ ] Mark dry runs and describe counts as “would process.” Dry-run output must not imply committed mutations.
-- [ ] Cover zero records, success, partial failure, thrown failure, and dry run using existing console tests. Avoid per-record success events that can overflow the 256-record batch queue.
+Use pipeline timeouts, timestamps and `disableConcurrentBuilds()` without aborting a running deployment. Add a host-side `flock` deployment lock covering normal deploy and rollback. Check under the lock that an older queued release cannot overwrite a newer release; allow intentional rollback only through the explicit rollback path.
 
-**Done when:** summaries are correlated with command traces, distinguish partial work, and retain existing data/exit-code behavior.
+Done when: test failure, rejected/timed-out approval, bad SSH credentials, registry failure and deployment failure all stop the appropriate stage without leaking secrets.
 
-### Step 7 — Verify automated behavior
+### Step 8 — Implement deployment and rollback scripts
 
-Use the real `Telemetry` service with in-memory SDK exporters for integration assertions; mocking `event()` alone cannot catch events rejected by the catalog. Reuse the exporter setup in `TelemetryTest` and bind it into Laravel's container. Flush locally before examining records. Disable network export in tests.
+Write Bash scripts with strict error handling, quoted arguments and validation of SHA/digest/path inputs. Do not `eval` the manifest. Use bounded waits and retain previous release metadata before changing anything.
 
-Required scenarios:
+Deployment sequence under the server lock:
 
-- [ ] Correct body/event name, severity, resource service identity, and allowed context for each event family.
-- [ ] Unknown event/key and invalid enum values are rejected; canary secrets placed in inputs and exception messages never appear in exported bodies or attributes.
-- [ ] HTTP and command events have matching trace/span IDs; no context leaks into the next operation.
-- [ ] An unsampled trace still exports business logs; a log without a span exports without an invented trace ID.
-- [ ] INFO/WARN/ERROR thresholds, invalid configuration fallback, disabled mode, and cached configuration work.
-- [ ] Success events wait for the outermost commit; nested rollback emits none. Use tests with real commit boundaries, not a fixture that keeps every test inside an uncommitted transaction.
-- [ ] Duplicate payment/webhook delivery does not emit a second mutation success or alter balances twice.
-- [ ] A recovered mail/storage/provider failure emits a usable outcome even when HTTP status is 200/302.
-- [ ] Logger/exporter exceptions and stopped-collector behavior preserve business results; callbacks execute exactly once.
-- [ ] Every row in section 5 links to relevant tests and remaining exclusions are explained.
+1. Validate target manifest, trusted registry path, required files, disk space and database/Redis health. Pull the new digest while the old release is still serving. If pull/preflight fails, leave the old release running.
+2. Record current image digest and matching Compose/proxy configuration. Take a consistent PostgreSQL backup using `pg_dump`, verify command success and transfer to the off-host destination. Never put credentials into archive names or reports.
+3. Serve a deliberate maintenance response from the proxy, put Laravel into maintenance mode and stop the old application container so its scheduler also stops. Keep PostgreSQL, Redis and the proxy running.
+4. Run `php artisan migrate --force` exactly once using a one-off container of the new digest, the production environment/network and an overridden command that does not start Supervisor. Do not use `migrate:fresh`, seeders, or automatic `migrate:rollback`.
+5. Start the new app with the new digest and runtime entrypoint. Ensure any persisted Laravel maintenance flag is cleared deliberately before normal traffic resumes.
+6. Wait for container health and application readiness, then remove proxy maintenance mode. Verify public HTTPS `/health`, database/Redis readiness, a compiled asset and the expected deployed image digest. Use bounded deadlines; HTTP 200 from the existing static health route alone is insufficient.
+7. Mark the release current only after verification succeeds. Retain the previous working release. Clean old images/backups only according to documented retention, preserving current and rollback images and all persistent volumes.
 
-Run focused tests after each module, then the PHP regression suite once integration is complete:
+Failure handling:
 
-```bash
-docker compose exec app php artisan test tests/Unit/Observability tests/Feature/Observability
-docker compose exec app php artisan test
-```
+- Before migrations: restore availability of the old release and exit nonzero.
+- During/after migrations: database changes may already be committed. Use backward-compatible additive migrations so the previous image can run against the new schema. Document migration compatibility as a release requirement.
+- If activation/health fails and schema compatibility is established, start the recorded previous image/configuration, clear maintenance state appropriately, verify it, restore traffic, and report the attempted release failed.
+- If compatibility is unknown or rollback fails, keep a clear maintenance response, preserve logs/backups and require operator recovery. Do not claim automatic recovery or blindly restore an old database over new transactions.
+- First deployment has no previous image; failure must be reported as such with a recovery path.
+- Never run `docker compose down -v` against production. Image rollback must not delete or recreate database/document storage.
 
-Run repository-required formatting/review checks for the implementation. Record exact commands and failures. A documentation-only planning change does not require executing this future implementation suite.
+Done when: both a successful upgrade and a deliberately failing upgrade have been rehearsed on disposable data, including restoration of service and exactly one scheduler.
 
-### Step 8 — Verify real SigNoz ingestion and write the runbook
+### Step 9 — Verify and document operation
 
-- [ ] Start the existing stack using `docs/observability.md`. Do not regenerate or upgrade deployment versions just to add event names.
-- [ ] Run the existing synthetic smoke command:
+Add focused checks for deployment scripts and health behavior. Run ShellCheck for shell scripts, Compose validation and Jenkins Declarative Pipeline validation using the installed Jenkins version. Use a fake Docker/SSH command harness for failure paths, then rehearse actual containers on a disposable host.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.observability.yml exec app php artisan observability:smoke
-```
+| Scenario | Required evidence |
+| --- | --- |
+| Fresh checkout | All PHP/JS checks and production image build pass without local dependencies |
+| Failed test | No publish or deploy attempt |
+| Untrusted PR | No production credentials or release-agent access |
+| Immutable release | Built, published and deployed SHA/digest match |
+| Failed image pull | Old service remains available |
+| Migration failure | No blind database rollback; documented recovery and failed Jenkins result |
+| Failed health check | Compatible previous release restored; Jenkins still reports failed release |
+| Concurrent/reordered deploy | Server lock and stale-release check prevent interference |
+| Host reboot/container replacement | Database/files/certificates persist; app and one scheduler recover |
+| Authentication and signing | HTTPS login/OTP, upload, signature/PDF, private file access work with sandbox providers |
+| Resource capacity | Peak memory/disk/CPU observations fit the agreed t3.micro workload |
+| Backup restore | Restored disposable database is usable; document recovery procedure verified |
+| Secrets | Image layers, build artifacts and Jenkins output contain no production secrets |
 
-- [ ] In a disposable local environment, exercise a successful operation, a rejected operation, and a synthetic provider/storage/mail failure. Use existing sandbox/fake facilities; do not run real charges or mail real recipients.
-- [ ] Open SigNoz at `http://localhost:8080`, select Logs, select the recent time range, and filter resource `service.name` by `esign-api` or `esign-scheduler`.
-- [ ] Search body for an exact catalog event, for example `signing.submit.rejected`. Inspect severity, structured attributes, environment, and trace/span IDs; follow a trace link when present. The current exporter puts the event name in the body, so queries need not assume how the UI exposes OTel event-name fields.
-- [ ] Check one command summary using disposable fixtures. `subscriptions:expire --dry-run` can still call Stripe; use synthetic non-Stripe subscriptions or a mocked client.
-- [ ] Stop only the `ingester` in the local SigNoz Compose project, repeat a harmless operation, verify unchanged application behavior and bounded export delays, then restart it and confirm later logs arrive. Lost records during the outage are acceptable; do not promise replay.
-- [ ] Update `docs/observability.md` with level configuration, event examples, service/severity/module/trace filters, no-data troubleshooting, best-effort delivery, and rollback. Record the filters actually used with the installed UI.
-- [ ] Document log retention and access controls using the installed SigNoz settings; do not invent retention defaults or enable external alert delivery. Changing retention or production access is a separate deployment decision.
+Document exact commands with placeholders, which machine each command runs on, first-deploy ordering, credential IDs, expected outputs, common failures, manual deploy/rollback, backup restore, log access, scheduler checks and cost monitoring. Explain that provider webhooks need the final HTTPS hostname and sandbox verification before live payments. Do not send real customer mail or create real charges in CI or deployment checks.
 
-**Done when:** capture evidence of actual business events in SigNoz, including service, event, severity, timestamp, and trace correlation. A smoke command saying “export attempted” is not proof of ingestion. If Docker/UI verification cannot be run, explicitly report it as incomplete.
+## 5. Acceptance criteria
 
-## 7. Acceptance criteria
+- [ ] Jenkins reliably runs PHP/JS validation and blocks release on failure.
+- [ ] Production builds happen outside the t3.micro; EC2 pulls a tested immutable image.
+- [ ] Only trusted reviewed releases can publish/deploy; production approval policy is documented.
+- [ ] Production runs over HTTPS with private database/Redis and stable persistent data.
+- [ ] Production secrets stay outside Git, images and test jobs; `APP_KEY` survives redeployments.
+- [ ] Migrations, scheduler lifecycle, readiness and application caching work correctly during deployment.
+- [ ] Rollback is demonstrated and explicitly accounts for database compatibility.
+- [ ] Backup restore, reboot recovery and t3.micro resource capacity are demonstrated.
+- [ ] A junior developer can reproduce installation and recovery from the runbook.
+- [ ] Final report lists changes, exact verification results, deployed SHA/digest if applicable, and any blocked external setup. Do not describe unperformed AWS/Jenkins checks as passed.
 
-- [ ] All rows in the module coverage table are implemented and documented with exact event names, owners, safe attributes, and tests.
-- [ ] Existing request, command, smoke, trace, and metric behavior remains intact.
-- [ ] SigNoz shows business success, rejection, and failure events from HTTP and command operations.
-- [ ] Events are searchable by service, event body, severity, module, outcome, and trace where available.
-- [ ] Sensitive values cannot reach exported events; migrated local logs are sanitized as well.
-- [ ] Transaction rollback and duplicate delivery do not create false mutation-success logs.
-- [ ] Recovered failures are observable, and generic exceptions are not duplicated across nested handlers.
-- [ ] Disabled telemetry and collector outages preserve application behavior with bounded overhead.
-- [ ] Required tests pass; actual ingestion checks and any incomplete verification are documented.
+## 6. Suggested implementation batches
 
-## 8. Suggested implementation handoff
+1. CI test environment and reports.
+2. Production image, Compose configuration, environment example and readiness.
+3. Deployment/backup/rollback scripts and failure-path verification.
+4. Jenkins pipeline, credentials and trust configuration.
+5. EC2 rehearsal, resource measurements, first deployment and runbook evidence.
 
-Deliver small changes in this order: (1) catalog/configuration/tests, (2) exception handling and transaction-safe logging, (3) payments/wallet/integrations, (4) documents/signing/auth/mail, (5) organization/templates/commands, (6) SigNoz verification and documentation. Finish each step's checks before moving on. Do not leave event names unregistered or accept a catalog-only implementation as completed module coverage.
+## Official references
 
-Final implementation report: list files changed, modules covered, tests run, SigNoz evidence, and unresolved checks. Disable export through the existing `OBSERVABILITY_ENABLED=false` setting if rollback is needed; recreate affected containers and refresh cached Laravel configuration as documented. Preserve SigNoz storage volumes.
+- [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/) — stages, approvals, timeouts and concurrency.
+- [Jenkins credentials](https://www.jenkins.io/doc/book/using/using-credentials/) — credential types and IDs.
+- [Jenkins Docker pipelines](https://www.jenkins.io/doc/book/pipeline/docker/) — Docker-capable agents and registries.
+- [Docker Compose in production](https://docs.docker.com/compose/how-tos/production/) — production service configuration.
+- [Compose startup order](https://docs.docker.com/compose/how-tos/startup-order/) — dependency readiness and health checks.
+- [Laravel 10 deployment](https://laravel.com/docs/10.x/deployment) — production settings and configuration caching.
+
+Sources checked on 2026-09-27. Recheck AWS eligibility, supported Jenkins/Java versions, registry permissions and pricing when implementing.
