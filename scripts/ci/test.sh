@@ -74,3 +74,9 @@ fi
 # 6. Execute test suites
 "${compose[@]}" run --rm php php artisan test --log-junit=ci-results/phpunit.xml
 "${compose[@]}" run --rm node npm test -- --reporter=default --reporter=junit --outputFile.junit=ci-results/vitest.xml
+
+# 7. Copy test artifacts from the named volume back to the Jenkins host workspace
+docker run --rm \
+    -v "${COMPOSE_PROJECT_NAME}_app_data:/source:ro" \
+    -v "$(pwd):/target" \
+    alpine sh -c "mkdir -p /target/ci-results && cp -r /source/ci-results/. /target/ci-results/"
