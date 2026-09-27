@@ -1,0 +1,42 @@
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: esign-observability
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+  signoz:
+    spec:
+      image: signoz/signoz:v0.143.0
+  ingester:
+    spec:
+      image: signoz/signoz-otel-collector:v0.144.12
+  telemetrystore:
+    spec:
+      image: clickhouse/clickhouse-server:25.12.5
+  telemetrykeeper:
+    kind: clickhousekeeper
+    spec:
+      image: clickhouse/clickhouse-keeper:25.12.5
+  metastore:
+    kind: postgres
+    spec:
+      image: postgres:16.11
+  patches:
+    - target: deployment/compose.yaml
+      operations:
+        - op: add
+          path: /networks/esign-observability
+          value:
+            name: esign-observability
+            external: true
+        - op: add
+          path: /services/ingester/networks/esign-observability
+          value:
+            aliases: [otel-collector]
+        - op: remove
+          path: /services/ingester/ports
+        - op: replace
+          path: /services/esign-observability-signoz-0/ports/0
+          value: 127.0.0.1:8080:8080

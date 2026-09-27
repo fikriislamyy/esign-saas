@@ -2,6 +2,7 @@
 
 namespace App\Exceptions;
 
+use App\Observability\Telemetry;
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Inertia\Inertia;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
@@ -26,7 +27,7 @@ class Handler extends ExceptionHandler
     public function register(): void
     {
         $this->reportable(function (Throwable $e) {
-            //
+            app(Telemetry::class)->recordExceptionType($e);
         });
     }
 

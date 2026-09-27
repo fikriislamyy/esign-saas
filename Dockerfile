@@ -121,6 +121,7 @@ RUN mkdir -p \
 
 # PHP upload limits
 COPY docker/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+COPY docker/php/observability-fpm.conf /usr/local/etc/php-fpm.d/zz-observability.conf
 
 # Nginx configuration
 COPY docker/render/nginx.conf /etc/nginx/conf.d/default.conf

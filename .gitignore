@@ -23,6 +23,10 @@
 /.env
 /.env.*
 !.env.example
+!.env.observability.example
+
+/docker/observability/signoz/pours/
+/docker/observability/signoz/.env
 
 .phpunit.result.cache
 Homestead.json
