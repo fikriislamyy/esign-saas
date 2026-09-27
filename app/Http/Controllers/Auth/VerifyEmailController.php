@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Observability\Telemetry;
 use App\Providers\RouteServiceProvider;
 use App\Services\EmailVerificationOtpService;
 use Illuminate\Auth\Events\Verified;
@@ -36,6 +37,7 @@ class VerifyEmailController extends Controller
 
         if ($user->markEmailAsVerified()) {
             event(new Verified($user));
+            app(Telemetry::class)->eventAfterCommit('auth.email_verification.completed', ['app.outcome' => 'success']);
         }
 
         return redirect()->intended(RouteServiceProvider::HOME.'?verified=1');

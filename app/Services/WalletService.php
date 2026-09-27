@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Exceptions\InsufficientWalletBalanceException;
 use App\Models\Organization;
 use App\Models\Wallet;
 use App\Models\WalletTransaction;
+use App\Observability\Telemetry;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
-use App\Exceptions\InsufficientWalletBalanceException;
+use Throwable;
 
 class WalletService
 {
@@ -56,52 +58,64 @@ class WalletService
         ?string $createdBy = null,
         ?array $metadata = null,
     ): WalletTransaction {
-        return DB::transaction(function () use (
-            $organization,
-            $sourceCurrency,
-            $sourceAmount,
-            $exchangeRate,
-            $amountUsdCents,
-            $type,
-            $description,
-            $reference,
-            $createdBy,
-            $metadata,
-        ) {
-            $wallet = $this->getLockedWallet($organization);
+        try {
+            return DB::transaction(function () use (
+                $organization,
+                $sourceCurrency,
+                $sourceAmount,
+                $exchangeRate,
+                $amountUsdCents,
+                $type,
+                $description,
+                $reference,
+                $createdBy,
+                $metadata,
+            ) {
+                $wallet = $this->getLockedWallet($organization);
 
-            $balanceBefore = (int) $wallet->balance_usd_cents;
-            $balanceAfter = $balanceBefore + $amountUsdCents;
+                $balanceBefore = (int) $wallet->balance_usd_cents;
+                $balanceAfter = $balanceBefore + $amountUsdCents;
 
-            $wallet->update([
-                'balance_usd_cents' => $balanceAfter,
+                $wallet->update([
+                    'balance_usd_cents' => $balanceAfter,
+                ]);
+
+                $transaction = WalletTransaction::create([
+                    'wallet_id' => $wallet->id,
+                    'organization_id' => $organization->id,
+
+                    'type' => $type,
+
+                    'source_currency' => strtoupper($sourceCurrency),
+                    'source_amount' => $sourceAmount,
+                    'exchange_rate' => $exchangeRate,
+
+                    'amount_usd_cents' => $amountUsdCents,
+
+                    'balance_before_usd_cents' => $balanceBefore,
+                    'balance_after_usd_cents' => $balanceAfter,
+
+                    'reference_type' => $reference?->getMorphClass(),
+                    'reference_id' => $reference?->getKey(),
+
+                    'description' => $description,
+
+                    'created_by' => $createdBy,
+
+                    'metadata' => $metadata,
+                ]);
+
+                app(Telemetry::class)->eventAfterCommit('wallet.credit.completed', ['app.outcome' => 'success']);
+
+                return $transaction;
+            });
+        } catch (Throwable $error) {
+            app(Telemetry::class)->event('wallet.credit.failed', [
+                'app.outcome' => 'failure',
+                'error.type' => $error::class,
             ]);
-
-            return WalletTransaction::create([
-                'wallet_id' => $wallet->id,
-                'organization_id' => $organization->id,
-
-                'type' => $type,
-
-                'source_currency' => strtoupper($sourceCurrency),
-                'source_amount' => $sourceAmount,
-                'exchange_rate' => $exchangeRate,
-
-                'amount_usd_cents' => $amountUsdCents,
-
-                'balance_before_usd_cents' => $balanceBefore,
-                'balance_after_usd_cents' => $balanceAfter,
-
-                'reference_type' => $reference?->getMorphClass(),
-                'reference_id' => $reference?->getKey(),
-
-                'description' => $description,
-
-                'created_by' => $createdBy,
-
-                'metadata' => $metadata,
-            ]);
-        });
+            throw $error;
+        }
     }
 
     /**
@@ -122,58 +136,76 @@ class WalletService
         ?string $createdBy = null,
         ?array $metadata = null,
     ): WalletTransaction {
-        return DB::transaction(function () use (
-            $organization,
-            $sourceCurrency,
-            $sourceAmount,
-            $exchangeRate,
-            $amountUsdCents,
-            $type,
-            $description,
-            $reference,
-            $createdBy,
-            $metadata,
-        ) {
-            $wallet = $this->getLockedWallet($organization);
+        try {
+            return DB::transaction(function () use (
+                $organization,
+                $sourceCurrency,
+                $sourceAmount,
+                $exchangeRate,
+                $amountUsdCents,
+                $type,
+                $description,
+                $reference,
+                $createdBy,
+                $metadata,
+            ) {
+                $wallet = $this->getLockedWallet($organization);
 
-            $balanceBefore = (int) $wallet->balance_usd_cents;
+                $balanceBefore = (int) $wallet->balance_usd_cents;
 
-            if ($balanceBefore < $amountUsdCents) {
-                throw new InsufficientWalletBalanceException();
-            }
+                if ($balanceBefore < $amountUsdCents) {
+                    app(Telemetry::class)->event('wallet.debit.rejected', [
+                        'app.outcome' => 'rejected',
+                        'app.reason' => 'insufficient_balance',
+                    ]);
+                    throw new InsufficientWalletBalanceException;
+                }
 
-            $balanceAfter = $balanceBefore - $amountUsdCents;
+                $balanceAfter = $balanceBefore - $amountUsdCents;
 
-            $wallet->update([
-                'balance_usd_cents' => $balanceAfter,
+                $wallet->update([
+                    'balance_usd_cents' => $balanceAfter,
+                ]);
+
+                $transaction = WalletTransaction::create([
+                    'wallet_id' => $wallet->id,
+                    'organization_id' => $organization->id,
+
+                    'type' => $type,
+
+                    'source_currency' => strtoupper($sourceCurrency),
+                    'source_amount' => $sourceAmount,
+                    'exchange_rate' => $exchangeRate,
+
+                    // Debit transactions are negative.
+                    'amount_usd_cents' => -abs($amountUsdCents),
+
+                    'balance_before_usd_cents' => $balanceBefore,
+                    'balance_after_usd_cents' => $balanceAfter,
+
+                    'reference_type' => $reference?->getMorphClass(),
+                    'reference_id' => $reference?->getKey(),
+
+                    'description' => $description,
+
+                    'created_by' => $createdBy,
+
+                    'metadata' => $metadata,
+                ]);
+
+                app(Telemetry::class)->eventAfterCommit('wallet.debit.completed', ['app.outcome' => 'success']);
+
+                return $transaction;
+            });
+        } catch (InsufficientWalletBalanceException $error) {
+            throw $error;
+        } catch (Throwable $error) {
+            app(Telemetry::class)->event('wallet.debit.failed', [
+                'app.outcome' => 'failure',
+                'error.type' => $error::class,
             ]);
-
-            return WalletTransaction::create([
-                'wallet_id' => $wallet->id,
-                'organization_id' => $organization->id,
-
-                'type' => $type,
-
-                'source_currency' => strtoupper($sourceCurrency),
-                'source_amount' => $sourceAmount,
-                'exchange_rate' => $exchangeRate,
-
-                // Debit transactions are negative.
-                'amount_usd_cents' => -abs($amountUsdCents),
-
-                'balance_before_usd_cents' => $balanceBefore,
-                'balance_after_usd_cents' => $balanceAfter,
-
-                'reference_type' => $reference?->getMorphClass(),
-                'reference_id' => $reference?->getKey(),
-
-                'description' => $description,
-
-                'created_by' => $createdBy,
-
-                'metadata' => $metadata,
-            ]);
-        });
+            throw $error;
+        }
     }
 
     /**
@@ -188,7 +220,7 @@ class WalletService
             ->lockForUpdate()
             ->first();
 
-        if (!$wallet) {
+        if (! $wallet) {
             $wallet = Wallet::create([
                 'organization_id' => $organization->id,
                 'balance_usd_cents' => 0,

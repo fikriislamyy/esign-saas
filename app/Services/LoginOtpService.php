@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Mail\LoginOtpMail;
 use App\Models\User;
+use App\Observability\Telemetry;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Redis;
@@ -11,15 +12,22 @@ use Illuminate\Support\Facades\Redis;
 class LoginOtpService
 {
     public const EXPIRES_IN_SECONDS = 600;
+
     public const RESEND_COOLDOWN_SECONDS = 60;
+
     public const MAX_SENDS_PER_WINDOW = 5;
+
     public const MAX_VERIFY_ATTEMPTS = 5;
 
     public function send(User $user): void
     {
         $otp = $this->generate($user);
 
-        Mail::to($user->email)->send(new LoginOtpMail($user, $otp));
+        app(Telemetry::class)->submitMail('login_otp', fn () => Mail::to($user->email)->send(new LoginOtpMail($user, $otp)));
+        app(Telemetry::class)->event('auth.otp.sent', [
+            'app.outcome' => 'success',
+            'app.reason' => 'login',
+        ]);
     }
 
     public function generate(User $user): string
@@ -42,6 +50,11 @@ class LoginOtpService
         $hash = Redis::get($this->key($user, 'hash'));
 
         if (! $hash) {
+            app(Telemetry::class)->event('auth.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'expired',
+            ]);
+
             return false;
         }
 
@@ -50,11 +63,20 @@ class LoginOtpService
 
         if ($attempts > self::MAX_VERIFY_ATTEMPTS) {
             $this->forget($user);
+            app(Telemetry::class)->event('auth.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'rate_limited',
+            ]);
 
             return false;
         }
 
         if (! Hash::check($otp, $hash)) {
+            app(Telemetry::class)->event('auth.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_otp',
+            ]);
+
             return false;
         }
 

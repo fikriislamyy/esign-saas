@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Observability\Telemetry;
 use App\Providers\RouteServiceProvider;
 use App\Services\LoginOtpService;
 use Illuminate\Auth\Events\Verified;
@@ -25,6 +26,11 @@ class LoginOtpController extends Controller
         $user = $this->pendingUser($request);
 
         if (! $user) {
+            app(Telemetry::class)->event('auth.login.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'missing_session',
+            ]);
+
             return redirect()->route('login');
         }
 
@@ -48,6 +54,11 @@ class LoginOtpController extends Controller
         ]);
 
         if (! $this->otp->verify($user, $request->otp)) {
+            app(Telemetry::class)->event('auth.login.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_otp',
+            ]);
+
             throw ValidationException::withMessages([
                 'otp' => 'The code is invalid or has expired. Request a new one below.',
             ]);
@@ -58,6 +69,8 @@ class LoginOtpController extends Controller
 
         Auth::login($user, $remember);
         $request->session()->regenerate();
+
+        app(Telemetry::class)->event('auth.login.completed', ['app.outcome' => 'success']);
 
         if (! $user->hasVerifiedEmail()) {
             $user->markEmailAsVerified();
@@ -78,6 +91,11 @@ class LoginOtpController extends Controller
         $wait = $this->otp->retryAfter($user);
 
         if ($wait > 0) {
+            app(Telemetry::class)->event('auth.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'rate_limited',
+            ]);
+
             throw ValidationException::withMessages([
                 'otp' => "Please wait {$wait} seconds before requesting another code.",
             ]);

@@ -4,13 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\CardInfo;
 use App\Models\SubscriptionPayment;
+use App\Observability\Telemetry;
 use App\Services\ExchangeRateService;
 use App\Services\PakasirService;
 use App\Services\PlanService;
 use App\Services\StripeService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
@@ -54,20 +54,20 @@ class SubscriptionController extends Controller
         $customerId = $subscription->stripe_customer_id;
 
         if (! $customerId) {
-            $customer = $stripe->client()->customers->create([
+            $customer = app(Telemetry::class)->trackIntegration('stripe', 'stripe_customer', fn () => $stripe->client()->customers->create([
                 'email' => $user->email,
                 'name' => $organization->name,
                 'metadata' => ['organization_id' => $organization->id],
-            ]);
+            ]));
 
             $customerId = $customer->id;
             $subscription->update(['stripe_customer_id' => $customerId]);
         }
 
-        $setupIntent = $stripe->client()->setupIntents->create([
+        $setupIntent = app(Telemetry::class)->trackIntegration('stripe', 'stripe_setup_intent', fn () => $stripe->client()->setupIntents->create([
             'customer' => $customerId,
             'payment_method_types' => ['card'],
-        ]);
+        ]));
 
         return response()->json(['clientSecret' => $setupIntent->client_secret]);
     }
@@ -89,9 +89,10 @@ class SubscriptionController extends Controller
         // abort() raises an HttpException, which Laravel never reports, so a
         // missing price id used to surface as a 500 with no log line at all.
         if (! $planConfig['stripe_price_id']) {
-            Log::error('Subscription blocked: no Stripe price configured', [
-                'plan' => $validated['plan'],
-                'env_key' => 'STRIPE_PRICE_PRO',
+            app(Telemetry::class)->event('billing.subscription.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'missing_configuration',
+                'payment.provider' => 'stripe',
             ]);
 
             return back()->withErrors([
@@ -101,26 +102,28 @@ class SubscriptionController extends Controller
 
         $client = $stripe->client();
 
-        $client->paymentMethods->attach($validated['payment_method'], [
-            'customer' => $subscription->stripe_customer_id,
-        ]);
+        [$stripeSubscription, $pm] = app(Telemetry::class)->trackIntegration('stripe', 'stripe_subscription', function () use ($client, $validated, $subscription, $planConfig, $organization): array {
+            $client->paymentMethods->attach($validated['payment_method'], [
+                'customer' => $subscription->stripe_customer_id,
+            ]);
 
-        $client->customers->update($subscription->stripe_customer_id, [
-            'invoice_settings' => [
-                'default_payment_method' => $validated['payment_method'],
-            ],
-        ]);
+            $client->customers->update($subscription->stripe_customer_id, [
+                'invoice_settings' => [
+                    'default_payment_method' => $validated['payment_method'],
+                ],
+            ]);
 
-        $stripeSubscription = $client->subscriptions->create([
-            'customer' => $subscription->stripe_customer_id,
-            'items' => [['price' => $planConfig['stripe_price_id']]],
-            'metadata' => [
-                'organization_id' => $organization->id,
-                'plan' => $validated['plan'],
-            ],
-        ]);
+            $stripeSubscription = $client->subscriptions->create([
+                'customer' => $subscription->stripe_customer_id,
+                'items' => [['price' => $planConfig['stripe_price_id']]],
+                'metadata' => [
+                    'organization_id' => $organization->id,
+                    'plan' => $validated['plan'],
+                ],
+            ]);
 
-        $pm = $client->paymentMethods->retrieve($validated['payment_method']);
+            return [$stripeSubscription, $client->paymentMethods->retrieve($validated['payment_method'])];
+        });
 
         CardInfo::updateOrCreate(
             ['stripe_payment_method_id' => $pm->id],
@@ -161,6 +164,11 @@ class SubscriptionController extends Controller
             'stripe_invoice_id' => $stripeSubscription->latest_invoice,
         ]);
 
+        app(Telemetry::class)->eventAfterCommit('billing.subscription.created', [
+            'app.outcome' => 'success',
+            'payment.provider' => 'stripe',
+        ]);
+
         return redirect()->route('plan.index');
     }
 
@@ -175,13 +183,18 @@ class SubscriptionController extends Controller
         abort_unless($subscription->provider === 'stripe', 400, 'Only Stripe subscriptions can be downgraded.');
 
         if ($subscription->stripe_subscription_id) {
-            $stripe->client()->subscriptions->cancel($subscription->stripe_subscription_id);
+            app(Telemetry::class)->trackIntegration('stripe', 'stripe_cancel_subscription', fn () => $stripe->client()->subscriptions->cancel($subscription->stripe_subscription_id));
         }
 
         $subscription->update([
             'plan' => 'free',
             'status' => 'cancelled',
             'cancelled_at' => now(),
+        ]);
+
+        app(Telemetry::class)->eventAfterCommit('billing.subscription.downgraded', [
+            'app.outcome' => 'success',
+            'payment.provider' => 'stripe',
         ]);
 
         return redirect()->route('plan.index')->with('message', 'Downgraded to Free plan.');
@@ -197,8 +210,10 @@ class SubscriptionController extends Controller
         ]);
 
         if (! $pakasir->isConfigured()) {
-            Log::error('QRIS blocked: Pakasir is not configured', [
-                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            app(Telemetry::class)->event('billing.subscription.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'missing_configuration',
+                'payment.provider' => 'pakasir',
             ]);
 
             return response()->json([
@@ -213,6 +228,12 @@ class SubscriptionController extends Controller
         $rate = app(ExchangeRateService::class)->usdToIdr();
 
         if (! $rate || $rate <= 0) {
+            app(Telemetry::class)->event('billing.subscription.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'provider_unavailable',
+                'payment.provider' => 'pakasir',
+            ]);
+
             return response()->json([
                 'message' => 'The USD/IDR exchange rate is unavailable. Please try again shortly.',
             ], 422);
@@ -236,6 +257,11 @@ class SubscriptionController extends Controller
         ]);
 
         $result = $pakasir->createQris($orderId, $amountIdr);
+
+        app(Telemetry::class)->eventAfterCommit('billing.subscription.created', [
+            'app.outcome' => 'success',
+            'payment.provider' => 'pakasir',
+        ]);
 
         $payload = $result['payment'] ?? [];
 

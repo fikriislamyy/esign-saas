@@ -6,7 +6,6 @@ use App\Models\SubscriptionPayment;
 use App\Models\WalletTopup;
 use App\Observability\Telemetry;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class PakasirFulfillmentService
 {
@@ -43,21 +42,34 @@ class PakasirFulfillmentService
 
     private function fulfillPayment(SubscriptionPayment|WalletTopup $record, bool $sandboxOnly): bool
     {
+        if ($record->status === 'paid') {
+            app(Telemetry::class)->event('payment.fulfillment.skipped', [
+                'app.outcome' => 'skipped',
+                'app.reason' => 'duplicate',
+                'payment.provider' => 'pakasir',
+            ]);
+
+            return true;
+        }
+
         $detail = $this->pakasir->transactionDetail($record->order_id, $this->amountIdr($record));
         $transaction = $detail['transaction'] ?? [];
 
         if (($transaction['status'] ?? null) !== 'completed') {
-            Log::info('Pakasir transaction not completed', [
-                'order_id' => $record->order_id,
-                'status' => $transaction['status'] ?? null,
+            app(Telemetry::class)->event('payment.fulfillment.skipped', [
+                'app.outcome' => 'pending',
+                'app.reason' => 'pending',
+                'payment.provider' => 'pakasir',
             ]);
 
             return false;
         }
 
         if ($sandboxOnly && ($transaction['is_sandbox'] ?? false) !== true) {
-            Log::error('Refused to auto-fulfil a non-sandbox Pakasir transaction', [
-                'order_id' => $record->order_id,
+            app(Telemetry::class)->event('payment.fulfillment.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'sandbox_required',
+                'payment.provider' => 'pakasir',
             ]);
 
             return false;
@@ -78,6 +90,12 @@ class PakasirFulfillmentService
             $payment = SubscriptionPayment::lockForUpdate()->find($payment->id);
 
             if ($payment->status === 'paid') {
+                app(Telemetry::class)->eventAfterCommit('payment.fulfillment.skipped', [
+                    'app.outcome' => 'skipped',
+                    'app.reason' => 'duplicate',
+                    'payment.provider' => 'pakasir',
+                ]);
+
                 return;
             }
 
@@ -90,6 +108,11 @@ class PakasirFulfillmentService
                 'subscribed_at' => now(),
                 'expired_at' => now()->addDays(30),
             ]);
+
+            app(Telemetry::class)->eventAfterCommit('payment.fulfillment.completed', [
+                'app.outcome' => 'success',
+                'payment.provider' => 'pakasir',
+            ]);
         });
     }
 
@@ -99,6 +122,12 @@ class PakasirFulfillmentService
             $topup = WalletTopup::lockForUpdate()->find($topup->id);
 
             if ($topup->status === 'paid') {
+                app(Telemetry::class)->eventAfterCommit('payment.fulfillment.skipped', [
+                    'app.outcome' => 'skipped',
+                    'app.reason' => 'duplicate',
+                    'payment.provider' => 'pakasir',
+                ]);
+
                 return;
             }
 
@@ -116,6 +145,11 @@ class PakasirFulfillmentService
             );
 
             $topup->update(['status' => 'paid', 'paid_at' => now()]);
+
+            app(Telemetry::class)->eventAfterCommit('payment.fulfillment.completed', [
+                'app.outcome' => 'success',
+                'payment.provider' => 'pakasir',
+            ]);
         });
     }
 }

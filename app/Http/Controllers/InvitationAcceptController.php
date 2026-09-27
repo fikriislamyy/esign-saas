@@ -2,8 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\User;
 use App\Models\Invitation;
+use App\Models\User;
+use App\Observability\Telemetry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -18,10 +19,13 @@ class InvitationAcceptController extends Controller
             $token
         )->firstOrFail();
 
-        abort_if(
-            $invitation->accepted_at,
-            404
-        );
+        if ($invitation->accepted_at) {
+            app(Telemetry::class)->event('organization.invitation.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'already_accepted',
+            ]);
+            abort(404);
+        }
 
         return Inertia::render(
             'Invitations/Accept',
@@ -29,8 +33,7 @@ class InvitationAcceptController extends Controller
                 'invitation' => [
                     'email' => $invitation->email,
                     'role' => $invitation->role,
-                    'organization' =>
-                        $invitation->organization->name,
+                    'organization' => $invitation->organization->name,
                     'token' => $token,
                 ],
             ]
@@ -46,10 +49,13 @@ class InvitationAcceptController extends Controller
             $token
         )->firstOrFail();
 
-        abort_if(
-            $invitation->accepted_at,
-            404
-        );
+        if ($invitation->accepted_at) {
+            app(Telemetry::class)->event('organization.invitation.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'already_accepted',
+            ]);
+            abort(404);
+        }
 
         $validated = $request->validate([
             'name' => [
@@ -72,22 +78,17 @@ class InvitationAcceptController extends Controller
         */
 
         $user = User::create([
-            'organization_id' =>
-                $invitation->organization_id,
+            'organization_id' => $invitation->organization_id,
 
-            'role' =>
-                $invitation->role,
+            'role' => $invitation->role,
 
-            'name' =>
-                $validated['name'],
+            'name' => $validated['name'],
 
-            'email' =>
-                $invitation->email,
+            'email' => $invitation->email,
 
-            'password' =>
-                Hash::make(
-                    $validated['password']
-                ),
+            'password' => Hash::make(
+                $validated['password']
+            ),
         ]);
 
         /*
@@ -115,6 +116,8 @@ class InvitationAcceptController extends Controller
         */
 
         Auth::login($user);
+
+        app(Telemetry::class)->eventAfterCommit('organization.invitation.accepted', ['app.outcome' => 'success']);
 
         /*
         |--------------------------------------------------------------------------

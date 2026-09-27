@@ -75,7 +75,7 @@ final class TelemetryFactory
                 ))
                 ->build();
 
-            return new Telemetry($traces, $metrics, $logs);
+            return new Telemetry($traces, $metrics, $logs, (string) ($config['log_level'] ?? 'INFO'));
         } catch (Throwable $error) {
             // Telemetry configuration must never stop checkout, signing, or scheduled work.
             error_log('Observability unavailable: '.get_class($error));

@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Models\Document;
 use App\Observability\Telemetry;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class ExpireDocuments extends Command
@@ -53,11 +52,6 @@ class ExpireDocuments extends Command
 
                         if (! $disk->delete($path)) {
                             $deleteFailures++;
-
-                            Log::warning('Could not delete expired document file', [
-                                'document_id' => $document->id,
-                                'path' => $path,
-                            ]);
                         }
                     }
 
@@ -71,6 +65,14 @@ class ExpireDocuments extends Command
         if ($deleteFailures > 0) {
             $this->warn("Files that could not be deleted: {$deleteFailures} (see log)");
         }
+
+        app(Telemetry::class)->event('documents.expiry.summary', [
+            'app.outcome' => $deleteFailures > 0 ? 'partial' : 'success',
+            'app.processed_count' => $expired,
+            'app.skipped_count' => 0,
+            'app.failed_count' => $deleteFailures,
+            'app.dry_run' => $dryRun,
+        ], $deleteFailures > 0 ? 'WARN' : 'INFO');
 
         return self::SUCCESS;
     }

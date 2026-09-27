@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Mail\SignatureRequestMail;
 use App\Models\Document;
 use App\Models\DocumentSigner;
+use App\Observability\Telemetry;
 use App\Services\SigningOtpService;
 use App\Services\SigningPricingService;
 use App\Services\WalletService;
@@ -14,6 +15,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
+use Throwable;
 
 class DocumentController extends Controller
 {
@@ -64,6 +66,11 @@ class DocumentController extends Controller
         $planService = app(\App\Services\PlanService::class);
 
         if (! $planService->canUploadDocument($organization)) {
+            app(Telemetry::class)->event('document.upload.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'plan_limit',
+            ]);
+
             $limits = $planService->limits($organization)['documents'];
 
             return back()->withErrors([
@@ -72,6 +79,11 @@ class DocumentController extends Controller
         }
 
         if (! $planService->canStore($organization, $file->getSize())) {
+            app(Telemetry::class)->event('document.upload.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'storage_limit',
+            ]);
+
             return back()->withErrors([
                 'file' => 'This upload would exceed your plan\'s storage limit.',
             ]);
@@ -79,10 +91,19 @@ class DocumentController extends Controller
 
         $documentDisk = env('DOCUMENTS_DISK', 'documents');
 
-        $path = $file->store(
-            'documents',
-            $documentDisk
-        );
+        try {
+            $path = $file->store(
+                'documents',
+                $documentDisk
+            );
+        } catch (Throwable $error) {
+            app(Telemetry::class)->event('document.upload.failed', [
+                'app.outcome' => 'failure',
+                'app.reason' => 'storage_failure',
+                'error.type' => $error::class,
+            ]);
+            throw $error;
+        }
 
         Document::create([
             'organization_id' => $request->user()->organization_id,
@@ -101,6 +122,8 @@ class DocumentController extends Controller
 
             'status' => 'draft',
         ]);
+
+        app(Telemetry::class)->eventAfterCommit('document.upload.completed', ['app.outcome' => 'success']);
 
         return back();
     }
@@ -198,6 +221,11 @@ class DocumentController extends Controller
             ->get();
 
         if ($signers->isEmpty()) {
+            app(Telemetry::class)->event('document.send.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'no_signers',
+            ]);
+
             return back()->withErrors([
                 'document' => 'Document has no signers.',
             ]);
@@ -214,6 +242,11 @@ class DocumentController extends Controller
         );
 
         if ($totalSignaturePlots <= 0) {
+            app(Telemetry::class)->event('document.send.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'no_fields',
+            ]);
+
             return back()->withErrors([
                 'document' => 'Document has no signature plots assigned to its signers.',
             ]);
@@ -233,19 +266,12 @@ class DocumentController extends Controller
         $walletBalanceUsdCents = $walletService
             ->getBalance($document->organization);
 
-        \Log::info(
-            'DOCUMENT: wallet balance check before send',
-            [
-                'document_id' => $document->id,
-                'organization_id' => $document->organization_id,
-                'total_signature_plots' => $totalSignaturePlots,
-                'price_per_plot_usd_cents' => $pricingService->pricePerSignaturePlot(),
-                'required_usd_cents' => $requiredUsdCents,
-                'wallet_balance_usd_cents' => $walletBalanceUsdCents,
-            ]
-        );
-
         if ($walletBalanceUsdCents < $requiredUsdCents) {
+            app(Telemetry::class)->event('document.send.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'insufficient_balance',
+            ]);
+
             $requiredUsd = number_format(
                 $requiredUsdCents / 100,
                 2
@@ -311,111 +337,87 @@ class DocumentController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        if ($isSequential) {
+        try {
+            if ($isSequential) {
 
-            $firstSigner = $sequentialSigners->first();
+                $firstSigner = $sequentialSigners->first();
 
-            \Log::info(
-                'DOCUMENT: initial sequential signer selected',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $firstSigner->id,
-                    'name' => $firstSigner->name,
-                    'email' => $firstSigner->email,
-                    'signing_order' => $firstSigner->signing_order,
-                ]
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Generate OTP
-            |--------------------------------------------------------------------------
-            */
-
-            $otp = $this->otpService->generate(
-                $firstSigner
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Send email
-            |--------------------------------------------------------------------------
-            */
-
-            \Log::info(
-                'DOCUMENT: sending initial signing email',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $firstSigner->id,
-                    'email' => $firstSigner->email,
-                    'signing_order' => $firstSigner->signing_order,
-                ]
-            );
-
-            Mail::to($firstSigner->email)
-                ->send(
-                    new SignatureRequestMail(
-                        $firstSigner->load('document'),
-                        $otp
-                    )
-                );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Mark first signer as notified
-            |--------------------------------------------------------------------------
-            */
-
-            $firstSigner->update([
-                'status' => 'email_sent',
-            ]);
-
-            \Log::info(
-                'DOCUMENT: initial signing email sent',
-                [
-                    'document_id' => $document->id,
-                    'signer_id' => $firstSigner->id,
-                    'email' => $firstSigner->email,
-                ]
-            );
-
-        } else {
-
-            /*
-            |--------------------------------------------------------------------------
-            | Parallel Signing
-            |--------------------------------------------------------------------------
-            */
-
-            foreach ($signers as $signer) {
+                /*
+                |--------------------------------------------------------------------------
+                | Generate OTP
+                |--------------------------------------------------------------------------
+                */
 
                 $otp = $this->otpService->generate(
-                    $signer
+                    $firstSigner
                 );
 
-                \Log::info(
-                    'DOCUMENT: sending parallel signing email',
-                    [
-                        'document_id' => $document->id,
-                        'signer_id' => $signer->id,
-                        'email' => $signer->email,
-                        'signing_order' => $signer->signing_order,
-                    ]
-                );
+                /*
+                |--------------------------------------------------------------------------
+                | Send email
+                |--------------------------------------------------------------------------
+                */
 
-                Mail::to($signer->email)
+                app(Telemetry::class)->submitMail('signature_request', fn () => Mail::to($firstSigner->email)
                     ->send(
                         new SignatureRequestMail(
-                            $signer->load('document'),
+                            $firstSigner->load('document'),
                             $otp
                         )
-                    );
+                    ));
+                app(Telemetry::class)->event('signing.otp.sent', ['app.outcome' => 'success']);
 
-                $signer->update([
+                /*
+                |--------------------------------------------------------------------------
+                | Mark first signer as notified
+                |--------------------------------------------------------------------------
+                */
+
+                $firstSigner->update([
                     'status' => 'email_sent',
                 ]);
+
+            } else {
+
+                /*
+                |--------------------------------------------------------------------------
+                | Parallel Signing
+                |--------------------------------------------------------------------------
+                */
+
+                foreach ($signers as $signer) {
+
+                    $otp = $this->otpService->generate(
+                        $signer
+                    );
+
+                    app(Telemetry::class)->submitMail('signature_request', fn () => Mail::to($signer->email)
+                        ->send(
+                            new SignatureRequestMail(
+                                $signer->load('document'),
+                                $otp
+                            )
+                        ));
+                    app(Telemetry::class)->event('signing.otp.sent', ['app.outcome' => 'success']);
+
+                    $signer->update([
+                        'status' => 'email_sent',
+                    ]);
+                }
             }
+        } catch (Throwable $error) {
+            app(Telemetry::class)->event('document.send.failed', [
+                'app.outcome' => 'partial',
+                'app.reason' => 'mail_failure',
+                'error.type' => $error::class,
+            ]);
+            throw $error;
         }
+
+        app(Telemetry::class)->eventAfterCommit('document.send.completed', [
+            'app.outcome' => 'success',
+            'app.failed_count' => 0,
+        ]);
 
         return back()->with(
             'success',
@@ -557,6 +559,8 @@ class DocumentController extends Controller
             422,
             'Document is no longer in draft status.'
         );
+
+        app(Telemetry::class)->event('document.prepare.completed', ['app.outcome' => 'success']);
 
         return response()->json([
             'success' => true,

@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Observability\Telemetry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
-use Illuminate\Validation\Rule;
 
 class OrganizationSettingsController extends Controller
 {
@@ -21,9 +22,9 @@ class OrganizationSettingsController extends Controller
     {
         $request->validate([
             'name' => ['required', 'string', 'max:255', Rule::unique('organizations', 'name')
-            ->ignore(
-                $request->user()->organization->id
-            ),],
+                ->ignore(
+                    $request->user()->organization->id
+                ), ],
             'logo' => ['nullable', 'image', 'max:2048'],
         ]);
 
@@ -50,6 +51,8 @@ class OrganizationSettingsController extends Controller
         }
 
         $organization->update($data);
+
+        app(Telemetry::class)->eventAfterCommit('organization.settings.updated', ['app.outcome' => 'success']);
 
         return back()->with(
             'success',

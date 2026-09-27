@@ -2,14 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\WalletTopup;
+use App\Observability\Telemetry;
 use App\Services\ExchangeRateService;
 use App\Services\StripeService;
 use App\Services\WalletService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Inertia\Inertia;
-use Illuminate\Support\Facades\Log;
 
 class BillingTopupController extends Controller
 {
@@ -21,12 +18,6 @@ class BillingTopupController extends Controller
 
     public function store(Request $request)
     {
-        Log::info('BillingTopupController@store START', [
-            'user_id' => $request->user()?->id,
-            'email' => $request->user()?->email,
-            'ip' => $request->ip(),
-        ]);
-
         $user = $request->user();
 
         abort_unless(
@@ -55,11 +46,6 @@ class BillingTopupController extends Controller
             ],
         ]);
 
-        Log::info('BillingTopupController@store VALIDATED', [
-            'currency' => $validated['currency'],
-            'amount' => $validated['amount'],
-        ]);
-
         $organization = $user->organization;
 
         abort_unless($organization, 403);
@@ -69,8 +55,10 @@ class BillingTopupController extends Controller
         // Checked before the pending top-up row is created, so a misconfigured
         // gateway does not leave orphaned rows behind.
         if ($isQris && ! app(\App\Services\PakasirService::class)->isConfigured()) {
-            Log::error('QRIS blocked: Pakasir is not configured', [
-                'env_keys' => ['PAKASIR_PROJECT', 'PAKASIR_API_KEY'],
+            app(Telemetry::class)->event('billing.topup.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'provider_unavailable',
+                'payment.provider' => 'pakasir',
             ]);
 
             return response()->json([
@@ -100,19 +88,14 @@ class BillingTopupController extends Controller
                 \App\Services\ExchangeRateService::class
             )->usdToIdr();
 
-            if (!$exchangeRate || $exchangeRate <= 0) {
-                Log::error(
-                    'BillingTopupController@store FX RATE FAILED',
-                    [
-                        'currency' => $currency,
-                        'source_amount' => $sourceAmount,
-                        'exchange_rate' => $exchangeRate,
-                    ]
-                );
+            if (! $exchangeRate || $exchangeRate <= 0) {
+                app(Telemetry::class)->event('billing.topup.rejected', [
+                    'app.outcome' => 'rejected',
+                    'app.reason' => 'provider_unavailable',
+                ]);
 
                 return back()->withErrors([
-                    'amount' =>
-                        'The current USD/IDR exchange rate is unavailable.',
+                    'amount' => 'The current USD/IDR exchange rate is unavailable.',
                 ]);
             }
 
@@ -125,25 +108,14 @@ class BillingTopupController extends Controller
             $stripeAmount = (int) $sourceAmount;
         }
 
-        Log::info('BillingTopupController@store AMOUNTS CALCULATED', [
-            'currency' => $currency,
-            'source_amount' => $sourceAmount,
-            'exchange_rate' => $exchangeRate,
-            'wallet_amount_usd_cents' => $walletAmountUsdCents,
-            'stripe_amount' => $stripeAmount,
-        ]);
-
         if ($walletAmountUsdCents <= 0) {
-            Log::warning(
-                'BillingTopupController@store WALLET AMOUNT <= 0',
-                [
-                    'wallet_amount_usd_cents' => $walletAmountUsdCents,
-                ]
-            );
+            app(Telemetry::class)->event('billing.topup.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_amount',
+            ]);
 
             return back()->withErrors([
-                'amount' =>
-                    'The top-up amount is too small to add funds to the wallet.',
+                'amount' => 'The top-up amount is too small to add funds to the wallet.',
             ]);
         }
 
@@ -160,12 +132,6 @@ class BillingTopupController extends Controller
         $wallet = $walletService->getOrCreateWallet(
             $organization
         );
-
-        Log::info('BillingTopupController@store WALLET READY', [
-            'wallet_id' => $wallet->id,
-            'organization_id' => $organization->id,
-            'balance_usd_cents' => $wallet->balance_usd_cents,
-        ]);
 
         /*
         |--------------------------------------------------------------------------
@@ -197,17 +163,6 @@ class BillingTopupController extends Controller
             ]);
         });
 
-        Log::info('BillingTopupController@store TOPUP CREATED', [
-            'topup_id' => $topup->id,
-            'wallet_id' => $topup->wallet_id,
-            'organization_id' => $topup->organization_id,
-            'currency' => $topup->currency,
-            'amount' => $topup->amount,
-            'exchange_rate' => $topup->exchange_rate,
-            'wallet_amount_usd_cents' => $topup->wallet_amount_usd_cents,
-            'status' => $topup->status,
-        ]);
-
         if ($isQris) {
             $rate = $this->exchangeRateService->usdToIdr();
 
@@ -232,6 +187,11 @@ class BillingTopupController extends Controller
 
             $result = app(\App\Services\PakasirService::class)->createQris($orderId, $amountIdr);
 
+            app(Telemetry::class)->eventAfterCommit('billing.topup.created', [
+                'app.outcome' => 'success',
+                'payment.provider' => 'pakasir',
+            ]);
+
             $payload = $result['payment'] ?? [];
 
             // The sandbox QR Pakasir returns is a placeholder no wallet can pay, so
@@ -254,65 +214,38 @@ class BillingTopupController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        try {
-            $stripe = app(
-                \App\Services\StripeService::class
-            )->client();
+        $stripe = app(
+            \App\Services\StripeService::class
+        )->client();
 
-            Log::info(
-                'BillingTopupController@store CREATING STRIPE SESSION',
-                [
-                    'topup_id' => $topup->id,
-                    'currency' => strtolower($currency),
-                    'stripe_amount' => $stripeAmount,
-                    'customer_email' => $user->email,
-                ]
-            );
+        $intent = app(Telemetry::class)->trackIntegration('stripe', 'stripe_payment_intent', fn () => $stripe->paymentIntents->create([
+            'amount' => $stripeAmount,
+            'currency' => strtolower($currency),
 
-            $intent = $stripe->paymentIntents->create([
-                'amount' => $stripeAmount,
-                'currency' => strtolower($currency),
+            // Card only for now. QRIS will add its own method later.
+            'payment_method_types' => ['card'],
 
-                // Card only for now. QRIS will add its own method later.
-                'payment_method_types' => ['card'],
+            // The webhook finds the top-up by this. Without it the payment
+            // succeeds and the wallet never moves (trap 1).
+            'metadata' => [
+                'wallet_topup_id' => (string) $topup->id,
+                'organization_id' => (string) $organization->id,
+            ],
+        ]));
 
-                // The webhook finds the top-up by this. Without it the payment
-                // succeeds and the wallet never moves (trap 1).
-                'metadata' => [
-                    'wallet_topup_id' => (string) $topup->id,
-                    'organization_id' => (string) $organization->id,
-                ],
-            ]);
+        $topup->update([
+            'stripe_payment_intent_id' => $intent->id,
+        ]);
 
-            $topup->update([
-                'stripe_payment_intent_id' => $intent->id,
-            ]);
+        app(Telemetry::class)->eventAfterCommit('billing.topup.created', [
+            'app.outcome' => 'success',
+            'payment.provider' => 'stripe',
+        ]);
 
-            Log::info('BillingTopupController@store PAYMENT INTENT CREATED', [
-                'topup_id' => $topup->id,
-                'payment_intent' => $intent->id,
-                'amount' => $stripeAmount,
-                'currency' => $currency,
-            ]);
-
-            // JSON, not a redirect — the browser stays on our page.
-            return response()->json([
-                'clientSecret' => $intent->client_secret,
-                'topupId' => $topup->id,
-            ]);
-        } catch (\Throwable $e) {
-            Log::error(
-                'BillingTopupController@store STRIPE ERROR',
-                [
-                    'topup_id' => $topup->id ?? null,
-                    'message' => $e->getMessage(),
-                    'exception' => get_class($e),
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine(),
-                ]
-            );
-
-            throw $e;
-        }
+        // JSON, not a redirect — the browser stays on our page.
+        return response()->json([
+            'clientSecret' => $intent->client_secret,
+            'topupId' => $topup->id,
+        ]);
     }
 }

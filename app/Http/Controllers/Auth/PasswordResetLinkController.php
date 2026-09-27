@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Observability\Telemetry;
 use App\Rules\Recaptcha;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -41,6 +42,8 @@ class PasswordResetLinkController extends Controller
         $status = Password::sendResetLink(
             $request->only('email')
         );
+
+        app(Telemetry::class)->event('auth.password.reset_requested', ['app.outcome' => 'success']);
 
         if ($status == Password::RESET_LINK_SENT) {
             return back()->with('status', __($status));

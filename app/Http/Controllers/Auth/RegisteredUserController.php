@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
 use App\Models\Organization;
-use App\Providers\RouteServiceProvider;
+use App\Models\User;
+use App\Observability\Telemetry;
 use App\Rules\Recaptcha;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
@@ -93,6 +93,8 @@ class RegisteredUserController extends Controller
         event(new Registered($user));
 
         Auth::login($user);
+
+        app(Telemetry::class)->eventAfterCommit('auth.registration.completed', ['app.outcome' => 'success']);
 
         return redirect()->route('verification.notice');
     }

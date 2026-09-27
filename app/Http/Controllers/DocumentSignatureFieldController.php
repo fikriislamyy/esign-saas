@@ -3,8 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Document;
-use Illuminate\Http\Request;
 use App\Models\DocumentSignatureField;
+use App\Observability\Telemetry;
+use Illuminate\Http\Request;
 
 class DocumentSignatureFieldController extends Controller
 {
@@ -57,6 +58,11 @@ class DocumentSignatureFieldController extends Controller
 
         $field->load('signer');
 
+        app(Telemetry::class)->eventAfterCommit('document.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'added',
+        ]);
+
         return response()->json([
             'success' => true,
             'field' => $field,
@@ -74,6 +80,11 @@ class DocumentSignatureFieldController extends Controller
             'height' => $request->height,
         ]);
 
+        app(Telemetry::class)->eventAfterCommit('document.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'updated',
+        ]);
+
         return response()->json([
             'success' => true,
         ]);
@@ -83,6 +94,11 @@ class DocumentSignatureFieldController extends Controller
         DocumentSignatureField $signatureField
     ) {
         $signatureField->delete();
+
+        app(Telemetry::class)->eventAfterCommit('document.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'removed',
+        ]);
 
         return response()->json([
             'success' => true,
@@ -97,6 +113,11 @@ class DocumentSignatureFieldController extends Controller
         );
 
         $document->signatureFields()->delete();
+
+        app(Telemetry::class)->eventAfterCommit('document.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'removed',
+        ]);
 
         return response()->json([
             'success' => true,

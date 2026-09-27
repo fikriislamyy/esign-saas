@@ -4,13 +4,12 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
-use App\Providers\RouteServiceProvider;
+use App\Observability\Telemetry;
 use App\Services\LoginOtpService;
 use App\Services\RecaptchaService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -23,8 +22,13 @@ class AuthenticatedSessionController extends Controller
     public function create(): Response
     {
         if (! app(RecaptchaService::class)->isConfigured() && app()->isProduction()) {
-            Log::error('reCAPTCHA is not configured; auth forms are unprotected', [
-                'env_keys' => ['RECAPTCHA_SITE_KEY', 'RECAPTCHA_SECRET_KEY'],
+            app(Telemetry::class)->event('integration.request.failed', [
+                'app.operation' => 'verify_recaptcha',
+                'app.outcome' => 'failure',
+                'app.reason' => 'not_configured',
+                'integration.provider' => 'recaptcha',
+                'app.duration_ms' => 0,
+                'error.type' => \RuntimeException::class,
             ]);
         }
 
@@ -63,6 +67,8 @@ class AuthenticatedSessionController extends Controller
         $request->session()->invalidate();
 
         $request->session()->regenerateToken();
+
+        app(Telemetry::class)->event('auth.logout.completed', ['app.outcome' => 'success']);
 
         return redirect('/');
     }

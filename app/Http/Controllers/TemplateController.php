@@ -3,9 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Template;
+use App\Observability\Telemetry;
 use App\Services\PlanService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -50,6 +50,11 @@ class TemplateController extends Controller
         $organization = $request->user()->organization;
 
         if (! app(PlanService::class)->canAddTemplate($organization)) {
+            app(Telemetry::class)->event('template.upload.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'plan_limit',
+            ]);
+
             return back()->withErrors([
                 'file' => 'You have reached the limit of 5 templates. Delete one to upload another.',
             ]);
@@ -66,6 +71,8 @@ class TemplateController extends Controller
             'file_size' => $file->getSize(),
             'mime_type' => $file->getMimeType(),
         ]);
+
+        app(Telemetry::class)->eventAfterCommit('template.upload.completed', ['app.outcome' => 'success']);
 
         return back();
     }
@@ -107,7 +114,7 @@ class TemplateController extends Controller
 
         return Storage::disk(env('DOCUMENTS_DISK', 'documents'))->response(
             $template->file_path,
-            $template->name . '.pdf',
+            $template->name.'.pdf',
             ['Content-Disposition' => 'inline']
         );
     }
@@ -138,10 +145,12 @@ class TemplateController extends Controller
         $template->delete();
 
         if (! Storage::disk(env('DOCUMENTS_DISK', 'documents'))->delete($path)) {
-            Log::warning('Template file was not removed from storage', [
-                'template_id' => $template->id,
-                'path' => $path,
+            app(Telemetry::class)->event('template.delete.partial', [
+                'app.outcome' => 'partial',
+                'app.reason' => 'storage_failure',
             ]);
+        } else {
+            app(Telemetry::class)->eventAfterCommit('template.delete.completed', ['app.outcome' => 'success']);
         }
 
         return redirect()

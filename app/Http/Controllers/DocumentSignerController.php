@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Document;
 use App\Models\DocumentSigner;
 use App\Models\User;
+use App\Observability\Telemetry;
 use Illuminate\Http\Request;
 
 class DocumentSignerController extends Controller
@@ -70,6 +71,11 @@ class DocumentSignerController extends Controller
             'signing_order' => $signingOrder,
         ]);
 
+        app(Telemetry::class)->eventAfterCommit('document.signers.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'added',
+        ]);
+
         return response()->json(['signer' => $signer], 201);
     }
 
@@ -113,6 +119,11 @@ class DocumentSignerController extends Controller
             ]);
         }
 
+        app(Telemetry::class)->eventAfterCommit('document.signers.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'reordered',
+        ]);
+
         return back();
     }
 
@@ -148,6 +159,11 @@ class DocumentSignerController extends Controller
                 'signing_order' => $sequential ? $index + 1 : 0,
             ]);
         }
+
+        app(Telemetry::class)->eventAfterCommit('document.signers.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'workflow_changed',
+        ]);
 
         return response()->json([
             'signers' => $signers->fresh(),
@@ -189,6 +205,11 @@ class DocumentSignerController extends Controller
         */
 
         $signer->delete();
+
+        app(Telemetry::class)->eventAfterCommit('document.signers.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'removed',
+        ]);
 
         return back()->with(
             'success',

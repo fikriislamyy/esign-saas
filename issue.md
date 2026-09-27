@@ -1,485 +1,246 @@
-# Add observability with SigNoz and OpenTelemetry
+# Add application logging across necessary modules and make it searchable in SigNoz
 
-## Original request
+## Task
 
-> Please add observability to this project. Use SigNoz and OTel (OpenTelemetry). Use Docker to run these services.
+> Please add logging management to all necessary functions or modules so that the logs can be accessed in SigNoz.
 
-## Purpose of this document
+This is an implementation plan for a junior programmer or a smaller AI model. Complete the steps in order. The checkboxes represent work to implement and verify, not completed functionality. Repository baseline inspected on 2026-09-27.
 
-This is an implementation plan for a junior developer or an AI coding agent. Complete the phases in order. Each phase includes files to change, implementation steps, and a completion check. The checkboxes describe future work; writing this plan does not mean that the feature has been implemented.
+## 1. Expected result and scope
 
-Documentation and repository structure were checked on **2026-09-26**. Resolve and record compatible dependency versions in Phase 0 before copying SDK examples. Do not assume that examples from a different Laravel or SigNoz version will work here.
+Operators can use SigNoz to see successful business operations, rejected operations, recovered failures, and unexpected errors in authentication, documents, signing, billing, payments, wallet operations, organization management, templates, external services, mail submission, and scheduled expiry commands.
 
-## 1. Expected outcome
+Each event has a fixed searchable name, consistent severity, safe structured attributes, and trace/span correlation when an active span exists. Application behavior remains the same when logging is disabled or the collector is unavailable.
 
-A developer can start the application and a local SigNoz stack with Docker, perform an application request, and use SigNoz to answer:
+“Necessary functions” means business state changes, important rejection branches, external I/O failures, and command summaries. Getters, calculations, model serialization, page rendering, polling success, and every loop iteration do not need individual business logs. Existing request logs cover ordinary reads. Operational logs are best effort; they are not a durable financial or legal audit ledger.
 
-- Which route was called, how long did it take, and did it fail?
-- Which application log events belong to that request?
-- Are request volume, server errors, or latency increasing?
-- Did document expiry and subscription expiry finish successfully?
-- How long did payment fulfillment take inside its parent request or command?
+This issue extends the existing backend pipeline. Browser logging, SQL/query logging, container log collection, a new logging UI, production deployment, and alert delivery are outside scope.
 
-The application must continue serving requests and running commands when observability is disabled or SigNoz is unavailable.
+## 2. What already exists
 
-### Terms used below
+Read these files before editing them. Do not implement the earlier observability setup again.
 
-| Term | Meaning in this project |
+| File | Current behavior / consequence |
 | --- | --- |
-| Trace | A record of one request or command and its instrumented operations. |
-| Span | One timed operation inside a trace. |
-| Metric | An aggregated measurement, such as request count or duration. |
-| Correlated log | A structured event containing the active trace and span identifiers. |
-| OpenTelemetry SDK | PHP libraries used to create and export telemetry. |
-| OTLP | The protocol used to send OpenTelemetry data. Use HTTP with protobuf encoding here. |
-| Collector / ingester | The service receiving telemetry and forwarding it to SigNoz storage. |
-| SigNoz | The application used to inspect telemetry and build dashboards. |
-| Foundry | SigNoz's current tool for generating its Docker deployment. |
+| `composer.json`, `composer.lock` | Laravel 10, PHP 8.3, and OpenTelemetry packages are already installed. No new logging dependency is expected. |
+| `app/Observability/Telemetry.php` | Exports only `http.request.completed`, `application.exception`, `command.completed`, and `observability.smoke`. Unregistered event names are silently dropped. Severity currently handles INFO, WARN, and ERROR. |
+| `app/Observability/TelemetryAttributes.php` | Allows a small set of HTTP, command, outcome, provider, and exception-class attributes. New keys are dropped unless added. It limits strings but does not currently validate enum values. |
+| `app/Observability/TelemetryFactory.php` | Already builds an OTLP log exporter, resource metadata, bounded batching, and transports with timeouts and no retries. |
+| `app/Providers/ObservabilityServiceProvider.php` | Lazily creates telemetry and shuts it down at application termination. |
+| `app/Http/Middleware/TraceRequest.php` | Owns HTTP request instrumentation. |
+| `app/Exceptions/Handler.php` | Reports exception types through telemetry and preserves JSON/Inertia rendering. |
+| `app/Services/PakasirFulfillmentService.php` | Has a `payment.fulfill` span, but no business outcome event. |
+| `app/Console/Commands/ExpireDocuments.php`, `ExpireSubscriptions.php` | Already use `runCommand()`; individual warnings still use Laravel logs. |
+| `config/logging.php` | Default Laravel stack writes to `single`; `daily` and `stderr` also exist. These logs are not automatically sent to SigNoz. |
+| `config/observability.php`, `.env.observability.example` | Existing opt-in telemetry settings. |
+| `docker-compose.observability.yml`, `docker/php/observability-fpm.conf` | Pass observability configuration into HTTP and CLI runtimes. |
+| `docs/observability.md` | Existing Docker setup, smoke check, privacy rules, troubleshooting, and rollback. |
+| `tests/Unit/Observability/TelemetryTest.php` | In-memory exporters and existing correlation/privacy/failure tests to reuse. |
+| `tests/Feature/Observability/RequestTelemetryTest.php` | Existing request integration tests. |
 
-## 2. Repository facts to preserve
-
-Read these files before implementing their corresponding phases.
-
-| Existing file or component | Current behavior and implementation consequence |
-| --- | --- |
-| `composer.json` | Laravel `^10.10`, PHP `^8.3`, Guzzle `^7.2`; no OTel dependencies yet. |
-| `docker-compose.yml` | Runs `app`, `nginx`, `postgres`, `redis`, `mailpit`, and `scheduler`. Application URL is `http://localhost:8000`. |
-| `docker/php/Dockerfile` | PHP 8.3 FPM image shared by the app and scheduler. |
-| Root `Dockerfile` | Production image uses separate Composer, frontend, and PHP runtime stages. New runtime dependencies must be installed in its vendor stage too. |
-| `docker/render/supervisord.conf` | Production runs PHP FPM, nginx, and the scheduler together. Account for HTTP and CLI service identities. |
-| `app/Http/Kernel.php` | Laravel 10 middleware registration belongs here. |
-| `config/app.php` | Laravel 10 service provider registration belongs here. Do not use Laravel 11's `bootstrap/providers.php`. |
-| `app/Exceptions/Handler.php` | Already handles JSON and Inertia responses. Preserve its rendering behavior. |
-| `config/logging.php` | Existing application logs go through Laravel channels. Keep them working. |
-| `app/Console/Kernel.php` | Schedules `documents:expire` and `subscriptions:expire`. |
-| `app/Services/PakasirFulfillmentService.php` | Contains payment fulfillment and provider interaction suitable for a child span. |
-| `app/Services/LoginOtpService.php` | Handles sensitive OTP data; do not capture its inputs or Redis keys. |
-| `tests/Unit` and `tests/Feature` | Existing PHP tests. Follow their fixtures and mocking conventions. |
-
-At planning time, `.env.example` is absent from this checkout. Create a dedicated `.env.observability.example`; do not overwrite `.env` or reconstruct a full application environment from secrets.
+Important gaps: business events are missing; legacy logs sometimes contain identifiers, paths, provider data, and exception messages; recovered errors may never become an HTTP 500; `recordExceptionType()` currently skips errors without a valid span; nested reporting can emit the same exception more than once.
 
 ## 3. Implementation decisions
 
-These decisions keep the first implementation bounded and reproducible.
+1. Use `Telemetry::event()` as the common business logging entry point. Extend its event catalog and validation. Keep the existing OTLP exporter and lifecycle.
+2. Do not forward all Laravel `Log::*` messages or tail `laravel.log` into SigNoz. Migrate relevant application calls explicitly, using fixed event names and reviewed attributes.
+3. Preserve Laravel's local exception reporting. For migrated business logs, replace verbose debug calls with structured events; retain a local equivalent only where existing operational needs require it, using the same sanitized attributes.
+4. Centralize event names, allowed attributes, and default severities in a proposed `app/Observability/LogEventCatalog.php`. Keep the existing four events supported. Unknown names must fail closed: drop them without affecting application behavior; tests must detect unregistered call sites.
+5. Default business outcomes to INFO, expected abnormal rejection/recovery to WARN, and unexpected operation failures to ERROR. Normal pending payments, duplicate webhook deliveries, and intentionally ignored webhook types are INFO. Do not classify every HTTP 4xx or routine validation error as an application ERROR.
+6. Add `OBSERVABILITY_LOG_LEVEL` with default `INFO`, accepting `INFO`, `WARN`, and `ERROR`. Normalize case and fall back to INFO for invalid values. This controls exported logs independently of Laravel `LOG_LEVEL` and trace sampling. Do not add DEBUG events in this issue.
+7. Export logs even when the current trace is unsampled. Events outside a span still export, with no fabricated trace/span identifiers. Keep business identifiers out of metric dimensions.
+8. Log committed state changes only after the outermost successful database commit. Use Laravel's transaction callback mechanism after verifying its installed implementation; execute immediately when no transaction is active. Capture safe scalar attributes and the originating OTel context when registering a deferred callback, reactivate that context during emission, and always detach it. Rollbacks must discard success events. Do not flush or perform exporter network I/O inside a transaction.
 
-1. Use the **PHP OTel SDK with explicit instrumentation** in Laravel middleware and selected commands/services. No automatic instrumentation package or PECL OTel extension is needed for this approach. Automatic PHP instrumentation has additional extension requirements; it is a separate future choice. [PHP automatic instrumentation](https://opentelemetry.io/docs/zero-code/php/auto/)
-2. Implement **traces, metrics, and curated application logs**. Forward only events defined in this plan; arbitrary existing log messages can contain signing URLs or other secrets.
-3. Send all three signals directly to **SigNoz's bundled OTel ingester** over an internal Docker network. A second generic collector is unnecessary for this first implementation.
-4. Run SigNoz in its own Compose project, with its own storage volumes. Keep the application's database separate from SigNoz's metadata database.
-5. Add an opt-in application Compose overlay. The existing application Compose command must work without the SigNoz stack.
-6. Default application telemetry to disabled. Enabling the overlay opts local development into telemetry.
-7. Make the PHP integration compatible with the production image, but do not deploy a production SigNoz server as part of this issue.
+## 4. Event schema and privacy contract
 
-```mermaid
-flowchart LR
-    Browser --> Nginx[nginx :8000]
-    Nginx --> App[Laravel / PHP FPM]
-    Scheduler[Laravel expiry commands] --> SDK[PHP OpenTelemetry SDK]
-    App --> SDK
-    SDK -->|OTLP HTTP :4318| Ingester[SigNoz OTel ingester]
-    Ingester --> Store[SigNoz telemetry storage]
-    UI[SigNoz UI :8080] --> Store
-```
+Use the fixed event name for both OTel event name and log body, matching the current implementation. Resource metadata already contains service name, version, namespace, and environment. The SDK supplies timestamp and active trace/span context; do not copy client-supplied IDs into trusted fields.
 
-### Included in this issue
-
-- Laravel request spans, including failures rendered into HTTP responses.
-- Request count and duration metrics independent of trace sampling.
-- Correlated, privacy-filtered request, command, and error events.
-- Spans and metrics for both existing expiry commands.
-- One child span around Pakasir fulfillment.
-- Docker setup, a dashboard, a local smoke command, tests, and operating instructions.
-
-### Follow-up work
-
-Browser instrumentation, automatic SQL/Redis instrumentation, all outbound HTTP calls, host/container metrics, queue worker instrumentation, production hosting, and external alert delivery are outside this first implementation. There is no queue worker service in the current Compose file. Static assets served directly by nginx will not appear as Laravel request spans.
-
-## 4. Proposed files
-
-Keep responsibilities small. Equivalent names are acceptable if the final runbook uses the actual names.
-
-| File | Action / responsibility |
+| Attribute | Allowed values / type |
 | --- | --- |
-| `docker/observability/signoz/casting.yaml` | Add: Foundry configuration, pinned images, networking and port patches. |
-| `docker/observability/signoz/casting.yaml.lock` | Add: reviewed Foundry lock file, if generated by the selected release. |
-| `docker/observability/versions.md` | Add: exact versions, image digests, compatibility notes, and upstream references. |
-| `docker-compose.observability.yml` | Add: app/scheduler telemetry configuration and shared network. |
-| `.env.observability.example` | Add: nonsecret configuration examples. |
-| `.gitignore` | Update: ignore generated Foundry `pours/` and local credentials. |
-| `composer.json`, `composer.lock` | Update: compatible OTel runtime dependencies. |
-| `config/observability.php` | Add: application telemetry settings. |
-| `app/Providers/ObservabilityServiceProvider.php` | Add: lazy service registration and lifecycle hooks. |
-| `config/app.php` | Update: register that provider. |
-| `app/Observability/Telemetry.php` | Add: small application-facing API for spans, events, measurements, flush, and shutdown. |
-| `app/Observability/TelemetryFactory.php` | Add: SDK providers, transports, resources, and processors. |
-| `app/Observability/TelemetryAttributes.php` | Add: event and attribute allowlists and normalization. |
-| `app/Http/Middleware/TraceRequest.php` | Add: one server span per Laravel request. |
-| `app/Http/Kernel.php` | Update: register middleware near the start of the global stack. |
-| `app/Exceptions/Handler.php` | Update only if needed: record a sanitized reportable exception event. |
-| Existing expiry command classes | Update: wrap command execution without changing business behavior. |
-| `app/Services/PakasirFulfillmentService.php` | Update: wrap fulfillment in a child span. |
-| `app/Console/Commands/ObservabilitySmoke.php` | Add: local/testing-only command emitting synthetic telemetry. |
-| `tests/Unit/Observability/` | Add: configuration, privacy, lifecycle, and disabled-mode tests. |
-| `tests/Feature/Observability/` | Add: request, command, and service integration tests. |
-| `docs/observability.md` | Add: setup, queries, troubleshooting, rollback, and production considerations. |
-| `docs/observability/dashboard.json` | Add: dashboard exported from the chosen SigNoz version. |
-| `README.md` | Update: short link to the observability runbook. |
+| `app.module` | Fixed enum: `auth`, `document`, `signing`, `billing`, `payment`, `wallet`, `organization`, `template`, `integration`, `mail`, `scheduler`. |
+| `app.operation` | Fixed operation token registered for that event, such as `upload`, `verify_otp`, `fulfill`, or `delete`. Never a request value. |
+| `app.outcome` | `success`, `failure`, `rejected`, `skipped`, `pending`, or `partial`. |
+| `app.reason` | Per-event fixed enum, for example `invalid_otp`, `rate_limited`, `insufficient_balance`, `duplicate`, `amount_mismatch`, `provider_unavailable`, `storage_failure`. |
+| `payment.provider` | `stripe` or `pakasir`. |
+| `integration.provider` | Fixed configured labels such as `stripe`, `pakasir`, `currencyfreaks`, `recaptcha`, `mail`, or `storage`; never a URL. |
+| `error.type` | Exception class only, passed from a caught Throwable. No exception message or stack. |
+| `app.duration_ms` | Optional finite, nonnegative numeric elapsed time for external operations; calculate with `hrtime(true)`. |
+| `app.processed_count`, `app.skipped_count`, `app.failed_count` | Nonnegative integer summary counts; define what each counts per command. |
+| `app.dry_run` | Boolean for command summaries. |
+| Existing HTTP / command keys | Preserve their current behavior and filtering. |
 
-## Phase 0 — Establish compatible versions
+Each event accepts only its own documented subset of attributes. Reject arrays, objects, unknown keys, invalid enum values, and nonfinite numbers. Limit string lengths. Retain existing generic filtering for spans/metrics; use a separate event-specific filter so logging additions do not unintentionally broaden trace and metric attributes.
 
-**Goal:** avoid building the integration against incompatible examples or moving image tags.
+Never include passwords, OTPs, signing/invitation/reset tokens, authorization or cookie headers, webhook signatures, request/response bodies, raw URLs or query strings, email addresses, names, IP addresses, document contents or paths, signatures, payment/card details, amounts, wallet balances, external customer/order IDs, SQL, Redis keys, or arbitrary exception messages. This first implementation also omits internal user, organization, and document IDs; investigate individual operations through trace IDs. Do not serialize models or spread `$request->all()` into context. Truncation is not redaction.
 
-1. Inspect the files listed in section 2 and check the working tree. Preserve unrelated changes.
-2. Confirm Docker Engine and Docker Compose v2 are available on the intended development host.
-3. Read the current official SigNoz Docker installation instructions. The documentation reviewed for this plan uses Foundry and marks the old bundled `deploy/docker` installation as deprecated. Allow at least the documented 4 GB for SigNoz, plus memory for this application. For Windows/WSL, check the documented ClickHouse Keeper compatibility caveat before choosing the Docker engine. [SigNoz Docker installation](https://signoz.io/docs/install/docker/)
-4. Select a stable Foundry release and record its exact version and installation/checksum instructions. Use the compatible SigNoz component set generated by that release as the starting point.
-5. Record exact image tags or digests for every generated SigNoz service. Do not independently upgrade ClickHouse or Keeper beyond the supported set.
-6. Resolve stable PHP packages compatible with PHP 8.3 and the existing lock file:
-   - `open-telemetry/api`
-   - `open-telemetry/sdk`
-   - `open-telemetry/exporter-otlp`
-   - `php-http/guzzle7-adapter`
-7. Check that protobuf encoding is available through the resolved dependencies. HTTP/protobuf does not require gRPC. The official exporter documentation describes the exporter and HTTP-client requirements. [PHP exporters](https://opentelemetry.io/docs/languages/php/exporters/)
-8. Save the results in `docker/observability/versions.md`. Include the exact SDK APIs used for log export, metric temporality, timeouts, and flushing. Commit `composer.lock` with the implementation.
+## 5. Required coverage checklist
 
-Suggested dependency installation command, after checking compatibility:
+Create `docs/observability/log-events.md` during implementation. Expand each event family below into exact names and record its owner method, severity, permitted attributes, reasons, and test. Family notation is planning shorthand, not an event name to emit. Give every row a final covered/not-applicable status with a reason.
 
-```bash
-docker compose exec app composer require open-telemetry/api open-telemetry/sdk open-telemetry/exporter-otlp php-http/guzzle7-adapter
-```
-
-Do not add `--ignore-platform-reqs`, development stability overrides, or unrelated dependency upgrades to make installation pass. If a package requires a major Laravel/PHP upgrade, find a compatible stable version first.
-
-**Done when:** the version document has concrete versions, runtime dependencies resolve in PHP 8.3, and there are no `latest` tags in the new observability deployment. Existing application image tags are outside this issue.
-
-## Phase 1 — Run SigNoz with Docker
-
-**Goal:** a reproducible, isolated SigNoz stack reachable at `http://localhost:8080`.
-
-1. Create `docker/observability/signoz/` and a Foundry casting file using the official Compose example. Start from:
-
-   ```yaml
-   apiVersion: v1alpha1
-   kind: Installation
-   metadata:
-     name: esign-observability
-   spec:
-     deployment:
-       flavor: compose
-       mode: docker
-   ```
-
-2. Add the version pins selected in Phase 0 using the selected release's component configuration schema. Do not treat the minimal example above as the finished deployment. [Foundry casting reference](https://github.com/SigNoz/foundry/blob/main/docs/reference/casting-file.md)
-3. Generate the deployment once. Inspect the generated Compose file to identify its ingester, UI service, networks, volumes, and published ports. Use those actual service keys in subsequent patches.
-4. Create an external Docker network named `esign-observability`. Add it to the generated Compose configuration through Foundry patches. Attach **only the ingester** to that shared network, retaining its existing internal networks. Give it the network alias `otel-collector`.
-5. Ensure the ingester's OTLP HTTP receiver listens on `0.0.0.0:4318` inside its container. Retain the generated SigNoz pipelines and exporters for all three signals. Do not replace them with a generic collector configuration.
-6. Keep telemetry storage and metadata services internal. Remove unnecessary host port publications, including OTLP ports, and bind the UI to `127.0.0.1:8080`. Leave the optional MCP service disabled because its port can conflict with the application's port 8000.
-7. Preserve named storage volumes. Make all required deployment changes in `casting.yaml`; ignore generated `pours/`. Foundry applies `spec.patches` to generated files, and patch paths must match the selected version's output. [Foundry patches](https://github.com/SigNoz/foundry/blob/main/docs/concepts/patches.md)
-8. Review generated and lock files for credentials before committing anything. Put local credentials in ignored configuration where the selected release supports it. Document first-run account creation.
-9. Start the generated Compose project with a fixed project name, `esign-observability`, and confirm all required services become healthy.
-
-Command sequence to document, run from the repository root except for the indicated directory change:
-
-```bash
-docker network create esign-observability
-cd docker/observability/signoz
-foundryctl gauge -f casting.yaml
-foundryctl forge -f casting.yaml
-docker compose -p esign-observability -f pours/deployment/compose.yaml config --quiet
-docker compose -p esign-observability -f pours/deployment/compose.yaml up -d
-docker compose -p esign-observability -f pours/deployment/compose.yaml ps
-```
-
-If the external network already exists, inspect and reuse it. The final runbook must identify the actual ingester service name and how to inspect its logs.
-
-**Done when:** the UI loads, required services are healthy, storage survives a restart, and the ingester has the `otel-collector` alias on `esign-observability`. Application port 8000 remains available.
-
-## Phase 2 — Add opt-in application configuration
-
-**Goal:** enable telemetry without making SigNoz a dependency of application startup.
-
-1. Add `docker-compose.observability.yml`.
-2. Attach both `app` and `scheduler` to their existing `default` network and external `esign-observability` network. Keeping `default` is necessary for database and Redis access.
-3. Set environment variables for both services. Configure `esign-api` as the HTTP service name and `esign-scheduler` as the CLI service name. Choose between these configured values at runtime, so a shared Laravel configuration cache does not give HTTP and CLI the same identity.
-4. Do not add a `depends_on` relationship from application services to SigNoz. A stopped collector must not prevent application startup.
-5. Add `config/observability.php`. Access environment values here and use `config()` throughout application code so Laravel configuration caching works.
-6. Add `.env.observability.example` with these documented values:
-
-   ```dotenv
-   OBSERVABILITY_ENABLED=false
-   OTEL_SERVICE_NAME=esign-api
-   OBSERVABILITY_CONSOLE_SERVICE_NAME=esign-scheduler
-   OTEL_SERVICE_VERSION=local
-   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-   OTEL_TRACES_SAMPLER_ARG=1.0
-   OBSERVABILITY_EXPORT_TIMEOUT_MS=200
-   ```
-
-7. Make the overlay set `OBSERVABILITY_ENABLED` to true by default when explicitly selected, while allowing an explicit false override. Keep the application configuration default false.
-8. Define `deployment.environment.name` from `config('app.env')`, and `service.namespace` as `esign-saas`. Supply `service.version` from release configuration; do not execute Git on every request.
-9. Use a parent-based trace sampler with the configured ratio for locally created roots. Validate that the ratio is within 0–1. Start at 1.0 locally. Metrics must still record when traces are not sampled.
-10. Treat the endpoint as a base URL and construct exactly one `/v1/traces`, `/v1/metrics`, or `/v1/logs` suffix. `localhost` inside `app` refers to the app container, not SigNoz.
-11. Check that PHP FPM sees the intended container configuration. If its pool clears required variables, explicitly pass those variables in an FPM pool configuration. Check CLI and FPM separately.
-12. In the factory, select the configured console service name when Laravel is running in the console, and the configured `OTEL_SERVICE_NAME` otherwise. Make this selection after loading configuration, not while generating the configuration cache. This also covers the shared production supervisor image. Do not hard-code a local Docker endpoint into that image.
-
-The sample environment file is documentation. Do not automatically replace the developer's `.env`. Document whether a variable is read by Compose interpolation or passed into the container; these are different operations.
-
-Commands from the repository root:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.observability.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
-```
-
-**Done when:** application networking still works, service identities differ, and the base Compose setup remains usable without creating the observability network.
-
-## Phase 3 — Build the PHP telemetry service
-
-**Goal:** a single, testable place owns SDK setup and export lifecycle.
-
-1. Implement `TelemetryFactory` to build a tracer provider, meter provider with an exporting reader, and logger provider. Share the resource attributes from Phase 2. Use OTLP HTTP/protobuf exporters for each signal.
-2. Consult the installed SDK's examples for actual constructor and builder signatures. The PHP documentation covers provider setup, span activation, metrics, and explicit collection. [PHP instrumentation](https://opentelemetry.io/docs/languages/php/instrumentation/)
-3. Implement a small `Telemetry` wrapper with application-facing operations equivalent to:
-   - `startRequest(...)` / `finishRequest(...)`
-   - `withinSpan(name, safeAttributes, callback)`
-   - `runCommand(commandName, callback)`
-   - `event(eventName, safeAttributes, severity)`
-   - `recordExceptionType(Throwable)`
-   - `forceFlush()` and `shutdown()`
-4. Keep SDK-specific types inside the observability classes where practical. Allow providers/exporters and the clock to be substituted in tests. Disabled mode must use no-op behavior and make no network calls.
-5. Register the service lazily in `ObservabilityServiceProvider`, then register that provider in `config/app.php`. Running Composer discovery, migrations, or unrelated Artisan commands must not start telemetry transport unnecessarily.
-6. Use bounded batching for spans and logs. Set a small queue limit, such as 256 records per process, and verify the chosen SDK's behavior. Do not assume PHP FPM has a permanent background exporter thread.
-7. Apply `OBSERVABILITY_EXPORT_TIMEOUT_MS` to the actual HTTP transport, including connection and response limits. Disable SDK transport retries for this first implementation. Bound the entire flush cycle to one second, including all three signals; test this bound rather than assuming each timeout adds up correctly.
-8. Make export/setup failures nonfatal. Catch failures only at telemetry boundaries; do not swallow business exceptions. SDK diagnostics must bypass the OTel logger to prevent recursion. Do not print exporter URLs, credentials, or serialized payloads in fallback messages.
-9. Register a Laravel application termination hook to flush initialized providers. End request spans before this hook. Make shutdown idempotent and avoid registering multiple competing automatic shutdown handlers.
-10. At the end of an instrumented command, flush explicitly. In a reused CLI process, keep providers alive for the next operation; shut them down only at final process termination. Every activated scope must be detached in a `finally` block.
-11. Configure metric temporality deliberately. Prefer delta aggregation for short PHP request lifetimes, using the selected SDK's supported API. Verify SigNoz ingestion with several separate requests. Never ship cumulative counters that reset each request under the same identity and produce incorrect rates. If the selected ingester requires conversion, configure and document its supported delta-to-cumulative path before continuing.
-
-**Done when:** synthetic spans, a metric, and a log reach SigNoz; disabled mode performs zero exports; transport failure cannot change a callback's result or exception; repeated operations do not retain the previous active span.
-
-## Phase 4 — Instrument HTTP requests
-
-**Goal:** one correctly named server span and one measurement set per Laravel request.
-
-1. Add `TraceRequest` near the start of the global middleware list in `app/Http/Kernel.php` so it also observes responses produced by later middleware.
-2. Extract valid W3C trace context from `traceparent`/`tracestate` using the SDK propagator. Ignore malformed context safely. Do not import or export arbitrary baggage.
-3. Start and activate a server span before calling `$next($request)`. Initially use a safe generic name; after routing, rename it to the normalized method plus **route template**, such as `GET /documents/{document}`.
-4. Use the matched route's URI template, never the concrete request URL. For unmatched routes, use the constant `unmatched`. Normalize unrecognized methods to a bounded value such as `_OTHER`.
-5. Record only the allowlisted fields in the telemetry contract below. Read the final HTTP status from the response. Mark 5xx responses as span errors; do not mark all validation/authentication 4xx responses as server failures.
-6. Laravel can render exceptions inside its pipeline and return a response to this middleware. Handle both returned 5xx responses and thrown exceptions. A `catch` block alone will miss some failures.
-7. If adding a report hook in `app/Exceptions/Handler.php`, preserve existing behavior and attach only the exception class to the active span/event. Deduplicate error recording within a request. Never call raw `recordException($exception)` unless its payload is explicitly sanitized first.
-8. While the request span is still active, emit `http.request.completed` and record request count/duration. Then end the span and detach its context in `finally`. Rethrow original exceptions unchanged.
-9. Use monotonic time for durations. Define duration as time through Laravel response creation; document that it excludes streamed body delivery and export time.
-10. Register a test-only failure route in the test harness. Do not add a public debug endpoint to production routes.
-
-Lifecycle order:
-
-```text
-extract context -> start and activate span -> execute application
--> obtain response/status -> emit safe event and metrics
--> end span -> detach scope -> flush during application termination
-```
-
-**Done when:** successful, redirect, validation, missing-route, and server-error responses produce the expected telemetry without changing response content/status. Token-bearing URLs appear only as route templates.
-
-## Telemetry contract and privacy rules
-
-Implement these rules centrally in `TelemetryAttributes`, with tests. Signing URLs, OTPs, payment data, and document contents make broad request/log capture unsuitable here.
-
-### Allowed fields
-
-| Signal | Allowed fields / values |
+| Module and starting files | Required events and branches |
 | --- | --- |
-| Resource | `service.name`, `service.namespace`, `service.version`, `deployment.environment.name`. |
-| HTTP span | `http.request.method`, `http.route`, `http.response.status_code`, optional `error.type` as an exception class or fixed category. |
-| Command span | `app.command.name` from the fixed command allowlist, `app.command.exit_code`, `app.outcome` as `success` or `failure`. |
-| Fulfillment span | Fixed operation name `payment.fulfill`; `payment.provider=pakasir`; optional fixed result category derived from existing behavior. |
-| Log | Fixed event name/body, severity, allowed operation fields, and native OTel trace/span context. |
-| Metric dimensions | Method/route/status for HTTP; command/outcome for commands. No per-user or per-request dimensions. |
+| Auth: `app/Http/Controllers/Auth/*`, `app/Http/Requests/Auth/LoginRequest.php`, `LoginOtpService`, `EmailVerificationOtpService` | `auth.login.*`, `auth.logout.completed`, `auth.registration.completed`, `auth.password.*`, `auth.email_verification.*`, `auth.otp.*`: successful final authentication, credential/OTP rejection, throttle rejection, resend, password reset/update, verification. Generating an OTP is not successful login. Log accepted reset requests without revealing whether an account exists. |
+| Documents: `DocumentController` | `document.upload.*`, `document.delete.*`, `document.prepare.*`, `document.send.*`: state changes, plan/storage/balance rejection, upload/delete failure, sending with partial recipient failure. Emit only once at the method that owns the operation. |
+| Signer setup: `DocumentSignerController`, `DocumentSignatureFieldController` | `document.signers.changed`, `document.fields.changed`: signer additions/removals/reorder/workflow changes and field create/update/delete; no coordinates, names, or signatures. |
+| Signing: `SigningController`, `SigningOtpService` | `signing.otp.*`, `signing.submit.*`, `signing.document.completed`, `signing.workflow.advanced`: expired/invalid/order rejection, OTP outcomes, PDF/storage failures, successful signer submission, final document completion, next-recipient mail failure. Inspect existing caught-error branches as well as successful returns. |
+| Billing: `BillingTopupController`, `SubscriptionController` | `billing.topup.*`, `billing.subscription.*`: checkout/payment creation, downgrade, missing configuration, provider failure, and business rejection. Creating checkout does not mean payment succeeded. |
+| Stripe: `StripeWebhookController` | `payment.webhook.*`, `payment.fulfillment.*`, `billing.subscription.*`: invalid signature/payload, unknown records, ignored types, duplicates, checkout/payment-intent fulfillment, invoice paid/failed, subscription cancellation. Replace verbose RECEIVED/CONFIG logs without exporting payloads. |
+| Pakasir: `PakasirWebhookController`, `PakasirSandboxPayController`, `PakasirFulfillmentService` | Webhook validation, unknown order, amount/project mismatch, pending status, sandbox rejection, duplicate/no-op, committed fulfillment and failure. Preserve `payment.fulfill` span. A true return from `fulfill()` can mean already paid; do not count that as a new fulfillment. |
+| Wallet: `WalletService::credit`, `WalletService::debit` | `wallet.credit.*`, `wallet.debit.*`: committed mutations, duplicate reference/no-op, insufficient funds, unexpected failure. Preserve locks, transactions, idempotency, and financial calculations. |
+| Organization: `InvitationController`, `InvitationAcceptController`, `MembersController`, `OrganizationSettingsController`, `ProfileController` | `organization.invitation.*`, `organization.member.*`, `organization.settings.updated`, `auth.profile.*`: invitation create/resend/revoke/accept/reject, role changes, settings changes, profile update/deletion. Remove verbose invitation debug messages. |
+| Templates: `TemplateController`, `TemplateSignatureFieldController` | `template.upload.*`, `template.delete.*`, `template.fields.changed`: committed changes, quota rejection, storage failures. |
+| Integrations: `PakasirService`, Stripe call sites, `ExchangeRateService`, `RecaptchaService` | `integration.request.completed` / `integration.request.failed`: actual provider I/O, operation, safe provider/status outcome, duration, failure class. Log exchange-rate fallback and reCAPTCHA rejection/configuration failures. `StripeService::client()` only exposes the SDK client; instrument the real call sites. Cache hits need no integration event. |
+| Mail: `Mail::to(...)->send(...)` call sites and `LoginOtpService::send` | `mail.submission.completed` / `mail.submission.failed`: submission to the mail transport. This is not proof of delivery. Record fixed purpose as a registered operation, never recipient or mail content. No logging inside mailable rendering. |
+| Scheduled work: `ExpireDocuments`, `ExpireSubscriptions` | `documents.expiry.summary`, `subscriptions.expiry.summary`: processed/skipped/failure counts and dry-run flag, including recoverable delete/provider failures. Retain existing `command.completed`; a zero exit code can coexist with a partial summary. Summarize loops instead of logging every successful row. |
+| Framework errors: `Handler`, `Telemetry::recordExceptionType` | `application.exception` once per exception instance in an operation, including contexts without active spans. Preserve reporting rules and rendering. |
 
-### Never export
+Pure read paths in `DashboardController`, `BillingController::index`, `Api/PaymentStatusController::show`, landing pages, and getters/calculations in `PlanService` and `SigningPricingService` use existing request logs. Log a business limit rejection at the caller that acts on the result, not every call to a limit getter.
 
-- Authorization headers, cookies, sessions, passwords, API keys, or OTP values.
-- Signing tokens, concrete signing URLs, URL query strings, or arbitrary request headers.
-- Request/response bodies, document contents, signatures, storage paths, or uploaded filenames.
-- Email addresses, user/document/order identifiers, payment amounts, card details, or provider payloads.
-- SQL statements/bindings, Redis keys, exception messages/stack traces, or serialized request/model/exception objects.
+## 6. Step-by-step implementation
 
-Use fixed event names as log bodies. Reject attributes outside the allowlist and cap string lengths. Filtering must happen **before** export; deleting fields in SigNoz after ingestion is insufficient. A denylist alone will miss newly introduced sensitive fields.
+### Step 1 — Inventory and establish the baseline
 
-## Phase 5 — Add metrics and correlated logs
-
-**Goal:** useful aggregates and searchable events without collecting arbitrary application data.
-
-1. Create these custom instruments once per provider:
-
-   | Instrument | Type | Unit | Record when |
-   | --- | --- | --- | --- |
-   | `esign.http.requests` | Counter | `{request}` | Once per completed Laravel request. |
-   | `esign.http.duration` | Histogram | `s` | Once per completed Laravel request. |
-   | `esign.command.runs` | Counter | `{run}` | Once per instrumented command completion. |
-   | `esign.command.duration` | Histogram | `s` | Once per instrumented command completion. |
-
-2. Start with duration boundaries `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]` seconds if the selected SDK supports explicit histogram views. Record the actual configuration in the runbook.
-3. Record measurements even when the current trace is unsampled. Do not use trace count as a substitute for total request count.
-4. Use the SDK logger behind `Telemetry::event()` to export these curated events:
-   - `http.request.completed`
-   - `application.exception` with sanitized exception class only
-   - `command.completed`
-   - `observability.smoke`
-5. Emit events while their span is active so native OTLP `TraceId` and `SpanId` fields are populated. A JSON string containing `trace_id` alone is not sufficient for SigNoz correlation.
-   Use INFO for normal completion, WARN for HTTP 4xx completion, and ERROR for HTTP 5xx, failed commands, and sanitized exception events.
-6. Keep existing Laravel file/stderr logging intact. Do not attach an unrestricted OTLP handler to the existing default log stack or read entire log files into the collector.
-7. Verify metrics across at least ten independent HTTP requests and several CLI invocations. Check aggregation, units, reset handling, and label cardinality. A single visible data point is not enough to validate PHP metrics.
-
-**Done when:** SigNoz shows correct counts/durations, a request event opens its trace, and changing a document identifier does not create a new metric series.
-
-## Phase 6 — Instrument commands and payment fulfillment
-
-**Goal:** useful operational coverage outside the request middleware.
-
-1. Read `app/Console/Commands/ExpireDocuments.php` and `app/Console/Commands/ExpireSubscriptions.php`, plus their existing tests under `tests/Unit/Console/`. Preserve the `StripeService` injection in `ExpireSubscriptions::handle()`.
-2. Wrap each command's existing execution in `Telemetry::runCommand()`. Keep all existing scheduling, database operations, locking, output, and return codes intact. A small extracted private method is acceptable if needed to keep `handle()` readable.
-3. Start an internal root span named `artisan documents:expire` or `artisan subscriptions:expire`. Record a nonzero exit code as failure even if no exception was thrown.
-   Here, success means the command returned zero. Existing commands can log warnings and still return success; do not change that business policy as part of instrumentation.
-4. In all exits, emit the command event/metrics, end and detach its span, and flush. Rethrow the original business exception unchanged.
-5. Do not create a never-ending root span for `schedule:work`. Trace the actual units of work. Account for commands that execute in separate processes.
-6. Wrap `PakasirFulfillmentService::fulfill()` with `Telemetry::withinSpan('payment.fulfill', ...)`. When called inside a request or instrumented command, its span must be a child of that operation.
-7. Preserve the service's existing return value, transaction boundaries, idempotency checks, and exception behavior. Do not move payments into or out of database transactions for telemetry.
-8. Test fulfillment with the existing mocked provider pattern. No real payment, Stripe, Pakasir, or email calls are needed to verify this feature.
-
-**Done when:** both commands have duration/status telemetry; fulfillment appears under its parent; failures preserve the original behavior; multiple operations in one process do not share stale context.
-
-## Phase 7 — Add automated verification
-
-**Goal:** detect privacy leaks, broken lifecycle handling, and behavior changes before deployment.
-
-Use in-memory exporters or injected fakes for PHP tests. Unit/feature tests must not require a running SigNoz server or network access. Do not make a live exporter the default in `phpunit.xml`.
-
-Required test cases:
-
-| Area | Cases and assertions |
-| --- | --- |
-| Configuration | Disabled by default; cached config works for both HTTP and CLI service names; invalid ratio/protocol handled predictably; signal endpoint suffix appears exactly once. |
-| HTTP | 200, redirect, 422, 404, returned/rendered 500, and thrown exception; one span and measurement set each. |
-| Context | Valid remote parent preserved; malformed header ignored; child has correct parent; scope detached after failure. |
-| Logs | Request event has matching native trace/span identifiers; log severity matches outcome; arbitrary context is rejected. |
-| Metrics | Durations use seconds; counts are correct across operations; unsampled traces still produce measurements. |
-| Commands | Success, nonzero exit, and thrown exception; original results preserved; flush occurs. |
-| Fulfillment | Existing successful/already-processed/error paths preserve behavior with telemetry enabled and disabled. |
-| Privacy | Canary secrets in URL token, query, headers, body, exception message, and log attributes never appear in any exported payload. |
-| Export failure | Throwing exporter and timeout simulation cannot change response/command outcome or recursively log. |
-| Lifecycle | Two requests/commands in one process have independent context; termination does not double-export; shutdown is idempotent. |
-
-Add a local/testing-only `observability:smoke` command:
-
-1. Reject execution outside `local` and `testing` before producing telemetry.
-2. Print a clear message and return nonzero if observability is disabled.
-3. Start a synthetic span, increment a dedicated `esign.observability.smoke` counter with unit `{run}`, emit `observability.smoke`, end the span, and flush. Do not increment real HTTP or expiry-command counters for this synthetic operation.
-4. Print its trace ID and whether export was attempted; do not claim successful SigNoz ingestion merely because the SDK accepted a record.
-5. Support a synthetic failure option that records an error and returns nonzero without touching application data or external services.
-
-Suggested implementation verification commands:
+- [ ] Read section 2 and `docs/observability.md`; inspect the working tree and preserve unrelated changes.
+- [ ] Locate existing logs, catches, transactions, and external call sites:
 
 ```bash
-docker compose exec app php artisan test --filter=Observability
+rg -n 'Log::|logger\(|report\(|catch\s*\(' app
+rg -n 'DB::transaction|afterCommit|Mail::|Http::|Storage::|->client\(' app
+rg -n 'Telemetry|withinSpan|runCommand' app tests
+```
+
+- [ ] Create the event catalog documentation from section 5. For each existing log decide: replace with a catalog event, retain a sanitized local diagnostic, or remove redundant debugging. Record the decision.
+- [ ] Run the existing observability tests in the configured test environment:
+
+```bash
+docker compose exec app php artisan test tests/Unit/Observability tests/Feature/Observability
+```
+
+**Done when:** every required module has named owners/events and baseline failures, if any, are recorded separately.
+
+### Step 2 — Build and verify the shared logging contract
+
+- [ ] Add `LogEventCatalog.php` with exact event names, default severity, required fields, allowed keys, and enum values. Keep definitions easy to scan; avoid an elaborate logging framework.
+- [ ] Update `Telemetry::event()` to validate catalog entries, normalize severity, apply the configured minimum level, sanitize attributes, and use the existing logger provider. Do not let a malformed event throw into business code.
+- [ ] Keep existing method calls compatible. New constructor/config options must have defaults so current direct `new Telemetry(...)` tests still work.
+- [ ] Add the level to `config/observability.php` and pass it from `TelemetryFactory`. Read `env()` only in configuration files.
+- [ ] Document and wire the environment variable through `.env.observability.example`, both services in `docker-compose.observability.yml`, and `docker/php/observability-fpm.conf` so CLI and FPM agree, including cached configuration.
+- [ ] Add a small helper for emitting after commit using the context rule in section 3. Do not change when business transactions begin or end.
+- [ ] Test catalog validation, privacy, threshold behavior, disabled mode, and after-commit/rollback behavior before instrumenting business modules.
+
+Example target usage after the catalog supports this event:
+
+```php
+app(Telemetry::class)->event('signing.submit.rejected', [
+    'app.module' => 'signing',
+    'app.operation' => 'submit',
+    'app.outcome' => 'rejected',
+    'app.reason' => 'invalid_otp',
+], 'WARN');
+```
+
+**Done when:** a catalog event reaches the in-memory exporter with the correct body, severity, safe fields, and active trace context. Unknown fields/names cannot leak data.
+
+### Step 3 — Make failures reliable and avoid duplicate reporting
+
+- [ ] Inspect `withinSpan()`, `recordExceptionType()`, and the handler together. Use weak references, such as a `WeakMap` keyed by Throwable, to prevent duplicate exception events without retaining exceptions indefinitely. Do not deduplicate by class or message: two different exceptions must remain distinct.
+- [ ] Allow sanitized exception logs with no active span; only mutate span status/attributes when a valid span exists.
+- [ ] A caught-and-recovered failure needs a specific business/integration event because it may never reach the global handler. A rethrown exception retains its original type and instance; centralized reporting owns `application.exception`.
+- [ ] Business failure summaries and a generic exception event may coexist when they describe different facts, but do not add identical ERROR logs at each stack layer. Document the event owner.
+- [ ] Preserve failure isolation, transport timeouts, bounded batching, and termination flushing. Do not add per-event `forceFlush()`, exporter retries, or a Laravel log channel that recursively calls telemetry.
+
+**Done when:** nested reporting emits one generic exception record, separate exceptions emit separate records, and exporter failures never change the business response or exception.
+
+### Step 4 — Instrument payments, wallet, and external calls
+
+- [ ] Work through the billing, Stripe, Pakasir, wallet, and integration rows first, one module at a time.
+- [ ] Enumerate every return/rejection/catch branch before adding events. Use fixed reasons for pending, duplicate, validation failure, and missing configuration.
+- [ ] Register mutation success events after commit. For provider calls, record provider acceptance separately from database fulfillment; an external call can succeed even if a later local transaction rolls back.
+- [ ] Capture correlation context inside active spans before any deferred success emission. Do not create a new root trace for every log.
+- [ ] Preserve webhook signatures, status codes, retries, idempotency checks, locks, and payment calculations. Do not make a duplicate delivery appear to credit a wallet again.
+- [ ] Extend existing tests in `tests/Unit/Services/` and add focused feature tests for webhook outcomes under `tests/Feature/Observability/`. Fake providers; never create real charges.
+
+**Done when:** success, rejection, failure, duplicate, and rollback cases emit the expected events without changing payment or wallet state behavior.
+
+### Step 5 — Instrument documents, signing, auth, organization, templates, and mail
+
+- [ ] Complete the corresponding coverage rows. Inspect early returns and caught exceptions; success-only instrumentation is incomplete.
+- [ ] Keep controller/service ownership explicit. For example, a service owns OTP verification; a controller owns establishing the authenticated session. These are different events.
+- [ ] Treat sequential signing advancement, final completion, PDF writing, and mail submission as separate outcomes. A saved signature with failed follow-up mail is partial success, not an entirely failed signature.
+- [ ] Replace debug logs that expose paths, URLs, identifiers, request data, or exception messages at migrated sites.
+- [ ] Extend existing auth, document upload, template, and service tests, with new feature tests where coverage is missing. Use mail/storage/HTTP fakes and synthetic OTPs.
+
+**Done when:** every required state change and recovered failure in these rows has an event and a focused assertion; logging does not change response contents or status codes.
+
+### Step 6 — Instrument command summaries
+
+- [ ] Retain the existing `runCommand()` wrapper and emit one domain summary inside its active span before it returns.
+- [ ] Reuse current counts; add separate counters where needed to distinguish provider verification failure from remotely active subscriptions. Document document-count versus file-failure-count units.
+- [ ] Mark partial work with `app.outcome=partial` and WARN even if the existing command still exits zero. Do not change command exit behavior as part of logging.
+- [ ] Mark dry runs and describe counts as “would process.” Dry-run output must not imply committed mutations.
+- [ ] Cover zero records, success, partial failure, thrown failure, and dry run using existing console tests. Avoid per-record success events that can overflow the 256-record batch queue.
+
+**Done when:** summaries are correlated with command traces, distinguish partial work, and retain existing data/exit-code behavior.
+
+### Step 7 — Verify automated behavior
+
+Use the real `Telemetry` service with in-memory SDK exporters for integration assertions; mocking `event()` alone cannot catch events rejected by the catalog. Reuse the exporter setup in `TelemetryTest` and bind it into Laravel's container. Flush locally before examining records. Disable network export in tests.
+
+Required scenarios:
+
+- [ ] Correct body/event name, severity, resource service identity, and allowed context for each event family.
+- [ ] Unknown event/key and invalid enum values are rejected; canary secrets placed in inputs and exception messages never appear in exported bodies or attributes.
+- [ ] HTTP and command events have matching trace/span IDs; no context leaks into the next operation.
+- [ ] An unsampled trace still exports business logs; a log without a span exports without an invented trace ID.
+- [ ] INFO/WARN/ERROR thresholds, invalid configuration fallback, disabled mode, and cached configuration work.
+- [ ] Success events wait for the outermost commit; nested rollback emits none. Use tests with real commit boundaries, not a fixture that keeps every test inside an uncommitted transaction.
+- [ ] Duplicate payment/webhook delivery does not emit a second mutation success or alter balances twice.
+- [ ] A recovered mail/storage/provider failure emits a usable outcome even when HTTP status is 200/302.
+- [ ] Logger/exporter exceptions and stopped-collector behavior preserve business results; callbacks execute exactly once.
+- [ ] Every row in section 5 links to relevant tests and remaining exclusions are explained.
+
+Run focused tests after each module, then the PHP regression suite once integration is complete:
+
+```bash
+docker compose exec app php artisan test tests/Unit/Observability tests/Feature/Observability
 docker compose exec app php artisan test
-npm test
-docker compose exec app composer check-platform-reqs
 ```
 
-Also build the root production `Dockerfile` and confirm runtime dependencies and PHP FPM startup. Run configuration-cache checks in a disposable test container so the developer's normal local configuration is not left cached with test values.
+Run repository-required formatting/review checks for the implementation. Record exact commands and failures. A documentation-only planning change does not require executing this future implementation suite.
 
-Explicitly exercise kernel/application termination in lifecycle tests; an in-process test request may not perform the same shutdown sequence as a real PHP FPM request.
+### Step 8 — Verify real SigNoz ingestion and write the runbook
 
-**Done when:** new tests and existing suites pass, and test output contains no real credentials or telemetry payloads.
+- [ ] Start the existing stack using `docs/observability.md`. Do not regenerate or upgrade deployment versions just to add event names.
+- [ ] Run the existing synthetic smoke command:
 
-## Phase 8 — Validate the full Docker flow and write the runbook
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml exec app php artisan observability:smoke
+```
 
-**Goal:** a new developer can reproduce the feature without knowing OTel internals.
+- [ ] In a disposable local environment, exercise a successful operation, a rejected operation, and a synthetic provider/storage/mail failure. Use existing sandbox/fake facilities; do not run real charges or mail real recipients.
+- [ ] Open SigNoz at `http://localhost:8080`, select Logs, select the recent time range, and filter resource `service.name` by `esign-api` or `esign-scheduler`.
+- [ ] Search body for an exact catalog event, for example `signing.submit.rejected`. Inspect severity, structured attributes, environment, and trace/span IDs; follow a trace link when present. The current exporter puts the event name in the body, so queries need not assume how the UI exposes OTel event-name fields.
+- [ ] Check one command summary using disposable fixtures. `subscriptions:expire --dry-run` can still call Stripe; use synthetic non-Stripe subscriptions or a mocked client.
+- [ ] Stop only the `ingester` in the local SigNoz Compose project, repeat a harmless operation, verify unchanged application behavior and bounded export delays, then restart it and confirm later logs arrive. Lost records during the outage are acceptable; do not promise replay.
+- [ ] Update `docs/observability.md` with level configuration, event examples, service/severity/module/trace filters, no-data troubleshooting, best-effort delivery, and rollback. Record the filters actually used with the installed UI.
+- [ ] Document log retention and access controls using the installed SigNoz settings; do not invent retention defaults or enable external alert delivery. Changing retention or production access is a separate deployment decision.
 
-1. Start SigNoz using Phase 1, then the application with the overlay from Phase 2.
-2. Open `http://localhost:8000` and exercise a harmless existing route repeatedly. Use synthetic local data for authenticated flows.
-3. Run the smoke command from the telemetry-enabled app container:
+**Done when:** capture evidence of actual business events in SigNoz, including service, event, severity, timestamp, and trace correlation. A smoke command saying “export attempted” is not proof of ingestion. If Docker/UI verification cannot be run, explicitly report it as incomplete.
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.observability.yml exec app php artisan observability:smoke
-   ```
+## 7. Acceptance criteria
 
-4. In SigNoz, find `esign-api`, locate the printed trace ID, and open its correlated log. Allow ingestion time and verify the UI time range.
-5. In a disposable local database, run both expiry commands and find `esign-scheduler` telemetry. Use synthetic non-Stripe fixtures or mocked providers. These commands change data; even `subscriptions:expire --dry-run` can call Stripe for Stripe-backed records, so a dry run alone does not isolate external effects.
-6. Check the request metrics against a known request count. Test across different PHP requests and worker processes, not only inside one test process.
-7. Create a dashboard filtered by service and environment with:
-   - Request rate, server-error rate, and p50/p95 request duration by route.
-   - Command runs by outcome and command duration.
-   - A link or documented query for recent error events/traces.
-8. Use the instrument names from Phase 5. Verify the actual metric names and histogram representation in the selected SigNoz release before writing queries. Export the working dashboard to `docs/observability/dashboard.json`; do not invent an untested dashboard JSON schema.
-9. Document one optional server-error alert recipe, including a minimum traffic threshold and no-data behavior. External email/Slack delivery is not required by this issue.
-10. Stop the actual SigNoz ingester service and repeat a harmless request and the smoke command. Verify application availability, bounded export overhead, and nonrecursive diagnostics. Restart the ingester and confirm later telemetry arrives. Loss of telemetry during an outage is acceptable for this local first version; blocking the application is not.
-11. Disable telemetry, recreate app/scheduler containers, and verify no new application telemetry is emitted. Then confirm the base Compose setup works independently.
-12. Restart the SigNoz project without deleting volumes and verify saved dashboard/data persistence.
+- [ ] All rows in the module coverage table are implemented and documented with exact event names, owners, safe attributes, and tests.
+- [ ] Existing request, command, smoke, trace, and metric behavior remains intact.
+- [ ] SigNoz shows business success, rejection, and failure events from HTTP and command operations.
+- [ ] Events are searchable by service, event body, severity, module, outcome, and trace where available.
+- [ ] Sensitive values cannot reach exported events; migrated local logs are sanitized as well.
+- [ ] Transaction rollback and duplicate delivery do not create false mutation-success logs.
+- [ ] Recovered failures are observable, and generic exceptions are not duplicated across nested handlers.
+- [ ] Disabled telemetry and collector outages preserve application behavior with bounded overhead.
+- [ ] Required tests pass; actual ingestion checks and any incomplete verification are documented.
 
-The final `docs/observability.md` must include:
+## 8. Suggested implementation handoff
 
-- Prerequisites and exact pinned tool/image versions.
-- Copyable setup commands with their working directories.
-- First-run SigNoz account setup, UI URL, service names, and all configuration variables.
-- How to start, stop, inspect logs, regenerate Foundry output, and update version pins.
-- Metric definitions, units, sampling behavior, privacy policy, and known coverage limits.
-- The actual ingester service name and its network alias.
-- How to import the dashboard and reproduce the smoke checks.
-- Local storage/retention guidance and how to inspect disk use.
-- Production requirements: a reachable private/TLS endpoint, credentials outside Git, resource sizing, sampling, retention, and separate service identities. Do not expose an unauthenticated collector publicly.
-- The recovery steps below.
+Deliver small changes in this order: (1) catalog/configuration/tests, (2) exception handling and transaction-safe logging, (3) payments/wallet/integrations, (4) documents/signing/auth/mail, (5) organization/templates/commands, (6) SigNoz verification and documentation. Finish each step's checks before moving on. Do not leave event names unregistered or accept a catalog-only implementation as completed module coverage.
 
-### Troubleshooting checklist
-
-| Symptom | Check in this order |
-| --- | --- |
-| App cannot resolve `otel-collector` | Both stacks use the external network; alias belongs to the ingester; app retained its default network. |
-| UI loads but no traces | Enabled flag, FPM environment, service/time filters, `/v1/traces` endpoint, receiver bind address, span end and flush. |
-| Traces work but metrics/logs do not | Their providers/exporters, signal endpoint paths, ingester pipelines, metric temporality, and log scope timing. |
-| Wrong counts after multiple requests | Metric temporality/reset behavior and duplicate collection/export. |
-| CLI works but HTTP does not | PHP FPM environment/configuration and application termination hook. |
-| Requests slow down when SigNoz stops | Transport connect/read timeout, retries, flush deadline, and recursive diagnostics. |
-| Spans share the wrong trace | Scope detachment and mutable state surviving between operations. |
-| Keeper repeatedly crashes on Windows | Current SigNoz host/engine compatibility guidance from Phase 0. |
-
-### Disable and rollback
-
-1. Set `OBSERVABILITY_ENABLED=false` in the configuration source actually used by the running services, rebuild cached Laravel configuration if applicable, and recreate/restart app and scheduler.
-2. To remove the overlay entirely, explicitly recreate app and scheduler with the base Compose file. Merely omitting `-f` from a later `exec` command does not remove environment settings from existing containers.
-3. Stop the separate SigNoz Compose project when desired. Preserve its volumes.
-4. Do not use `docker compose down -v` as a routine rollback command. Do not alter the application's database to disable telemetry.
-5. Re-enable by restoring configuration, starting SigNoz, and repeating the smoke checks.
-
-**Done when:** another developer can follow the runbook from a clean checkout with an existing working application environment, and all three signals are visible in SigNoz.
-
-## Final acceptance checklist
-
-- [ ] All new dependency/image versions are recorded and reproducible.
-- [ ] SigNoz and its required services run through Docker.
-- [ ] App runs with the base Compose file and observability disabled.
-- [ ] App and scheduler export through the internal OTLP HTTP endpoint when enabled.
-- [ ] Request spans use route templates and include the correct final status.
-- [ ] A fulfillment child span appears beneath its request/command parent.
-- [ ] Both expiry commands export outcome and duration.
-- [ ] Request/command metrics aggregate correctly across process lifetimes.
-- [ ] Curated logs link to their traces through native OTel context.
-- [ ] Canary privacy tests cover every exported signal.
-- [ ] A stopped collector cannot break application requests or commands.
-- [ ] Automated tests and the full Docker smoke procedure have recorded results.
-- [ ] Production image builds with the new PHP runtime dependencies.
-- [ ] Dashboard export, setup instructions, troubleshooting, and rollback are committed.
-- [ ] No production debug route, real credentials, generated data directories, or unrelated business changes are included.
-
-## Suggested implementation workflow for a junior developer or AI agent
-
-1. Read this entire issue once, then work on one phase at a time.
-2. Before changing a file, read the existing implementation and nearby tests.
-3. Finish each phase's completion check before marking its checkbox complete.
-4. Use small commits, for example: Docker setup; PHP SDK/configuration; HTTP telemetry; commands/fulfillment; tests and documentation.
-5. Preserve business return values and exceptions. If telemetry requires changing business rules, revisit the instrumentation design.
-6. When a documented SDK or Foundry API differs from the pinned version, inspect that version's official source/examples and record the adjustment. Do not guess method names or silently omit a signal.
-7. Report the files changed, commands run, evidence observed in SigNoz, and any incomplete checks. Do not describe unexecuted Docker checks as passing.
+Final implementation report: list files changed, modules covered, tests run, SigNoz evidence, and unresolved checks. Disable export through the existing `OBSERVABILITY_ENABLED=false` setting if rollback is needed; recreate affected containers and refresh cached Laravel configuration as documented. Preserve SigNoz storage volumes.

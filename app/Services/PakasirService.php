@@ -2,12 +2,15 @@
 
 namespace App\Services;
 
+use App\Observability\Telemetry;
 use Illuminate\Support\Facades\Http;
 
 class PakasirService
 {
     protected string $baseUrl;
+
     protected ?string $project;
+
     protected ?string $apiKey;
 
     public function __construct()
@@ -24,45 +27,51 @@ class PakasirService
 
     public function createQris(string $orderId, int $amountIdr): array
     {
-        $response = Http::asJson()
-            ->post($this->baseUrl.'/api/transactioncreate/qris', [
-                'project' => $this->project,
-                'order_id' => $orderId,
-                'amount' => $amountIdr,
-                'api_key' => $this->apiKey,
-            ]);
+        return app(Telemetry::class)->trackIntegration('pakasir', 'create_qris', function () use ($orderId, $amountIdr): array {
+            $response = Http::asJson()
+                ->post($this->baseUrl.'/api/transactioncreate/qris', [
+                    'project' => $this->project,
+                    'order_id' => $orderId,
+                    'amount' => $amountIdr,
+                    'api_key' => $this->apiKey,
+                ]);
 
-        $response->throw();
+            $response->throw();
 
-        return $response->json();
+            return $response->json();
+        });
     }
 
     public function transactionDetail(string $orderId, int $amountIdr): array
     {
-        $response = Http::get($this->baseUrl.'/api/transactiondetail', [
-            'project' => $this->project,
-            'order_id' => $orderId,
-            'amount' => $amountIdr,
-            'api_key' => $this->apiKey,
-        ]);
-
-        $response->throw();
-
-        return $response->json();
-    }
-
-    public function simulatePayment(string $orderId, int $amountIdr): array
-    {
-        $response = Http::asJson()
-            ->post($this->baseUrl.'/api/paymentsimulation', [
+        return app(Telemetry::class)->trackIntegration('pakasir', 'transaction_detail', function () use ($orderId, $amountIdr): array {
+            $response = Http::get($this->baseUrl.'/api/transactiondetail', [
                 'project' => $this->project,
                 'order_id' => $orderId,
                 'amount' => $amountIdr,
                 'api_key' => $this->apiKey,
             ]);
 
-        $response->throw();
+            $response->throw();
 
-        return $response->json();
+            return $response->json();
+        });
+    }
+
+    public function simulatePayment(string $orderId, int $amountIdr): array
+    {
+        return app(Telemetry::class)->trackIntegration('pakasir', 'simulate_payment', function () use ($orderId, $amountIdr): array {
+            $response = Http::asJson()
+                ->post($this->baseUrl.'/api/paymentsimulation', [
+                    'project' => $this->project,
+                    'order_id' => $orderId,
+                    'amount' => $amountIdr,
+                    'api_key' => $this->apiKey,
+                ]);
+
+            $response->throw();
+
+            return $response->json();
+        });
     }
 }
