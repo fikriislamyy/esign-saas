@@ -26,7 +26,7 @@ services:
     user: "${CI_UID:-1000}:${CI_GID:-1000}"
     working_dir: /var/www
     volumes:
-      - ${CI_SOURCE_DIR:-.}:/var/www
+      - .:/var/www
     environment:
       APP_NAME: EZSign
       APP_URL: http://localhost
@@ -58,6 +58,6 @@ services:
     user: "${CI_UID:-1000}:${CI_GID:-1000}"
     working_dir: /var/www
     volumes:
-      - ${CI_SOURCE_DIR:-.}:/var/www
+      - .:/var/www
     environment:
       npm_config_cache: /tmp/npm
