@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Observability\Telemetry;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -21,7 +22,7 @@ class ExchangeRateService
     {
         $apiKey = config('services.currencyfreaks.key');
 
-        if (!$apiKey) {
+        if (! $apiKey) {
             return null;
         }
 
@@ -30,32 +31,26 @@ class ExchangeRateService
                 self::CACHE_KEY,
                 self::CACHE_TTL_SECONDS,
                 function () use ($apiKey) {
-                    $response = Http::timeout(5)
-                        ->acceptJson()
-                        ->get(
-                            'https://api.currencyfreaks.com/v2.0/rates/latest',
-                            [
-                                'apikey' => $apiKey,
-                                'symbols' => 'IDR',
-                            ]
-                        );
+                    $rate = app(Telemetry::class)->trackIntegration('currencyfreaks', 'fetch_exchange_rate', function () use ($apiKey) {
+                        $response = Http::timeout(5)
+                            ->acceptJson()
+                            ->get(
+                                'https://api.currencyfreaks.com/v2.0/rates/latest',
+                                [
+                                    'apikey' => $apiKey,
+                                    'symbols' => 'IDR',
+                                ]
+                            );
 
-                    $response->throw();
+                        $response->throw();
 
-                    $rate = data_get(
-                        $response->json(),
-                        'rates.IDR'
-                    );
+                        $rate = data_get($response->json(), 'rates.IDR');
+                        if ($rate === null || ! is_numeric($rate) || (float) $rate <= 0) {
+                            throw new RuntimeException('CurrencyFreaks returned an invalid USD to IDR rate.');
+                        }
 
-                    if (
-                        $rate === null ||
-                        !is_numeric($rate) ||
-                        (float) $rate <= 0
-                    ) {
-                        throw new RuntimeException(
-                            'CurrencyFreaks returned an invalid USD to IDR rate.'
-                        );
-                    }
+                        return $rate;
+                    }, 'invalid_response');
 
                     return [
                         'IDR' => (float) $rate,

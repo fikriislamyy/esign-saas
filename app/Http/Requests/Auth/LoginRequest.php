@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Auth;
 
 use App\Models\User;
+use App\Observability\Telemetry;
 use App\Rules\Recaptcha;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
@@ -46,6 +47,10 @@ class LoginRequest extends FormRequest
 
         if (! Auth::validate($this->only('email', 'password'))) {
             RateLimiter::hit($this->throttleKey());
+            app(Telemetry::class)->event('auth.login.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_credentials',
+            ]);
 
             throw ValidationException::withMessages([
                 'email' => trans('auth.failed'),
@@ -69,6 +74,10 @@ class LoginRequest extends FormRequest
         }
 
         event(new Lockout($this));
+        app(Telemetry::class)->event('auth.login.rejected', [
+            'app.outcome' => 'rejected',
+            'app.reason' => 'rate_limited',
+        ]);
 
         $seconds = RateLimiter::availableIn($this->throttleKey());
 

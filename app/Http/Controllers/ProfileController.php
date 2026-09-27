@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\ProfileUpdateRequest;
+use App\Observability\Telemetry;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -37,6 +38,8 @@ class ProfileController extends Controller
 
         $request->user()->save();
 
+        app(Telemetry::class)->eventAfterCommit('auth.profile.updated', ['app.outcome' => 'success']);
+
         return Redirect::route('profile.edit');
     }
 
@@ -54,6 +57,8 @@ class ProfileController extends Controller
         Auth::logout();
 
         $user->delete();
+
+        app(Telemetry::class)->eventAfterCommit('auth.profile.deleted', ['app.outcome' => 'success']);
 
         $request->session()->invalidate();
         $request->session()->regenerateToken();

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\InsufficientWalletBalanceException;
 use App\Mail\SignatureRequestMail;
 use App\Models\DocumentSigner;
+use App\Observability\Telemetry;
 use App\Services\SigningOtpService;
 use App\Services\SigningPricingService;
 use App\Services\WalletService;
@@ -37,6 +39,11 @@ class SigningController extends Controller
             $signer->status === 'signed' ||
             $signer->signed_at !== null
         ) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'already_signed',
+            ]);
+
             abort(
                 403,
                 'This signing request has already been completed.'
@@ -120,6 +127,11 @@ class SigningController extends Controller
             $signer->status === 'signed' ||
             $signer->signed_at !== null
         ) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'already_signed',
+            ]);
+
             abort(
                 403,
                 'This signing request has already been completed.'
@@ -132,11 +144,13 @@ class SigningController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        abort_unless(
-            $this->otpService->isVerified($signer),
-            403,
-            'OTP verification required.'
-        );
+        if (! $this->otpService->isVerified($signer)) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_otp',
+            ]);
+            abort(403, 'OTP verification required.');
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -165,6 +179,11 @@ class SigningController extends Controller
         $signaturePlotCount = $requiredFields->count();
 
         if ($signaturePlotCount <= 0) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'missing_fields',
+            ]);
+
             abort(
                 400,
                 'You have no signature fields assigned to this signing request.'
@@ -181,6 +200,11 @@ class SigningController extends Controller
             count($validated['signatures']) <
             $signaturePlotCount
         ) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'missing_fields',
+            ]);
+
             abort(
                 400,
                 'You must sign all required fields.'
@@ -212,6 +236,11 @@ class SigningController extends Controller
                 ! is_array($signature) ||
                 empty($signature['image'])
             ) {
+                app(Telemetry::class)->event('signing.submit.rejected', [
+                    'app.outcome' => 'rejected',
+                    'app.reason' => 'invalid_signature',
+                ]);
+
                 abort(
                     400,
                     'Invalid signature data.'
@@ -243,6 +272,7 @@ class SigningController extends Controller
         */
 
         DB::beginTransaction();
+        $failureReason = 'processing_failure';
 
         try {
             DB::transaction(function () use (
@@ -255,23 +285,13 @@ class SigningController extends Controller
                 $walletService,
                 $pricingService,
             ) {
-                \Log::info(
-                    'SIGNING: wallet debit starting',
-                    [
-                        'document_id' => $document->id,
-                        'signer_id' => $signer->id,
-                        'signature_plot_count' => $signaturePlotCount,
-                        'required_usd_cents' => $requiredUsdCents,
-                    ]
-                );
-
                 /*
                 |--------------------------------------------------------------------------
                 | Debit wallet
                 |--------------------------------------------------------------------------
                 */
 
-                $walletTransaction = $walletService->debit(
+                $walletService->debit(
                     organization: $document->organization,
                     sourceCurrency: 'USD',
                     sourceAmount: $requiredUsdCents / 100,
@@ -288,19 +308,6 @@ class SigningController extends Controller
                         'price_per_plot_usd_cents' => $pricingService
                             ->pricePerSignaturePlot(),
                     ],
-                );
-
-                \Log::info(
-                    'SIGNING: wallet debited',
-                    [
-                        'document_id' => $document->id,
-                        'signer_id' => $signer->id,
-                        'wallet_transaction_id' => $walletTransaction->id,
-                        'amount_usd_cents' => $walletTransaction
-                            ->amount_usd_cents,
-                        'balance_after_usd_cents' => $walletTransaction
-                            ->balance_after_usd_cents,
-                    ]
                 );
 
                 /*
@@ -332,13 +339,6 @@ class SigningController extends Controller
                     'status' => 'signed',
                 ]);
 
-                \Log::info(
-                    'SIGNING: signer marked signed',
-                    [
-                        'document_id' => $document->id,
-                        'signer_id' => $signer->id,
-                    ]
-                );
             });
 
             /*
@@ -410,6 +410,7 @@ class SigningController extends Controller
             |--------------------------------------------------------------------------
             */
 
+            $failureReason = 'storage_failure';
             $sourceStream = Storage::disk(
                 $documentDisk
             )->readStream(
@@ -449,6 +450,7 @@ class SigningController extends Controller
             |--------------------------------------------------------------------------
             */
 
+            $failureReason = 'pdf_failure';
             $pdf = new \setasign\Fpdi\Tcpdf\Fpdi;
 
             $pdf->setPrintHeader(false);
@@ -580,6 +582,7 @@ class SigningController extends Controller
                 $document->id.
                 '.pdf';
 
+            $failureReason = 'storage_failure';
             $signedStream = fopen(
                 $temporarySignedPath,
                 'rb'
@@ -631,8 +634,26 @@ class SigningController extends Controller
             ]);
 
             DB::commit();
+            app(Telemetry::class)->event('signing.submit.completed', ['app.outcome' => 'success']);
+            if ($completed) {
+                app(Telemetry::class)->event('signing.document.completed', ['app.outcome' => 'success']);
+            }
+        } catch (InsufficientWalletBalanceException $e) {
+            DB::rollBack();
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'insufficient_balance',
+            ]);
+
+            throw $e;
         } catch (\Throwable $e) {
             DB::rollBack();
+
+            app(Telemetry::class)->event('signing.submit.failed', [
+                'app.outcome' => 'failure',
+                'app.reason' => $failureReason,
+                'error.type' => $e::class,
+            ]);
 
             throw $e;
         } finally {
@@ -667,39 +688,7 @@ class SigningController extends Controller
             ->where('signing_order', '>', 0)
             ->exists();
 
-        \Log::info('SIGNING: workflow check', [
-            'document_id' => $document->id,
-            'is_sequential' => $isSequential,
-            'current_signer_id' => $signer->id,
-            'current_signer_name' => $signer->name,
-            'current_signer_email' => $signer->email,
-            'current_signer_order' => $signer->signing_order,
-        ]);
-
         if ($isSequential) {
-            $allSigners = $document->signers()
-                ->orderBy('signing_order')
-                ->get();
-
-            \Log::info(
-                'SIGNING: all signer states',
-                [
-                    'document_id' => $document->id,
-                    'signers' => $allSigners
-                        ->map(fn ($item) => [
-                            'id' => $item->id,
-                            'name' => $item->name,
-                            'email' => $item->email,
-                            'signing_order' => $item->signing_order,
-                            'status' => $item->status,
-                            'signed_at' => $item->signed_at,
-                            'has_token' => ! empty($item->token),
-                        ])
-                        ->values()
-                        ->toArray(),
-                ]
-            );
-
             $nextSigner = $document->signers()
                 ->whereNull('signed_at')
                 ->where(
@@ -710,72 +699,35 @@ class SigningController extends Controller
                 ->orderBy('signing_order', 'asc')
                 ->first();
 
-            \Log::info(
-                'SIGNING: next signer lookup',
-                [
-                    'document_id' => $document->id,
-                    'current_signer_id' => $signer->id,
-                    'current_signer_order' => $signer->signing_order,
-                    'next_signer_id' => $nextSigner?->id,
-                    'next_signer_name' => $nextSigner?->name,
-                    'next_signer_email' => $nextSigner?->email,
-                    'next_signer_order' => $nextSigner?->signing_order,
-                ]
-            );
-
             if ($nextSigner) {
-                try {
-                    if (! $nextSigner->token) {
-                        $nextSigner->update([
-                            'token' => \Illuminate\Support\Str::uuid(),
-                        ]);
-
-                        $nextSigner->refresh();
-                    }
-
-                    $otp = $this->otpService->generate(
-                        $nextSigner
-                    );
-
-                    Mail::to($nextSigner->email)
-                        ->send(
-                            new SignatureRequestMail(
-                                $nextSigner->load(
-                                    'document'
-                                ),
-                                $otp
-                            )
-                        );
-
+                if (! $nextSigner->token) {
                     $nextSigner->update([
-                        'status' => 'email_sent',
+                        'token' => \Illuminate\Support\Str::uuid(),
                     ]);
 
-                    \Log::info(
-                        'SIGNING: next signer notified',
-                        [
-                            'document_id' => $document->id,
-                            'signer_id' => $nextSigner->id,
-                            'email' => $nextSigner->email,
-                        ]
-                    );
-                } catch (\Throwable $e) {
-                    \Log::error(
-                        'SIGNING: failed to notify next signer',
-                        [
-                            'document_id' => $document->id,
-                            'current_signer_id' => $signer->id,
-                            'next_signer_id' => $nextSigner->id,
-                            'exception' => get_class($e),
-                            'message' => $e->getMessage(),
-                            'file' => $e->getFile(),
-                            'line' => $e->getLine(),
-                            'trace' => $e->getTraceAsString(),
-                        ]
-                    );
-
-                    throw $e;
+                    $nextSigner->refresh();
                 }
+
+                $otp = $this->otpService->generate(
+                    $nextSigner
+                );
+
+                app(Telemetry::class)->submitMail('signature_request', fn () => Mail::to($nextSigner->email)
+                    ->send(
+                        new SignatureRequestMail(
+                            $nextSigner->load(
+                                'document'
+                            ),
+                            $otp
+                        )
+                    ));
+                app(Telemetry::class)->event('signing.otp.sent', ['app.outcome' => 'success']);
+
+                $nextSigner->update([
+                    'status' => 'email_sent',
+                ]);
+
+                app(Telemetry::class)->eventAfterCommit('signing.workflow.advanced', ['app.outcome' => 'success']);
             }
         }
 
@@ -820,6 +772,11 @@ class SigningController extends Controller
         ]);
 
         if ($signer->otp_attempts >= 5) {
+            app(Telemetry::class)->event('signing.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'rate_limited',
+            ]);
+
             return back()->withErrors([
                 'otp' => 'Too many incorrect attempts. Please request a new code.',
             ]);
@@ -829,6 +786,11 @@ class SigningController extends Controller
             ! $signer->otp_expires_at ||
             now()->greaterThan($signer->otp_expires_at)
         ) {
+            app(Telemetry::class)->event('signing.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'expired',
+            ]);
+
             return back()->withErrors([
                 'otp' => 'This verification code has expired. Please request a new code.',
             ]);
@@ -840,10 +802,17 @@ class SigningController extends Controller
                 $validated['otp']
             )
         ) {
+            app(Telemetry::class)->event('signing.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_otp',
+            ]);
+
             return back()->withErrors([
                 'otp' => 'The verification code is incorrect.',
             ]);
         }
+
+        app(Telemetry::class)->eventAfterCommit('signing.otp.verified', ['app.outcome' => 'success']);
 
         return redirect()->route(
             'signing.show',
@@ -864,6 +833,11 @@ class SigningController extends Controller
                 now()->subSeconds(60)
             )
         ) {
+            app(Telemetry::class)->event('signing.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'rate_limited',
+            ]);
+
             return back()->withErrors([
                 'otp' => 'Please wait before requesting another code.',
             ]);
@@ -871,13 +845,14 @@ class SigningController extends Controller
 
         $otp = $this->otpService->generate($signer);
 
-        Mail::to($signer->email)
+        app(Telemetry::class)->submitMail('signature_request', fn () => Mail::to($signer->email)
             ->send(
                 new SignatureRequestMail(
                     $signer->load('document'),
                     $otp
                 )
-            );
+            ));
+        app(Telemetry::class)->event('signing.otp.sent', ['app.outcome' => 'success']);
 
         return back()->with(
             'success',
@@ -927,6 +902,11 @@ class SigningController extends Controller
             ->exists();
 
         if ($hasPreviousSigner) {
+            app(Telemetry::class)->event('signing.submit.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'wrong_order',
+            ]);
+
             abort(
                 403,
                 'The previous signer must complete signing before you can sign this document.'

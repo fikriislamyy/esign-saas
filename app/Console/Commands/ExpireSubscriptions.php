@@ -6,10 +6,11 @@ use App\Models\Subscription;
 use App\Observability\Telemetry;
 use App\Services\StripeService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 
 class ExpireSubscriptions extends Command
 {
+    private int $providerFailures = 0;
+
     protected $signature = 'subscriptions:expire
                             {--dry-run : Report what would happen without changing anything}';
 
@@ -23,6 +24,7 @@ class ExpireSubscriptions extends Command
     private function expire(StripeService $stripe): int
     {
         $dryRun = (bool) $this->option('dry-run');
+        $this->providerFailures = 0;
 
         $downgraded = 0;
         $skipped = 0;
@@ -66,31 +68,32 @@ class ExpireSubscriptions extends Command
             $this->warn("Still active at Stripe, left alone: {$skipped} (a webhook was probably missed)");
         }
 
+        app(Telemetry::class)->event('subscriptions.expiry.summary', [
+            'app.outcome' => $this->providerFailures > 0 ? 'partial' : 'success',
+            'app.processed_count' => $downgraded,
+            'app.skipped_count' => $skipped,
+            'app.failed_count' => $this->providerFailures,
+            'app.dry_run' => $dryRun,
+        ], $this->providerFailures > 0 ? 'WARN' : 'INFO');
+
         return self::SUCCESS;
     }
 
     protected function stillActiveAtStripe(StripeService $stripe, Subscription $subscription): bool
     {
         try {
-            $remote = $stripe->client()->subscriptions->retrieve(
-                $subscription->stripe_subscription_id,
-                []
+            $remote = app(Telemetry::class)->trackIntegration(
+                'stripe',
+                'stripe_retrieve_subscription',
+                fn () => $stripe->client()->subscriptions->retrieve($subscription->stripe_subscription_id, [])
             );
         } catch (\Throwable $e) {
-            Log::warning('Could not verify subscription at Stripe; leaving it alone', [
-                'subscription_id' => $subscription->id,
-                'message' => $e->getMessage(),
-            ]);
+            $this->providerFailures++;
 
             return true;
         }
 
         if (in_array($remote->status, ['active', 'trialing'], true)) {
-            Log::warning('Subscription looked expired locally but is active at Stripe', [
-                'subscription_id' => $subscription->id,
-                'stripe_subscription_id' => $subscription->stripe_subscription_id,
-            ]);
-
             return true;
         }
 

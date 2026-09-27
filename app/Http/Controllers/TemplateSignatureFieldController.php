@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Template;
 use App\Models\TemplateSignatureField;
+use App\Observability\Telemetry;
 use Illuminate\Http\Request;
 
 class TemplateSignatureFieldController extends Controller
@@ -30,6 +31,11 @@ class TemplateSignatureFieldController extends Controller
             'height' => 0.06,
         ]);
 
+        app(Telemetry::class)->eventAfterCommit('template.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'added',
+        ]);
+
         return response()->json(['success' => true, 'field' => $field]);
     }
 
@@ -42,6 +48,11 @@ class TemplateSignatureFieldController extends Controller
 
         $signatureField->update($request->only('x', 'y', 'width', 'height'));
 
+        app(Telemetry::class)->eventAfterCommit('template.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'updated',
+        ]);
+
         return response()->json(['success' => true]);
     }
 
@@ -53,6 +64,11 @@ class TemplateSignatureFieldController extends Controller
         );
 
         $signatureField->delete();
+
+        app(Telemetry::class)->eventAfterCommit('template.fields.changed', [
+            'app.outcome' => 'success',
+            'app.reason' => 'removed',
+        ]);
 
         return response()->json(['success' => true]);
     }

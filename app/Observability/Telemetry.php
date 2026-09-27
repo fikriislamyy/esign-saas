@@ -5,16 +5,19 @@ namespace App\Observability;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\DB;
 use OpenTelemetry\API\Logs\Severity;
 use OpenTelemetry\API\Trace\Propagation\TraceContextPropagator;
 use OpenTelemetry\API\Trace\Span;
 use OpenTelemetry\API\Trace\SpanKind;
 use OpenTelemetry\API\Trace\StatusCode;
+use OpenTelemetry\Context\Context;
 use OpenTelemetry\SDK\Logs\LoggerProviderInterface;
 use OpenTelemetry\SDK\Metrics\MeterProviderInterface;
 use OpenTelemetry\SDK\Trace\TracerProviderInterface;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Throwable;
+use WeakMap;
 
 class Telemetry
 {
@@ -24,11 +27,17 @@ class Telemetry
 
     private static bool $diagnosticReported = false;
 
+    /** @var WeakMap<Throwable, bool> */
+    private WeakMap $reportedExceptions;
+
     public function __construct(
         private readonly ?TracerProviderInterface $traces = null,
         private readonly ?MeterProviderInterface $metrics = null,
         private readonly ?LoggerProviderInterface $logs = null,
-    ) {}
+        private readonly string $minimumLogSeverity = 'INFO',
+    ) {
+        $this->reportedExceptions = new WeakMap;
+    }
 
     public function enabled(): bool
     {
@@ -174,13 +183,18 @@ class Telemetry
         }
     }
 
-    public function event(string $name, array $attributes = [], string $severity = 'INFO'): void
+    public function event(string $name, array $attributes = [], ?string $severity = null): void
     {
-        if (! $this->enabled() || ! in_array($name, ['http.request.completed', 'application.exception', 'command.completed', 'observability.smoke'], true)) {
+        if (! $this->enabled()) {
             return;
         }
         try {
-            $level = match ($severity) {
+            $record = LogEventCatalog::normalize($name, $attributes, $severity);
+            if ($record === null || ! LogEventCatalog::meetsThreshold($record['severity'], $this->minimumLogSeverity)) {
+                return;
+            }
+
+            $level = match ($record['severity']) {
                 'ERROR' => Severity::ERROR,
                 'WARN' => Severity::WARN,
                 default => Severity::INFO,
@@ -189,11 +203,87 @@ class Telemetry
                 ->setEventName($name)
                 ->setBody($name)
                 ->setSeverityNumber($level)
-                ->setSeverityText($severity)
-                ->setAttributes(TelemetryAttributes::filter($attributes))
+                ->setSeverityText($record['severity'])
+                ->setAttributes($record['attributes'])
                 ->emit();
         } catch (Throwable $error) {
             self::diagnostic($error);
+        }
+    }
+
+    public function eventAfterCommit(string $name, array $attributes = [], ?string $severity = null): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        try {
+            $context = Context::getCurrent();
+            DB::afterCommit(function () use ($context, $name, $attributes, $severity): void {
+                $scope = $context->activate();
+                try {
+                    $this->event($name, $attributes, $severity);
+                } finally {
+                    $scope->detach();
+                }
+            });
+        } catch (Throwable $error) {
+            self::diagnostic($error);
+        }
+    }
+
+    public function trackIntegration(string $provider, string $operation, Closure $callback, string $failureReason = 'provider_unavailable'): mixed
+    {
+        if (! $this->enabled()) {
+            return $callback();
+        }
+
+        $started = hrtime(true);
+        try {
+            $result = $callback();
+            $this->event('integration.request.completed', [
+                'app.operation' => $operation,
+                'app.outcome' => 'success',
+                'integration.provider' => $provider,
+                'app.duration_ms' => (hrtime(true) - $started) / 1e6,
+            ]);
+
+            return $result;
+        } catch (Throwable $error) {
+            $this->event('integration.request.failed', [
+                'app.operation' => $operation,
+                'app.outcome' => 'failure',
+                'app.reason' => $failureReason,
+                'integration.provider' => $provider,
+                'app.duration_ms' => (hrtime(true) - $started) / 1e6,
+                'error.type' => $error::class,
+            ]);
+            throw $error;
+        }
+    }
+
+    public function submitMail(string $purpose, Closure $callback): mixed
+    {
+        if (! $this->enabled()) {
+            return $callback();
+        }
+
+        try {
+            $result = $callback();
+            $this->event('mail.submission.completed', [
+                'app.operation' => $purpose,
+                'app.outcome' => 'success',
+            ]);
+
+            return $result;
+        } catch (Throwable $error) {
+            $this->event('mail.submission.failed', [
+                'app.operation' => $purpose,
+                'app.outcome' => 'failure',
+                'app.reason' => 'transport_failure',
+                'error.type' => $error::class,
+            ]);
+            throw $error;
         }
     }
 
@@ -203,14 +293,17 @@ class Telemetry
             return;
         }
         try {
-            $span = Span::getCurrent();
-            if (! $span->getContext()->isValid()) {
+            if (isset($this->reportedExceptions[$error])) {
                 return;
             }
-            $type = $error::class;
-            $span->setAttribute('error.type', $type);
-            $span->setStatus(StatusCode::STATUS_ERROR);
-            $this->event('application.exception', ['error.type' => $type], 'ERROR');
+            $this->reportedExceptions[$error] = true;
+
+            $span = Span::getCurrent();
+            if ($span->getContext()->isValid()) {
+                $span->setAttribute('error.type', $error::class);
+                $span->setStatus(StatusCode::STATUS_ERROR);
+            }
+            $this->event('application.exception', ['error.type' => $error::class], 'ERROR');
         } catch (Throwable $failure) {
             self::diagnostic($failure);
         }

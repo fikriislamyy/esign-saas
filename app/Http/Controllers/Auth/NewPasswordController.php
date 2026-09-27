@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Observability\Telemetry;
 use App\Rules\Recaptcha;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\RedirectResponse;
@@ -61,6 +62,8 @@ class NewPasswordController extends Controller
         // the application's home authenticated view. If there is an error we can
         // redirect them back to where they came from with their error message.
         if ($status == Password::PASSWORD_RESET) {
+            app(Telemetry::class)->eventAfterCommit('auth.password.reset_completed', ['app.outcome' => 'success']);
+
             return redirect()->route('login')->with('status', __($status));
         }
 

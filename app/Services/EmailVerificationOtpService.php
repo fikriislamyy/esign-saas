@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\OtpVerification;
 use App\Models\User;
+use App\Observability\Telemetry;
 
 class EmailVerificationOtpService
 {
@@ -34,6 +35,11 @@ class EmailVerificationOtpService
             ->first();
 
         if (! $record) {
+            app(Telemetry::class)->event('auth.otp.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_otp',
+            ]);
+
             return false;
         }
 

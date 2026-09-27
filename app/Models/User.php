@@ -3,18 +3,19 @@
 namespace App\Models;
 
 use App\Mail\EmailVerificationOtpMail;
+use App\Observability\Telemetry;
 use App\Services\EmailVerificationOtpService;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Sanctum\HasApiTokens;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Support\Facades\Mail;
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
-    use HasApiTokens, HasFactory, Notifiable, HasUuids;
+    use HasApiTokens, HasFactory, HasUuids, Notifiable;
 
     /**
      * The attributes that are mass assignable.
@@ -53,6 +54,7 @@ class User extends Authenticatable implements MustVerifyEmail
     ];
 
     protected $key_type = 'string';
+
     public $incrementing = false;
 
     public function organization()
@@ -69,7 +71,11 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         $otp = app(EmailVerificationOtpService::class)->generate($this);
 
-        Mail::to($this->email)->send(new EmailVerificationOtpMail($this, $otp));
+        app(Telemetry::class)->submitMail('email_verification', fn () => Mail::to($this->email)->send(new EmailVerificationOtpMail($this, $otp)));
+        app(Telemetry::class)->event('auth.otp.sent', [
+            'app.outcome' => 'success',
+            'app.reason' => 'email_verification',
+        ]);
     }
 
     public function isOwner(): bool

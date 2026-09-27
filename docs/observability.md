@@ -45,6 +45,7 @@ The base application configuration defaults to `OBSERVABILITY_ENABLED=false`. Se
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL, default `http://otel-collector:4318`. Omit `/v1/...`. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf`. |
 | `OTEL_TRACES_SAMPLER_ARG` | Root trace probability from 0 to 1; default 1 locally. Remote parent decisions are respected. |
+| `OBSERVABILITY_LOG_LEVEL` | Minimum exported application log severity: `INFO`, `WARN`, or `ERROR`; default `INFO`. Invalid values fall back to `INFO`. This does not change Laravel's local `LOG_LEVEL`. |
 | `OBSERVABILITY_EXPORT_TIMEOUT_MS` | Per signal HTTP timeout; default 200 ms, clamped to 10–300 ms. Retries disabled. |
 
 The SDK sets `service.namespace=esign-saas` and both `deployment.environment.name` and the legacy `deployment.environment` attribute from Laravel's `app.env`; the pinned SigNoz ingester uses the legacy name for its service metrics. Laravel cached configuration is supported. In a production image, set a private/TLS OTLP endpoint and supply credentials through deployment secrets, not Git. Size SigNoz separately; choose sampling and retention for the available storage. Never publish its unauthenticated OTLP receiver on a public interface.
@@ -61,6 +62,8 @@ curl -fsS http://localhost:8000/ >/dev/null
 The smoke command is restricted to Laravel's `local` and `testing` environments. It prints a trace ID and says export was attempted. Search for that ID in SigNoz's `esign-scheduler` service, and open the `observability.smoke` log. It cannot prove ingestion by itself: allow time for the collector and check the UI time range. `--fail` creates a synthetic error trace/event and returns nonzero without touching data.
 
 For HTTP data, search for `esign-api`. The request span name uses the method and route template. A log named `http.request.completed` should share the span's trace and span IDs. The root route can return a redirect depending on auth state; its status should match the response.
+
+Business events use fixed names such as `auth.login.rejected`, `payment.fulfillment.completed`, and `documents.expiry.summary`. Filter the log body by the exact name, then filter structured fields such as `attributes.app.module`, `attributes.app.outcome`, and severity. The complete reviewed catalog and ownership map is in [the application log event catalog](observability/log-events.md). Logs created outside a span remain searchable but do not contain fabricated trace or span identifiers.
 
 Run expiry commands only against a disposable local database. `subscriptions:expire --dry-run` may still call Stripe for Stripe-backed subscriptions. Use synthetic non-Stripe fixtures or a mocked Stripe client for that check. Look under `esign-scheduler` for `artisan documents:expire` and `artisan subscriptions:expire` spans and `command.completed` logs.
 
@@ -84,6 +87,8 @@ Optional server-error alert recipe: over a rolling five-minute window, query the
 ## Privacy and failure behavior
 
 The telemetry allowlist contains method, route template, status, fixed command names/outcomes, provider name, and exception **class**. It extracts `traceparent` for parent correlation but ignores untrusted `tracestate` and baggage values. It excludes signing tokens, concrete URLs, query strings, headers, bodies, OTPs, document names/paths, payment amounts/IDs, SQL, Redis keys, exception messages, and stack traces. Existing Laravel file/stderr logs are retained locally; they are not forwarded wholesale to SigNoz.
+
+Business mutation success events are queued until the outer database transaction commits. A rollback discards them. Logging remains best effort and is not a durable financial or legal audit ledger. Mail events confirm submission to the configured transport, not recipient delivery.
 
 If the ingester is unavailable, an operation still returns its original result. Each signal transport has a bounded timeout and no retries. Data produced while SigNoz is down may be lost. To reproduce this safely, stop only `ingester`, make a harmless request, then start `ingester` and verify later traffic arrives. SDK diagnostics use a dedicated writer that prints only one sanitized failure class per process, without export URLs, payloads, or stack traces.
 

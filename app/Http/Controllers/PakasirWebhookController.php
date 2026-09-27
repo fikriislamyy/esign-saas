@@ -4,17 +4,28 @@ namespace App\Http\Controllers;
 
 use App\Models\SubscriptionPayment;
 use App\Models\WalletTopup;
+use App\Observability\Telemetry;
 use App\Services\PakasirFulfillmentService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class PakasirWebhookController extends Controller
 {
     public function handle(Request $request, PakasirFulfillmentService $fulfillment)
     {
+        app(Telemetry::class)->event('payment.webhook.received', [
+            'app.outcome' => 'success',
+            'payment.provider' => 'pakasir',
+        ]);
+
         $orderId = $request->input('order_id');
 
         if (! $orderId) {
+            app(Telemetry::class)->event('payment.webhook.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'invalid_payload',
+                'payment.provider' => 'pakasir',
+            ]);
+
             return response()->json(['error' => 'order_id missing'], 400);
         }
 
@@ -22,15 +33,20 @@ class PakasirWebhookController extends Controller
             ?? WalletTopup::where('order_id', $orderId)->first();
 
         if (! $record) {
-            Log::warning('Pakasir webhook for unknown order', ['order_id' => $orderId]);
+            app(Telemetry::class)->event('payment.webhook.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'unknown_record',
+                'payment.provider' => 'pakasir',
+            ]);
 
             return response()->json(['received' => true]);
         }
 
         if ($record->provider !== 'pakasir') {
-            Log::warning('Pakasir webhook for non-Pakasir payment', [
-                'order_id' => $orderId,
-                'provider' => $record->provider,
+            app(Telemetry::class)->event('payment.webhook.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'wrong_provider',
+                'payment.provider' => 'pakasir',
             ]);
 
             return response()->json(['received' => true]);
@@ -39,20 +55,20 @@ class PakasirWebhookController extends Controller
         $expectedIdr = $fulfillment->amountIdr($record);
 
         if ((int) $request->input('amount') !== $expectedIdr) {
-            Log::warning('Pakasir webhook amount mismatch', [
-                'order_id' => $orderId,
-                'expected' => $expectedIdr,
-                'received' => $request->input('amount'),
+            app(Telemetry::class)->event('payment.webhook.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'amount_mismatch',
+                'payment.provider' => 'pakasir',
             ]);
 
             return response()->json(['received' => true]);
         }
 
         if ($request->input('project') !== config('services.pakasir.project')) {
-            Log::warning('Pakasir webhook project mismatch', [
-                'order_id' => $orderId,
-                'expected' => config('services.pakasir.project'),
-                'received' => $request->input('project'),
+            app(Telemetry::class)->event('payment.webhook.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'project_mismatch',
+                'payment.provider' => 'pakasir',
             ]);
 
             return response()->json(['received' => true]);

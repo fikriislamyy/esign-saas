@@ -2,8 +2,9 @@
 
 namespace App\Services;
 
+use App\Observability\Telemetry;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class RecaptchaService
 {
@@ -19,27 +20,46 @@ class RecaptchaService
             return false;
         }
 
-        $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
-            'secret' => config('services.recaptcha.secret_key'),
-            'response' => $token,
-            'remoteip' => $ip,
-        ]);
+        $started = hrtime(true);
+        try {
+            $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+                'secret' => config('services.recaptcha.secret_key'),
+                'response' => $token,
+                'remoteip' => $ip,
+            ]);
+        } catch (Throwable $error) {
+            app(Telemetry::class)->event('integration.request.failed', [
+                'app.operation' => 'verify_recaptcha',
+                'app.outcome' => 'failure',
+                'app.reason' => 'provider_unavailable',
+                'integration.provider' => 'recaptcha',
+                'app.duration_ms' => (hrtime(true) - $started) / 1e6,
+                'error.type' => $error::class,
+            ]);
+            throw $error;
+        }
 
         if (! $response->successful()) {
-            Log::warning('reCAPTCHA siteverify request failed', [
-                'status' => $response->status(),
+            app(Telemetry::class)->event('integration.request.failed', [
+                'app.operation' => 'verify_recaptcha',
+                'app.outcome' => 'failure',
+                'app.reason' => 'provider_unavailable',
+                'integration.provider' => 'recaptcha',
+                'app.duration_ms' => (hrtime(true) - $started) / 1e6,
+                'error.type' => 'UnexpectedHttpStatus',
             ]);
 
             return false;
         }
 
-        $body = $response->json();
+        app(Telemetry::class)->event('integration.request.completed', [
+            'app.operation' => 'verify_recaptcha',
+            'app.outcome' => 'success',
+            'integration.provider' => 'recaptcha',
+            'app.duration_ms' => (hrtime(true) - $started) / 1e6,
+        ]);
 
-        if (($body['success'] ?? false) !== true) {
-            Log::info('reCAPTCHA rejected a token', [
-                'error-codes' => $body['error-codes'] ?? [],
-            ]);
-        }
+        $body = $response->json();
 
         return ($body['success'] ?? false) === true;
     }

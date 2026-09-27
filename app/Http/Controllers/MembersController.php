@@ -3,11 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Invitation;
+use App\Models\User;
+use App\Observability\Telemetry;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
-use App\Models\User;
-use Illuminate\Validation\Rule;
 
 class MembersController extends Controller
 {
@@ -29,22 +30,21 @@ class MembersController extends Controller
                     ->get(),
 
                 'invitations' => Invitation::query()
-                ->where(
-                    'organization_id',
-                    $organization->id
-                )
-                ->whereNull('accepted_at')
-                ->latest()
-                ->get([
-                    'id',
-                    'email',
-                    'role',
-                    'token',
-                    'created_at',
-                ]),
+                    ->where(
+                        'organization_id',
+                        $organization->id
+                    )
+                    ->whereNull('accepted_at')
+                    ->latest()
+                    ->get([
+                        'id',
+                        'email',
+                        'role',
+                        'token',
+                        'created_at',
+                    ]),
 
-                'canManageMembers' =>
-                $request->user()
+                'canManageMembers' => $request->user()
                     ->canManageMembers(),
             ]
         );
@@ -86,6 +86,11 @@ class MembersController extends Controller
         */
 
         if ($user->id === $actor->id) {
+            app(Telemetry::class)->event('organization.member.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'self_change',
+            ]);
+
             return back()->withErrors([
                 'role' => 'You cannot change your own role.',
             ]);
@@ -98,6 +103,11 @@ class MembersController extends Controller
         */
 
         if ($user->role === 'owner') {
+            app(Telemetry::class)->event('organization.member.rejected', [
+                'app.outcome' => 'rejected',
+                'app.reason' => 'owner_protected',
+            ]);
+
             return back()->withErrors([
                 'role' => 'The organization owner cannot be changed.',
             ]);
@@ -128,6 +138,8 @@ class MembersController extends Controller
         $user->update([
             'role' => $validated['role'],
         ]);
+
+        app(Telemetry::class)->eventAfterCommit('organization.member.role_changed', ['app.outcome' => 'success']);
 
         return back()->with(
             'success',

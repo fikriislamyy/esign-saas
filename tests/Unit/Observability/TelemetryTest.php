@@ -15,17 +15,17 @@ use OpenTelemetry\SDK\Metrics\Data\Temporality;
 use OpenTelemetry\SDK\Metrics\MeterProviderBuilder;
 use OpenTelemetry\SDK\Metrics\MetricExporter\InMemoryExporter as MetricExporter;
 use OpenTelemetry\SDK\Metrics\MetricReader\ExportingReader;
+use OpenTelemetry\SDK\Trace\Sampler\AlwaysOffSampler;
 use OpenTelemetry\SDK\Trace\SpanExporter\InMemoryExporter as SpanExporter;
 use OpenTelemetry\SDK\Trace\SpanProcessor\SimpleSpanProcessor;
 use OpenTelemetry\SDK\Trace\TracerProviderBuilder;
-use OpenTelemetry\SDK\Trace\Sampler\AlwaysOffSampler;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
 class TelemetryTest extends TestCase
 {
-    private function telemetry(): array
+    private function telemetry(string $minimumLogSeverity = 'INFO'): array
     {
         $spans = new SpanExporter;
         $metrics = new MetricExporter(temporality: Temporality::DELTA);
@@ -34,6 +34,7 @@ class TelemetryTest extends TestCase
             (new TracerProviderBuilder)->addSpanProcessor(new SimpleSpanProcessor($spans))->build(),
             (new MeterProviderBuilder)->addReader(new ExportingReader($metrics))->build(),
             (new LoggerProviderBuilder)->addLogRecordProcessor(new SimpleLogRecordProcessor($logs))->build(),
+            $minimumLogSeverity,
         );
 
         return [$telemetry, $spans, $metrics, $logs];
@@ -223,5 +224,134 @@ class TelemetryTest extends TestCase
         $this->assertFalse($telemetry->enabled());
         $this->assertCount(1, $spans->getSpans());
         $this->assertCount(1, $logs->getStorage());
+    }
+
+    public function test_business_event_catalog_adds_fixed_context_and_rejects_unknown_data(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry();
+
+        $telemetry->event('signing.submit.rejected', [
+            'app.outcome' => 'rejected',
+            'app.reason' => 'invalid_otp',
+        ]);
+        $telemetry->event('signing.submit.rejected', [
+            'app.outcome' => 'rejected',
+            'app.reason' => 'invalid_otp',
+            'request.body' => 'canary-secret',
+        ]);
+        $telemetry->event('unknown.event', ['password' => 'canary-secret']);
+
+        $this->assertCount(1, $logs->getStorage());
+        $attributes = $logs->getStorage()[0]->getAttributes()->toArray();
+        $this->assertSame('signing', $attributes['app.module']);
+        $this->assertSame('submit', $attributes['app.operation']);
+        $this->assertStringNotContainsString('canary-secret', json_encode($attributes));
+    }
+
+    public function test_log_threshold_filters_lower_severity_events(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry('WARN');
+
+        $telemetry->event('auth.login.completed', ['app.outcome' => 'success']);
+        $telemetry->event('auth.login.rejected', [
+            'app.outcome' => 'rejected',
+            'app.reason' => 'invalid_credentials',
+        ]);
+
+        $this->assertCount(1, $logs->getStorage());
+        $this->assertSame('auth.login.rejected', $logs->getStorage()[0]->getBody());
+        $this->assertSame('WARN', $logs->getStorage()[0]->getSeverityText());
+
+        [$fallbackTelemetry, , , $fallbackLogs] = $this->telemetry('not-a-level');
+        $fallbackTelemetry->event('auth.login.completed', ['app.outcome' => 'success']);
+
+        $this->assertCount(1, $fallbackLogs->getStorage());
+        $this->assertSame('INFO', $fallbackLogs->getStorage()[0]->getSeverityText());
+    }
+
+    public function test_exception_outside_span_is_exported_once_per_instance(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry();
+        $first = new RuntimeException('canary-secret-one');
+        $second = new RuntimeException('canary-secret-two');
+
+        $telemetry->recordExceptionType($first);
+        $telemetry->recordExceptionType($first);
+        $telemetry->recordExceptionType($second);
+
+        $this->assertCount(2, $logs->getStorage());
+        $this->assertSame(RuntimeException::class, $logs->getStorage()[0]->getAttributes()->toArray()['error.type']);
+        $this->assertStringNotContainsString('canary-secret', json_encode($logs->getStorage()));
+    }
+
+    public function test_unsampled_trace_still_exports_business_log(): void
+    {
+        $logs = new LogExporter;
+        $telemetry = new Telemetry(
+            (new TracerProviderBuilder)->setSampler(new AlwaysOffSampler)->build(),
+            null,
+            (new LoggerProviderBuilder)->addLogRecordProcessor(new SimpleLogRecordProcessor($logs))->build(),
+        );
+
+        $telemetry->withinSpan('unsampled', [], function () use ($telemetry): void {
+            $telemetry->event('auth.login.completed', ['app.outcome' => 'success']);
+        });
+
+        $this->assertCount(1, $logs->getStorage());
+        $this->assertSame('auth.login.completed', $logs->getStorage()[0]->getBody());
+    }
+
+    public function test_integration_wrapper_records_timing_without_changing_result(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry();
+
+        $result = $telemetry->trackIntegration('pakasir', 'transaction_detail', fn (): string => 'provider-result');
+
+        $this->assertSame('provider-result', $result);
+        $this->assertSame('integration.request.completed', $logs->getStorage()[0]->getBody());
+        $attributes = $logs->getStorage()[0]->getAttributes()->toArray();
+        $this->assertSame('pakasir', $attributes['integration.provider']);
+        $this->assertGreaterThanOrEqual(0, $attributes['app.duration_ms']);
+    }
+
+    public function test_integration_wrapper_rethrows_failure_and_invokes_callback_once(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry();
+        $calls = 0;
+
+        try {
+            $telemetry->trackIntegration('pakasir', 'transaction_detail', function () use (&$calls): never {
+                $calls++;
+                throw new RuntimeException('canary-provider-secret');
+            });
+            $this->fail('Expected original provider exception.');
+        } catch (RuntimeException $error) {
+            $this->assertSame('canary-provider-secret', $error->getMessage());
+        }
+
+        $this->assertSame(1, $calls);
+        $this->assertCount(1, $logs->getStorage());
+        $record = $logs->getStorage()[0];
+        $this->assertSame('integration.request.failed', $record->getBody());
+        $this->assertSame('provider_unavailable', $record->getAttributes()->toArray()['app.reason']);
+        $this->assertStringNotContainsString('canary-provider-secret', json_encode($record->getAttributes()->toArray()));
+    }
+
+    public function test_mail_wrapper_rethrows_failure_and_exports_only_exception_class(): void
+    {
+        [$telemetry, , , $logs] = $this->telemetry();
+
+        try {
+            $telemetry->submitMail('login_otp', fn () => throw new RuntimeException('canary-mail-secret'));
+            $this->fail('Expected original mail exception.');
+        } catch (RuntimeException $error) {
+            $this->assertSame('canary-mail-secret', $error->getMessage());
+        }
+
+        $this->assertCount(1, $logs->getStorage());
+        $record = $logs->getStorage()[0];
+        $this->assertSame('mail.submission.failed', $record->getBody());
+        $this->assertSame(RuntimeException::class, $record->getAttributes()->toArray()['error.type']);
+        $this->assertStringNotContainsString('canary-mail-secret', json_encode($record->getAttributes()->toArray()));
     }
 }
