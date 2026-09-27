@@ -1,0 +1,6 @@
+FROM node:22.16.0-bookworm
+
+WORKDIR /var/www
+
+# Copy the entire build context into the image
+COPY . /var/www
