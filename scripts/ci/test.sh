@@ -48,6 +48,12 @@ trap cleanup EXIT
 "${compose[@]}" run --rm php composer validate --no-check-publish
 bash tests/deployment/manifest.sh
 
+# Build frontend assets so Inertia view rendering succeeds during tests
+"${compose[@]}" run --rm node npm run build
+
+# Run migrations on test database
+"${compose[@]}" run --rm php php artisan migrate:fresh --force
+
 # 5. Gate PHP formatting debt with Pint
 if [[ -n ${CHANGE_TARGET:-} ]]; then
     [[ $CHANGE_TARGET =~ ^[A-Za-z0-9._/-]+$ ]] || { echo 'Invalid CHANGE_TARGET.' >&2; exit 2; }
@@ -65,7 +71,6 @@ if (( ${#changed_php[@]} )); then
     "${compose[@]}" run --rm php vendor/bin/pint --test "${changed_php[@]}"
 fi
 
-# 6. Execute tests
+# 6. Execute test suites
 "${compose[@]}" run --rm php php artisan test --log-junit=ci-results/phpunit.xml
 "${compose[@]}" run --rm node npm test -- --reporter=default --reporter=junit --outputFile.junit=ci-results/vitest.xml
-"${compose[@]}" run --rm node npm run build

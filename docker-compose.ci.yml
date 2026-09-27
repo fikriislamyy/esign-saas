@@ -42,7 +42,7 @@ services:
       REDIS_CLIENT: phpredis
       REDIS_PORT: "6379"
       CACHE_DRIVER: array
-      SESSION_DRIVER: array
+      SESSION_DRIVER: file
       QUEUE_CONNECTION: sync
       MAIL_MAILER: array
       OBSERVABILITY_ENABLED: "false"
