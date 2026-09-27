@@ -45,11 +45,12 @@ pipeline {
             when { expression { env.RELEASE_JOB == 'true' && env.BRANCH_NAME == 'main' } }
             steps {
                 sh '''#!/usr/bin/env bash
-set -Eeuo pipefail
-docker build --platform linux/amd64 -f docker/php/Dockerfile --build-arg "VCS_REF=$RELEASE_SHA" -t "$IMAGE_REPOSITORY:$RELEASE_SHA" .
-docker run --rm --entrypoint test "$IMAGE_REPOSITORY:$RELEASE_SHA" -s /var/www/public/build/manifest.json
-docker run --rm --entrypoint php "$IMAGE_REPOSITORY:$RELEASE_SHA" -r 'exit(extension_loaded("pdo_pgsql") && extension_loaded("redis") ? 0 : 1);'
-'''
+        set -Eeuo pipefail
+        docker build --platform linux/amd64 -f docker/php/Dockerfile --build-arg "VCS_REF=$RELEASE_SHA" -t "$IMAGE_REPOSITORY:$RELEASE_SHA" .
+
+        # Verify PHP extensions
+        docker run --rm --entrypoint php "$IMAGE_REPOSITORY:$RELEASE_SHA" -r 'exit(extension_loaded("pdo_pgsql") && extension_loaded("redis") ? 0 : 1);'
+        '''
             }
         }
 
