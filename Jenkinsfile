@@ -17,7 +17,7 @@ pipeline {
     environment {
         IMAGE_REPOSITORY = 'ghcr.io/fikriislamyy/esign-saas'
         RELEASE_JOB      = 'true',
-        DEPLOY_HOST      = 'ubuntu@13.61.11.156'
+        DEPLOY_HOST      = 'ec2-user@13.61.11.156'
     }
 
     stages {
