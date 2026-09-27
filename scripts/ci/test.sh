@@ -14,7 +14,8 @@ fi
 export COMPOSE_PROJECT_NAME="esign-ci-${build_id}"
 export CI_UID="$(id -u)" CI_GID="$(id -g)"
 export CI_APP_KEY="base64:$(openssl rand -base64 32)"
-export CI_SOURCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/esign-ci-${build_id}-XXXXXXXX")"
+export CI_SOURCE_DIR="$(pwd)/.ci-source-${build_id}"
+mkdir -p "$CI_SOURCE_DIR"
 
 compose=(docker compose -f docker-compose.ci.yml)
 cleanup() {
