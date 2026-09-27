@@ -25,6 +25,8 @@ services:
       dockerfile: docker/ci/Dockerfile
     user: "${CI_UID:-1000}:${CI_GID:-1000}"
     working_dir: /var/www
+    volumes:
+      - app_data:/var/www
     environment:
       APP_NAME: EZSign
       APP_URL: http://localhost
@@ -57,5 +59,10 @@ services:
       dockerfile: docker/ci/Dockerfile.node
     user: "${CI_UID:-1000}:${CI_GID:-1000}"
     working_dir: /var/www
+    volumes:
+      - app_data:/var/www
     environment:
       npm_config_cache: /tmp/npm
+
+volumes:
+  app_data:
